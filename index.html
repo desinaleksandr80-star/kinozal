@@ -119,6 +119,19 @@ code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px
 .tile figcaption{position:absolute;left:6px;bottom:6px;font-size:13px;padding:2px 8px;border-radius:8px;background:rgba(0,0,0,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100% - 12px)}
 .tile .ava{position:absolute;inset:0;display:none;place-content:center;font:700 32px Unbounded,sans-serif;color:var(--acc2)}
 .tile.novideo video{opacity:0}.tile.novideo .ava{display:grid}
+.tile{transition:box-shadow .12s}
+.tile.talk{box-shadow:0 0 0 3px var(--acc2) inset}
+.tile.muted::after{content:'🔇';position:absolute;top:6px;right:6px;font-size:14px;background:rgba(0,0,0,.6);border-radius:8px;padding:2px 6px}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 10px}
+.phead h2{margin:0}
+button.mini{min-height:32px;padding:4px 10px;font-size:13px;font-weight:600;border-radius:10px}
+.devs{display:grid;gap:6px;margin:0 0 12px;padding:10px;border:1px solid var(--line);border-radius:12px;background:#121a1c}
+.devs label{margin:4px 0 0;font-size:13px}
+.devs select{width:100%;min-height:40px;font-size:14px}
+.meter{height:8px;border-radius:4px;background:#0b1012;overflow:hidden}
+.meter i{display:block;height:100%;width:0;background:var(--acc2);transition:width .1s}
+.devnote{margin:4px 0 0;font-size:12px;color:var(--mute);line-height:1.45}
+.devnote:empty{display:none}
 .cvol{display:flex;align-items:center;gap:10px;margin:10px 0 0;font-size:13px}
 .cvol input{flex:1}
 .chat{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0}
@@ -305,7 +318,15 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
     </div>
     <aside class="side">
       <div class="panel">
-        <h2 id="peopleTitle">В зале</h2>
+        <div class="phead"><h2 id="peopleTitle">В зале</h2><button class="mini" id="devBtn">⚙ Микрофон и камера</button></div>
+        <div class="devs" id="devs" hidden>
+          <label for="micSel">Микрофон</label>
+          <select id="micSel"></select>
+          <div class="meter" title="Скажи что-нибудь — полоска должна прыгать"><i id="micMeter"></i></div>
+          <label for="camSel">Камера</label>
+          <select id="camSel"></select>
+          <p class="devnote" id="devNote"></p>
+        </div>
         <div id="tiles"></div>
         <label class="cvol">Голоса <input type="range" id="callVol" min="0" max="1" step="0.02" aria-label="Громкость голосов"></label>
       </div>
@@ -388,33 +409,161 @@ $('#fsForm').onsubmit=e=>{e.preventDefault();const i=$('#fsInput');sendChat(i.va
 $('#fsInput').addEventListener('keydown',e=>{if(e.key==='Escape'){e.target.blur();$('#fsForm').classList.remove('on');}});
 
 // ---------- камера и микрофон ----------
-function blankStream(){
-  const c=document.createElement('canvas');c.width=c.height=16;c.getContext('2d').fillRect(0,0,16,16);
-  const s=c.captureStream(1);
-  try{const ac=new AudioContext();s.addTrack(ac.createMediaStreamDestination().stream.getAudioTracks()[0]);}catch(e){}
-  s.blank=true;return s;
+// В local всегда ровно одна аудио- и одна видеодорожка. Если устройства нет — «заглушка» (тишина / чёрный кадр),
+// чтобы потом можно было подменить её на настоящую прямо в идущих звонках, без перезвона.
+let micId=store.get('mic',''),camId=store.get('cam','');
+let micReal=false,camReal=false,micErr='',camErr='',actx=null;
+const gum=c=>navigator.mediaDevices.getUserMedia(c);
+const audioC=id=>({...(id?{deviceId:{exact:id}}:{}),echoCancellation:true,noiseSuppression:true,autoGainControl:true});
+const videoC=id=>({...(id?{deviceId:{exact:id}}:{}),width:{ideal:640},height:{ideal:480}});
+function ctx(){if(!actx||actx.state==='closed'){try{actx=new AudioContext();}catch(e){}}if(actx?.state==='suspended')actx.resume().catch(()=>{});return actx;}
+function silentTrack(){const t=ctx()?.createMediaStreamDestination().stream.getAudioTracks()[0];if(t)t.fake=true;return t;}
+function blackTrack(){const c=document.createElement('canvas');c.width=c.height=16;c.getContext('2d').fillRect(0,0,16,16);const t=c.captureStream(1).getVideoTracks()[0];t.fake=true;return t;}
+function why(e,what){
+  const f=what==='Камера'; // род: камера — она, микрофон — он
+  switch(e?.name){
+    case 'NotAllowedError':case 'SecurityError':return what+': доступ запрещён. Windows: Параметры → Конфиденциальность и защита → '+what+' → разрешить классическим приложениям';
+    case 'NotReadableError':case 'AbortError':return what+(f?' занята':' занят')+' другой программой (Discord, Zoom, Teams?) или устройство отвалилось';
+    case 'NotFoundError':case 'OverconstrainedError':return what+(f?' не найдена — подключи или выбери другую':' не найден — подключи или выбери другой');
+    default:return what+': '+(e?.message||e?.name||'ошибка');
+  }
+}
+async function openMic(){
+  try{return (await gum({audio:audioC(micId)})).getAudioTracks()[0];}
+  catch(e){
+    if(micId){try{const t=(await gum({audio:audioC('')})).getAudioTracks()[0];micErr='Выбранный микрофон недоступен — взял тот, что по умолчанию';return t;}catch(e2){}}
+    micErr=why(e,'Микрофон');return null;
+  }
+}
+async function openCam(){
+  if(camId==='off'){camErr='';return null;}
+  try{return (await gum({video:videoC(camId)})).getVideoTracks()[0];}
+  catch(e){
+    if(camId){try{return (await gum({video:videoC('')})).getVideoTracks()[0];}catch(e2){}}
+    camErr=why(e,'Камера');return null;
+  }
 }
 async function initMedia(){
-  const audio={echoCancellation:true,noiseSuppression:true,autoGainControl:true};
-  try{local=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}},audio});}
-  catch(e){
-    try{local=await navigator.mediaDevices.getUserMedia({audio});toast('Камера недоступна — подключаюсь только с микрофоном');}
-    catch(e2){local=blankStream();toast('Нет доступа к камере и микрофону — проверь разрешения браузера');}
+  micErr=camErr='';local=new MediaStream();
+  let a=null,v=null;
+  // одним запросом (одно окно разрешения в браузере), а если не вышло — по отдельности
+  if(camId!=='off'){try{const s=await gum({audio:audioC(micId),video:videoC(camId)});a=s.getAudioTracks()[0];v=s.getVideoTracks()[0];}catch(e){}}
+  if(!a)a=await openMic();
+  if(!v)v=await openCam();
+  micReal=!!a;camReal=!!v;
+  local.addTrack(a||silentTrack()||blackTrack());local.addTrack(v||blackTrack());
+  watchTrack(a);watchTrack(v);
+  if(!micReal)toast(micErr);else if(!camReal&&camErr)toast(camErr+' — подключаюсь без камеры');
+  addTile('me',myName+' (ты)',local,true);syncBtns();monitorLocal();fillDevices();
+  if(!micReal)$('#devs').hidden=false;
+}
+// подменяем дорожку в своём потоке и во всех идущих звонках
+function putTrack(kind,track){
+  const old=kind==='audio'?local.getAudioTracks()[0]:local.getVideoTracks()[0];
+  if(old===track)return;
+  if(old&&track&&kind==='audio')track.enabled=old.fake?true:old.enabled;
+  if(old&&track&&kind==='video')track.enabled=old.fake?true:old.enabled;
+  if(old){local.removeTrack(old);old.stop();}
+  local.addTrack(track);
+  for(const c of camCalls.values()){
+    const tr=c.peerConnection?.getTransceivers().find(t=>t.receiver.track?.kind===kind);
+    tr?.sender.replaceTrack(track).catch(()=>{});
   }
-  addTile('me',myName+' (ты)',local,true);syncBtns();
+  const v=document.querySelector('#tile-me video');if(v){v.srcObject=null;v.srcObject=local;v.play().catch(()=>{});}
 }
+async function switchMic(id){
+  micId=id;store.set('mic',id);micErr='';
+  const t=await openMic();
+  micReal=!!t;putTrack('audio',t||silentTrack());watchTrack(t);
+  syncBtns();monitorLocal();fillDevices();
+  if(t)osd('Микрофон: '+cleanLabel(t.label));else toast(micErr);
+}
+async function switchCam(id){
+  camId=id;store.set('cam',id);camErr='';
+  const t=await openCam();
+  camReal=!!t;putTrack('video',t||blackTrack());watchTrack(t);
+  syncBtns();fillDevices();
+  if(!t&&camErr)toast(camErr);
+}
+// устройство отвалилось (Bluetooth-наушники отключились или сменили режим) — сами переподключаемся
+function watchTrack(t){
+  if(!t)return;
+  t.addEventListener('ended',()=>{
+    if(!inRoom&&!local)return;
+    const cur=t.kind==='audio'?local?.getAudioTracks()[0]:local?.getVideoTracks()[0];
+    if(cur!==t)return;
+    setTimeout(()=>{t.kind==='audio'?switchMic(micId):switchCam(camId);},700);
+    sys((t.kind==='audio'?'Микрофон':'Камера')+' отключился — переподключаю');
+  });
+}
+const cleanLabel=l=>String(l||'').replace(/^(Default|Communications|По умолчанию)\s*-\s*/i,'').replace(/\s*\([0-9a-f]{4}:[0-9a-f]{4}\)\s*$/i,'')||'без названия';
+async function fillDevices(){
+  let list=[];try{list=await navigator.mediaDevices.enumerateDevices();}catch(e){}
+  const mics=list.filter(d=>d.kind==='audioinput'&&d.deviceId!=='communications');
+  const cams=list.filter(d=>d.kind==='videoinput');
+  const curA=local?.getAudioTracks()[0],curV=local?.getVideoTracks()[0];
+  const ms=$('#micSel');ms.textContent='';
+  for(const d of mics){const o=document.createElement('option');o.value=d.deviceId==='default'?'':d.deviceId;o.textContent=d.deviceId==='default'?'Как в Windows ('+cleanLabel(d.label)+')':cleanLabel(d.label);ms.append(o);}
+  if(!mics.length){const o=document.createElement('option');o.value='';o.textContent='Микрофоны не найдены';ms.append(o);}
+  ms.value=micId;if(ms.value!==micId)ms.value='';
+  const cs=$('#camSel');cs.textContent='';
+  const off=document.createElement('option');off.value='off';off.textContent='Без камеры';
+  const def=document.createElement('option');def.value='';def.textContent='Как в Windows';
+  cs.append(def);for(const d of cams){const o=document.createElement('option');o.value=d.deviceId;o.textContent=cleanLabel(d.label);cs.append(o);}cs.append(off);
+  cs.value=camId;if(cs.value!==camId)cs.value='';
+  const notes=[];
+  if(micReal&&curA)notes.push('Сейчас говоришь в: '+cleanLabel(curA.label));
+  if(micErr)notes.push(micErr);
+  if(camErr)notes.push(camErr);
+  if(mics.some(d=>/hands-free|головн|headset|гарнитур/i.test(d.label)))notes.push('Bluetooth-наушники с микрофоном Windows переключает в режим гарнитуры — звук становится моно и глуше. Лучше говорить в микрофон ноутбука, а слушать в наушниках.');
+  $('#devNote').textContent=notes.join(' · ');
+}
+$('#micSel').onchange=e=>switchMic(e.target.value);
+$('#camSel').onchange=e=>switchCam(e.target.value);
+$('#devBtn').onclick=()=>{$('#devs').hidden=!$('#devs').hidden;if(!$('#devs').hidden)fillDevices();};
+// подключили/отключили наушники: если стоит «как в Windows» и Windows сменила микрофон — переходим на новый
+navigator.mediaDevices?.addEventListener?.('devicechange',async()=>{
+  if(!local)return;
+  await fillDevices();
+  if(micId)return;
+  let list=[];try{list=await navigator.mediaDevices.enumerateDevices();}catch(e){return;}
+  const def=list.find(d=>d.kind==='audioinput'&&d.deviceId==='default');
+  const cur=local.getAudioTracks()[0];
+  if(def&&(!micReal||cleanLabel(def.label)!==cleanLabel(cur?.label)))switchMic('');
+});
+// индикатор: кто сейчас говорит (свой и чужие), плюс шкала в настройках
+const meters=new Map(); // id -> {an,buf}
+function monitor(id,stream){
+  meters.get(id)?.src?.disconnect();meters.delete(id);
+  const t=stream?.getAudioTracks()[0];const ac=ctx();if(!t||!ac)return;
+  try{const src=ac.createMediaStreamSource(new MediaStream([t]));const an=ac.createAnalyser();an.fftSize=512;src.connect(an);meters.set(id,{src,an,buf:new Float32Array(512)});}catch(e){}
+}
+function monitorLocal(){monitor('me',micReal?local:null);}
+setInterval(()=>{
+  for(const[id,m]of meters){
+    m.an.getFloatTimeDomainData(m.buf);let r=0;for(const x of m.buf)r+=x*x;r=Math.sqrt(r/m.buf.length);
+    document.getElementById('tile-'+id)?.classList.toggle('talk',r>0.012);
+    if(id==='me')$('#micMeter').style.width=Math.min(100,Math.round(r*900))+'%';
+  }
+  if(!meters.has('me'))$('#micMeter').style.width='0%';
+},120);
 function syncBtns(){
-  const a=local?.getAudioTracks()[0],v=local?.getVideoTracks()[0],blank=!!local?.blank;
+  const a=local?.getAudioTracks()[0],v=local?.getVideoTracks()[0];
   const mic=$('#micBtn'),cam=$('#camBtn');
-  mic.disabled=!a||blank;cam.disabled=!v||blank;
-  const aon=!!(a&&a.enabled&&!blank),von=!!(v&&v.enabled&&!blank);
-  mic.textContent=aon?'Микрофон вкл':'Микрофон выкл';mic.classList.toggle('off',!aon);
-  cam.textContent=von?'Камера вкл':'Камера выкл';cam.classList.toggle('off',!von);
-  document.getElementById('tile-me')?.classList.toggle('novideo',!von);
+  const aon=micReal&&!!a?.enabled,von=camReal&&!!v?.enabled;
+  mic.textContent=!micReal?'Нет микрофона':aon?'Микрофон вкл':'Микрофон выкл';mic.classList.toggle('off',!aon);
+  cam.textContent=!camReal?'Нет камеры':von?'Камера вкл':'Камера выкл';cam.classList.toggle('off',!von);
+  const me=document.getElementById('tile-me');me?.classList.toggle('novideo',!von);me?.classList.toggle('muted',micReal&&!aon);
 }
-function toggleMic(){const a=local?.getAudioTracks()[0];if(a&&!local.blank){a.enabled=!a.enabled;syncBtns();osd(a.enabled?'Микрофон включён':'Микрофон выключен');}}
+function toggleMic(){
+  if(!micReal){$('#devs').hidden=false;fillDevices();switchMic(micId);return;}
+  const a=local.getAudioTracks()[0];a.enabled=!a.enabled;syncBtns();osd(a.enabled?'Микрофон включён':'Микрофон выключен');
+}
 $('#micBtn').onclick=toggleMic;
-$('#camBtn').onclick=()=>{const v=local?.getVideoTracks()[0];if(v){v.enabled=!v.enabled;syncBtns();}};
+$('#camBtn').onclick=()=>{
+  if(!camReal){$('#devs').hidden=false;if(camId==='off')camId='';switchCam(camId);return;}
+  const v=local.getVideoTracks()[0];v.enabled=!v.enabled;syncBtns();
+};
 
 // ---------- плитки участников ----------
 function addTile(id,name,stream,mine){
@@ -430,7 +579,7 @@ function addTile(id,name,stream,mine){
 }
 function setName(t,name){t.querySelector('figcaption').textContent=name;t.querySelector('.ava').textContent=(name.trim()[0]||'?').toUpperCase();}
 function rename(id){const t=document.getElementById('tile-'+id);if(t&&names.get(id))setName(t,names.get(id));}
-function dropTile(id){document.getElementById('tile-'+id)?.remove();count();refreshPip();}
+function dropTile(id){document.getElementById('tile-'+id)?.remove();meters.get(id)?.src?.disconnect();meters.delete(id);count();refreshPip();}
 function count(){$('#peopleTitle').textContent='В зале: '+$('#tiles').children.length;}
 $('#callVol').oninput=e=>{callVol=+e.target.value;store.set('callVol',callVol);document.querySelectorAll('.tile:not(.mine) video').forEach(v=>v.volume=callVol);};
 
@@ -513,7 +662,7 @@ function callCam(id){
 }
 function wireCam(c){
   camCalls.set(c.peer,c);
-  c.on('stream',s=>{if(camCalls.get(c.peer)===c)addTile(c.peer,names.get(c.peer)||'Гость',s);});
+  c.on('stream',s=>{if(camCalls.get(c.peer)===c){addTile(c.peer,names.get(c.peer)||'Гость',s);monitor(c.peer,s);}});
   const end=()=>{if(camCalls.get(c.peer)===c){camCalls.delete(c.peer);dropTile(c.peer);}};
   c.on('close',end);c.on('error',end);
 }
@@ -1135,7 +1284,8 @@ function reset(){
   if(p){p._bye=true;setTimeout(()=>{try{p.destroy();}catch(e){}},isHost?300:0);}
   stopShare(true);if(shareIn){const sc=shareIn.call;shareIn=null;sc.close();}hideShare();roster.clear();
   hostConn=null;inRoom=false;mode='none';movie=null;st=null;movieStream=null;offerHidden='';
-  local?.getTracks().forEach(t=>t.stop());local=null;
+  const loc=local;local=null;loc?.getTracks().forEach(t=>t.stop());
+  meters.forEach(m=>m.src?.disconnect());meters.clear();$('#devs').hidden=true;micReal=camReal=false;
   guests.clear();camCalls.clear();movieCalls.clear();
   if(fileUrl){URL.revokeObjectURL(fileUrl);fileUrl='';}
   subs={cues:[],name:'',shift:0};updSubUi();
