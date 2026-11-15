@@ -1,16 +1,19 @@
 {
   "name": "kinozal",
   "productName": "Кинозал",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Кинозал — смотрим фильмы и показываем экран вместе",
   "main": "main.js",
   "author": "Kinozal",
   "license": "MIT",
+  "repository": "github:desinaleksandr80-star/kinozal",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable --x64"
+    "dist": "electron-builder --win nsis --x64 --publish never",
+    "release": "electron-builder --win nsis --x64 --publish always"
   },
   "dependencies": {
+    "electron-updater": "6.3.9",
     "peerjs": "1.5.4"
   },
   "devDependencies": {
@@ -20,10 +23,24 @@
   "build": {
     "appId": "local.kinozal.app",
     "productName": "Кинозал",
-    "artifactName": "Kinozal.exe",
     "directories": { "output": "dist", "buildResources": "build" },
-    "files": ["main.js", "preload.js", "index.html", "node_modules/peerjs/dist/peerjs.min.js", "package.json"],
-    "win": { "target": "portable", "icon": "build/icon.png" },
-    "portable": { "artifactName": "Kinozal.exe" }
+    "files": ["main.js", "preload.js", "index.html", "package.json", "node_modules/peerjs/dist/peerjs.min.js"],
+    "win": { "target": "nsis", "icon": "build/icon.png" },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "artifactName": "Kinozal-Setup.exe",
+      "shortcutName": "Кинозал",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "desinaleksandr80-star",
+      "repo": "kinozal",
+      "releaseType": "release"
+    }
   }
 }

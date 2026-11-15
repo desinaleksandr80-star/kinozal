@@ -183,6 +183,12 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 .stage.sharing .vbar>:not(.vol):not(#fsBtn){display:none}
 .stage.sharing .subs,.stage.sharing .offer,.stage.sharing #unmute{display:none}
 
+/* обновление */
+.upd{position:fixed;right:16px;bottom:16px;z-index:15;width:min(380px,calc(100vw - 32px));display:grid;gap:10px;background:var(--panel);border:1px solid var(--acc);border-radius:14px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:14px}
+.upd .row{display:flex;flex-wrap:wrap;gap:8px}
+.upd button{min-height:38px;padding:6px 14px;font-size:14px}
+.ver{margin:-16px 0 0;color:var(--mute);font-size:13px}
+
 @media(max-width:900px){.hall{grid-template-columns:minmax(0,1fr)}.side{grid-template-rows:auto auto}#tiles{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}
 @media(max-width:600px){.hero{grid-template-columns:minmax(0,1fr)}.art{max-width:420px}.ctrls button{flex:1 1 auto}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -235,8 +241,9 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
     <li><b>Показ экрана.</b> Кнопка «Показать экран» в зале — игра, браузер, что угодно, до 60 к/с. В окне выбора оставь галочку «Поделиться системным звуком».</li>
     <li><b>Наушники.</b> Иначе звук фильма попадёт в микрофон и будет эхо.</li>
     <li class="web-only"><b>Браузер.</b> Chrome или Edge на компьютере. Файл этой страницы просто перешли брату — пусть откроет его так же.</li>
-    <li class="app-only"><b>Брату.</b> Перешли ему Kinozal.exe — устанавливать ничего не нужно, просто запустить. Дальше вы встречаетесь по коду зала.</li>
+    <li class="app-only"><b>Брату.</b> Перешли ему Kinozal-Setup.exe — ставится за пару секунд, дальше обновляется сам. Встречаетесь по коду зала.</li>
   </ul>
+  <p class="ver app-only" id="ver"></p>
 </section>
 
 <section class="room" id="room" hidden>
@@ -351,6 +358,11 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
       <button class="main" id="pickGo" disabled>Показать</button>
     </div>
   </div>
+</div>
+
+<div class="upd" id="upd" hidden role="status">
+  <span id="updText"></span>
+  <div class="row"><button class="main" id="updGo" hidden>Перезапустить и обновить</button><button id="updX">Позже</button></div>
 </div>
 
 <div class="toast" id="toast" role="status"></div>
@@ -1332,6 +1344,28 @@ setInterval(()=>{
   if(!pl&&!shareIn&&!shareOut&&stage.classList.contains('idle'))stage.classList.remove('idle');
   renderSubs();
 },120);
+
+// ---------- обновления (только в приложении) ----------
+if(isApp&&window.kinozalApp.version){
+  window.kinozalApp.version().then(v=>{$('#ver').textContent='Версия '+v+' · обновляется сама';});
+  let updHidden='';
+  const showUpd=d=>{
+    if(!d)return;
+    const box=$('#upd'),go=$('#updGo');
+    if(d.type==='available'||d.type==='progress'){
+      if(updHidden===d.version)return;
+      $('#updText').textContent='Скачиваю новую версию '+(d.version||'')+(d.percent!=null?' — '+d.percent+'%':'…');
+      go.hidden=true;$('#updX').textContent='Скрыть';box.hidden=false;
+    }else if(d.type==='downloaded'){
+      $('#updText').textContent='Готова новая версия '+d.version+'. '+(inRoom?'Обновление прервёт звонок — можно и потом: поставится само, когда закроешь программу.':'Перезапуск займёт пару секунд.');
+      go.hidden=false;go.textContent=inRoom?'Обновить сейчас':'Перезапустить и обновить';$('#updX').textContent='Позже';box.hidden=false;
+    }
+  };
+  window.kinozalApp.onUpdate(showUpd);
+  window.kinozalApp.updState().then(showUpd);
+  $('#updGo').onclick=()=>{$('#updText').textContent='Обновляю…';$('#updGo').disabled=true;if(isHost)broadcast({t:'bye'});window.kinozalApp.installUpdate();};
+  $('#updX').onclick=()=>{$('#upd').hidden=true;updHidden=$('#updText').textContent.match(/\d+\.\d+\.\d+/)?.[0]||'';};
+}
 
 $('#createBtn').onclick=createRoom;
 $('#joinBtn').onclick=joinRoom;

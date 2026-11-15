@@ -18,6 +18,28 @@ const TITLE = 'Кинозал';
 let win = null;
 let picked = null; // что выбрали в окне «Что показать?»: {id, audio}
 
+// ---------- автообновление из релизов GitHub ----------
+// Проверяем при запуске и раз в 4 часа, качаем в фоне, ставим по кнопке или при выходе из программы.
+let autoUpdater = null;
+try { ({ autoUpdater } = require('electron-updater')); } catch (e) {}
+let updState = null;
+function sendUpd(type, data) {
+  updState = { type, ...data };
+  if (win && !win.isDestroyed()) win.webContents.send('kz:update', updState);
+}
+function setupUpdates() {
+  if (!autoUpdater || !app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on('update-available', i => sendUpd('available', { version: i.version }));
+  autoUpdater.on('download-progress', p => sendUpd('progress', { version: updState?.version, percent: Math.round(p.percent) }));
+  autoUpdater.on('update-downloaded', i => sendUpd('downloaded', { version: i.version }));
+  autoUpdater.on('error', e => { console.error('update:', e?.message || e); if (updState?.type !== 'downloaded') updState = null; });
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  setTimeout(check, 4000);
+  setInterval(check, 4 * 3600 * 1000);
+}
+
 function createWindow() {
   win = new BrowserWindow({
     width: 1440, height: 900, minWidth: 900, minHeight: 600,
@@ -64,8 +86,12 @@ app.whenReady().then(() => {
       .map(s => ({ id: s.id, name: s.name, screen: s.id.startsWith('screen:'), thumb: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL() }));
   });
   ipcMain.handle('kz:pick', (e, id, audio) => { picked = { id: String(id), audio: !!audio }; return true; });
+  ipcMain.handle('kz:version', () => app.getVersion());
+  ipcMain.handle('kz:updState', () => updState);
+  ipcMain.handle('kz:install', () => { if (updState?.type === 'downloaded') setImmediate(() => autoUpdater.quitAndInstall(true, true)); });
 
   createWindow();
+  setupUpdates();
 });
 
 app.on('window-all-closed', () => app.quit());
