@@ -1,0 +1,1196 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Кинозал — смотрим вместе</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="node_modules/peerjs/dist/peerjs.min.js"></script>
+<script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
+<style>
+:root{color-scheme:dark;--bg:#0e1416;--panel:#162023;--panel2:#1c282b;--line:#2a3639;--ink:#eef3f1;--mute:#93a5a3;--acc:#ff6b4a;--acc2:#5fd4c4}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Manrope,system-ui,sans-serif;overflow-x:clip;min-height:100vh}
+h1,h2{font-family:Unbounded,Manrope,sans-serif;font-weight:700;line-height:1.05;margin:0;text-wrap:balance}
+button,input{font:inherit}
+button{cursor:pointer;border-radius:12px;min-height:44px;padding:10px 18px;font-weight:700;color:var(--ink);background:var(--panel2);border:1px solid var(--line);transition:background .15s}
+button:hover{background:#243235}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible,input:focus-visible{outline:3px solid var(--acc2);outline-offset:2px}
+button.main{background:var(--acc);border-color:var(--acc);color:#1b0b06}
+button.main:hover{background:#ff8466}
+button.off{background:#3a1d18;border-color:#6b2d22;color:#ffb3a3}
+input[type=text]{width:100%;min-height:48px;padding:10px 14px;font-size:16px;border-radius:12px;border:1px solid var(--line);background:#0b1012;color:var(--ink)}
+input[type=range]{accent-color:var(--acc);cursor:pointer}
+label{display:block;font-size:14px;color:var(--mute);margin:0 0 6px}
+code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:block;overflow-wrap:anywhere;color:#cfe9e4}
+[hidden]{display:none!important}
+
+/* лобби */
+.lobby{max-width:1100px;margin:0 auto;padding:clamp(24px,5vw,64px) max(5vw,16px);display:grid;gap:32px}
+.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:center}
+.hero h1{font-size:clamp(34px,6vw,56px)}
+.hero p{color:var(--mute);font-size:17px;max-width:46ch;margin:16px 0 0}
+.art{width:100%;height:auto;display:block}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px;display:grid;gap:14px;align-content:start}
+.card h2{font-size:20px}
+.card p{margin:0;color:var(--mute);font-size:15px}
+.code-in{text-transform:uppercase;letter-spacing:.2em;font-weight:700}
+.tips{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px 28px;margin:0;padding:0;list-style:none;color:var(--mute);font-size:14px}
+.tips b{color:var(--ink)}
+
+/* зал */
+.room{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:100vh}
+.bar{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;padding:12px max(2vw,14px);border-bottom:1px solid var(--line);background:var(--panel)}
+.bar h1{font-size:20px}
+.codebox{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px;color:var(--mute)}
+.codebox strong{font-family:Unbounded,sans-serif;font-size:20px;color:var(--acc);letter-spacing:.15em}
+.hall{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px max(2vw,14px)}
+.left{display:grid;gap:12px;align-content:start}
+
+.stage{position:relative;background:#000;border-radius:16px;overflow:hidden;aspect-ratio:16/9;box-shadow:0 0 80px -20px rgba(255,107,74,.35);container-type:inline-size;user-select:none}
+.stage video#screen{width:100%;height:100%;display:block;object-fit:contain;background:#000}
+.stage .empty{position:absolute;inset:0;display:grid;place-content:center;text-align:center;gap:8px;padding:20px;color:var(--mute)}
+.stage .empty b{color:var(--ink);font-size:18px}
+.stage.live .empty{display:none}
+.stage:fullscreen{border-radius:0;aspect-ratio:auto;width:100vw;height:100vh}
+.stage.idle{cursor:none}
+#unmute{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:3}
+
+.subs{position:absolute;left:4%;right:4%;bottom:max(12%,74px);text-align:center;pointer-events:none;font-weight:700;font-size:clamp(15px,3.3cqw,46px);line-height:1.3;color:#fff;white-space:pre-line;text-shadow:0 0 3px #000,0 1px 3px #000,0 0 6px #000;transition:bottom .25s}
+.stage.idle .subs{bottom:6%}
+.subs span{background:rgba(0,0,0,.4);padding:.05em .3em;border-radius:.2em;-webkit-box-decoration-break:clone;box-decoration-break:clone}
+
+.osd{position:absolute;top:16px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.72);padding:8px 16px;border-radius:999px;font-weight:700;font-size:15px;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap;max-width:90%;overflow:hidden;text-overflow:ellipsis;z-index:2}
+.osd.on{opacity:1}
+
+.vbar{position:absolute;left:0;right:0;bottom:0;display:flex;gap:8px;align-items:center;padding:28px 12px 10px;background:linear-gradient(transparent,rgba(0,0,0,.85));transition:opacity .25s;z-index:2}
+.stage:not(.live) .vbar{display:none}
+.stage.idle .vbar{opacity:0;pointer-events:none}
+.vbar button{min-height:40px;min-width:44px;padding:6px 10px;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.14);font-size:15px}
+.vbar button:hover{background:rgba(255,255,255,.18)}
+.vbar .time{font-variant-numeric:tabular-nums;font-size:14px;white-space:nowrap}
+#seek{flex:1;min-width:60px}
+.vol{display:flex;align-items:center;gap:4px;margin:0;color:var(--ink);font-size:16px}
+.vol input{width:90px}
+.q{font-size:12px;color:var(--mute);font-weight:700}
+@container (max-width:620px){.vbar .opt{display:none}.vol input{width:56px}.vbar{gap:6px;padding:24px 8px 8px}}
+
+.submenu{position:absolute;right:12px;bottom:66px;width:min(300px,calc(100% - 24px));background:rgba(14,20,22,.96);border:1px solid var(--line);border-radius:14px;padding:14px;display:grid;gap:10px;z-index:4;font-size:14px}
+.submenu .row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+.submenu .row span{font-variant-numeric:tabular-nums}
+.submenu small{color:var(--mute);line-height:1.4}
+#subName{color:var(--mute);overflow-wrap:anywhere}
+
+.offer{position:absolute;top:12px;left:12px;right:12px;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;background:rgba(14,20,22,.92);border:1px solid var(--line);padding:10px 12px;border-radius:12px;font-size:14px;z-index:3}
+.offer span{flex:1 1 220px}
+.offer button{min-height:38px;padding:6px 14px}
+
+.pip{display:none;position:absolute;top:16px;right:16px;flex-direction:column;gap:8px;z-index:2;cursor:pointer}
+.stage:fullscreen .pip{display:flex}
+.pip video{width:clamp(140px,16vw,280px);aspect-ratio:4/3;object-fit:cover;border-radius:12px;background:#0b1012;box-shadow:0 4px 20px rgba(0,0,0,.6);transform:scaleX(-1)}
+.pip.small video{width:96px}
+.fslog{display:none;position:absolute;left:16px;bottom:84px;width:min(420px,60%);flex-direction:column;gap:6px;pointer-events:none;z-index:2}
+.stage:fullscreen .fslog{display:flex}
+.fslog div{background:rgba(0,0,0,.65);padding:6px 12px;border-radius:10px;font-size:16px;overflow-wrap:anywhere;transition:opacity .5s}
+.fslog b{color:var(--acc2);margin-right:6px}
+.fsform{display:none;position:absolute;left:16px;bottom:76px;width:min(420px,60%);z-index:3}
+.stage:fullscreen .fsform.on{display:block}
+.fsform input{background:rgba(11,16,18,.9)!important}
+
+.ctrls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.ctrls .grow{flex:1}
+#movieName{color:var(--mute);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.keys{margin:0;color:var(--mute);font-size:13px}
+.help{display:grid;gap:10px}
+.help p{margin:0;font-size:14px;color:var(--mute)}
+.help p b{color:var(--ink)}
+.help .row{display:flex;flex-wrap:wrap;gap:8px}
+
+.side{display:grid;grid-template-rows:auto minmax(260px,1fr);gap:16px;min-height:0}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px}
+.panel h2{font-size:14px;font-family:Manrope,sans-serif;color:var(--mute);margin:0 0 10px}
+#tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.tile{position:relative;margin:0;aspect-ratio:4/3;background:#0b1012;border-radius:10px;overflow:hidden}
+.tile video{width:100%;height:100%;object-fit:cover;display:block}
+.tile.mine video{transform:scaleX(-1)}
+.tile figcaption{position:absolute;left:6px;bottom:6px;font-size:13px;padding:2px 8px;border-radius:8px;background:rgba(0,0,0,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:calc(100% - 12px)}
+.tile .ava{position:absolute;inset:0;display:none;place-content:center;font:700 32px Unbounded,sans-serif;color:var(--acc2)}
+.tile.novideo video{opacity:0}.tile.novideo .ava{display:grid}
+.cvol{display:flex;align-items:center;gap:10px;margin:10px 0 0;font-size:13px}
+.cvol input{flex:1}
+.chat{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0}
+#msgs{overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px;max-height:50vh}
+.msg{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
+.msg b{color:var(--acc2);margin-right:6px}
+.msg.me b{color:var(--acc)}
+.msg.sys{color:var(--mute);font-size:13px}
+#chatForm{display:flex;gap:8px;margin-top:10px}
+#chatForm input{min-height:44px}
+.toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:#f3f6f5;color:#0e1416;padding:12px 18px;border-radius:12px;font-weight:600;max-width:min(90vw,520px);text-align:center;transition:.25s;z-index:9}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+
+select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1px solid var(--line);background:var(--panel2);color:var(--ink);font-weight:600;max-width:100%;cursor:pointer}
+
+/* показ экрана */
+.share{position:absolute;inset:0;background:#000;z-index:1}
+.share video{width:100%;height:100%;object-fit:contain;display:block}
+.shareMe{position:absolute;top:12px;left:12px;max-width:min(460px,calc(100% - 24px));display:grid;gap:2px;background:rgba(14,20,22,.88);border:1px solid var(--line);border-radius:14px;padding:12px 14px;color:var(--mute);font-size:13px;line-height:1.45;transition:opacity .25s;z-index:1}
+.shareMe b{color:var(--ink);font-size:15px}
+.shareMe .live{color:#ff5a4a;font-weight:800;font-size:12px;letter-spacing:.08em;margin-right:8px}
+.shareMe .warn{color:#ffb3a3}
+.shareMe .warn:empty,#shareNet:empty{display:none}
+.shareMe .row{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.shareMe button{min-height:36px;padding:6px 12px;font-size:14px}
+.stage.idle .shareMe{opacity:.2}
+.pvOff{position:absolute;inset:0;display:grid;place-content:center;color:var(--mute);font-size:15px}
+
+/* окно «Что показать?» */
+.modal{position:fixed;inset:0;background:rgba(5,8,9,.75);display:grid;place-items:center;z-index:20;padding:16px}
+.modal-box{width:min(1000px,100%);max-height:calc(100vh - 32px);overflow:auto;background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:22px;display:grid;gap:14px}
+.modal-box h2{font-size:22px}
+.modal-box h3{margin:4px 0 0;font-size:13px;color:var(--mute);font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+#srcs{display:grid;gap:10px;color:var(--mute)}
+.srcgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.src{display:grid;gap:8px;padding:8px;text-align:left;font-weight:600;font-size:13px;border-width:2px;color:var(--ink)}
+.src img{width:100%;aspect-ratio:16/9;object-fit:contain;background:#000;border-radius:8px;display:block}
+.src span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.src.sel{border-color:var(--acc);background:#2a2320}
+.pickrow{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center}
+.pickrow .grow{flex:1}
+.chk{display:flex;align-items:center;gap:8px;margin:0;color:var(--ink);font-weight:600;font-size:15px;cursor:pointer}
+.chk input{width:20px;height:20px;accent-color:var(--acc)}
+.app .web-only,html:not(.app) .app-only{display:none!important}
+.shareTag{position:absolute;top:12px;left:12px;background:rgba(0,0,0,.65);padding:4px 10px;border-radius:8px;font-size:13px;font-weight:600;transition:opacity .25s;pointer-events:none}
+.stage.idle .shareTag{opacity:0}
+#shareUnmute{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
+.stage.sharing .vbar{display:flex;justify-content:flex-end}
+.stage.sharing .vbar>:not(.vol):not(#fsBtn){display:none}
+.stage.sharing .subs,.stage.sharing .offer,.stage.sharing #unmute{display:none}
+
+@media(max-width:900px){.hall{grid-template-columns:minmax(0,1fr)}.side{grid-template-rows:auto auto}#tiles{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}
+@media(max-width:600px){.hero{grid-template-columns:minmax(0,1fr)}.art{max-width:420px}.ctrls button{flex:1 1 auto}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+
+<section class="lobby" id="lobby">
+  <div class="hero">
+    <div>
+      <h1>Кинозал на&nbsp;двоих, троих и&nbsp;больше</h1>
+      <p>Созваниваетесь с камерами и смотрите один фильм секунда в секунду. Пауза, перемотка и субтитры — общие: кто угодно нажал, у всех сработало.</p>
+    </div>
+    <svg class="art" viewBox="0 0 480 300" role="img" aria-label="Экран кинотеатра и луч проектора">
+      <defs>
+        <linearGradient id="beam" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".55"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient>
+        <linearGradient id="scr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd2c4"/><stop offset=".6" stop-color="#ff8a6c"/><stop offset="1" stop-color="#e2553a"/></linearGradient>
+      </defs>
+      <polygon points="440,262 40,26 300,26" fill="url(#beam)"/>
+      <rect x="40" y="26" width="260" height="150" rx="8" fill="url(#scr)"/>
+      <rect x="40" y="26" width="260" height="150" rx="8" fill="none" stroke="#fff" stroke-opacity=".35"/>
+      <circle cx="440" cy="262" r="12" fill="#ff6b4a"/>
+      <g fill="#162023" stroke="#2a3639">
+        <rect x="30" y="226" width="64" height="58" rx="18"/><rect x="110" y="226" width="64" height="58" rx="18"/>
+        <rect x="190" y="226" width="64" height="58" rx="18"/><rect x="270" y="226" width="64" height="58" rx="18"/>
+      </g>
+      <g fill="#5fd4c4"><circle cx="62" cy="214" r="14"/><circle cx="142" cy="210" r="15"/><circle cx="222" cy="214" r="14"/></g>
+    </svg>
+  </div>
+
+  <div class="cards">
+    <div class="card">
+      <h2>Твоё имя</h2>
+      <div><label for="name">Так тебя увидят остальные</label><input type="text" id="name" maxlength="24" placeholder="Например, Саша" autocomplete="nickname"></div>
+    </div>
+    <div class="card">
+      <h2>Я показываю фильм</h2>
+      <p>Создай зал, отправь код, потом выбери видеофайл с компьютера.</p>
+      <button class="main" id="createBtn">Создать зал</button>
+    </div>
+    <div class="card">
+      <h2>Меня позвали</h2>
+      <div><label for="codeIn">Код зала</label><input type="text" id="codeIn" class="code-in" maxlength="5" placeholder="ABCDE" autocomplete="off"></div>
+      <button id="joinBtn">Войти</button>
+    </div>
+  </div>
+  <ul class="tips">
+    <li><b>Лучшее качество.</b> Если фильм скачан у обоих — второй жмёт «У меня есть этот файл». Каждый смотрит свой файл в полном качестве, а зал держит вас синхронно.</li>
+    <li><b>Если файла нет.</b> Ведущий транслирует фильм сам — до 1080p со стерео-звуком, сколько позволит интернет.</li>
+    <li><b>Показ экрана.</b> Кнопка «Показать экран» в зале — игра, браузер, что угодно, до 60 к/с. В окне выбора оставь галочку «Поделиться системным звуком».</li>
+    <li><b>Наушники.</b> Иначе звук фильма попадёт в микрофон и будет эхо.</li>
+    <li class="web-only"><b>Браузер.</b> Chrome или Edge на компьютере. Файл этой страницы просто перешли брату — пусть откроет его так же.</li>
+    <li class="app-only"><b>Брату.</b> Перешли ему Kinozal.exe — устанавливать ничего не нужно, просто запустить. Дальше вы встречаетесь по коду зала.</li>
+  </ul>
+</section>
+
+<section class="room" id="room" hidden>
+  <header class="bar">
+    <h1>Кинозал</h1>
+    <div class="codebox">Код зала <strong id="codeOut">—</strong><button id="copyBtn">Скопировать приглашение</button></div>
+  </header>
+  <div class="hall">
+    <div class="left">
+      <div class="stage" id="stage">
+        <video id="screen" playsinline></video>
+        <div class="empty" id="empty"><b id="emptyTitle">Экран пока тёмный</b><span id="emptyText">Выбери фильм — и он появится у всех</span></div>
+        <div class="share" id="share" hidden>
+          <video id="shareVid" playsinline></video>
+          <div class="pvOff" id="pvOff" hidden>Превью скрыто — зрители всё видят</div>
+          <div class="shareMe" id="shareMe" hidden>
+            <div><span class="live">● В ЭФИРЕ</span><b>Ты показываешь экран</b></div>
+            <span id="shareCap"></span>
+            <span id="shareOutStat">Ждём зрителей…</span>
+            <span id="shareNet"></span>
+            <span class="warn" id="shareWarn"></span>
+            <div class="row"><button class="main" id="shareStop">Остановить показ</button><button id="pvBtn">Скрыть превью</button></div>
+          </div>
+          <div class="shareTag" id="shareTag"></div>
+          <button class="main" id="shareUnmute" hidden>Включить звук</button>
+        </div>
+        <div class="subs" id="subs"></div>
+        <div class="osd" id="osd" role="status"></div>
+        <div class="pip" id="pip" title="Нажми, чтобы уменьшить"></div>
+        <div class="fslog" id="fslog"></div>
+        <div class="offer" id="offer" hidden><span id="offerText"></span><button class="main" id="offerOpen">Открыть свой файл</button><button id="offerX" aria-label="Скрыть">✕</button></div>
+        <button class="main" id="unmute" hidden>Включить звук</button>
+        <div class="vbar" id="vbar">
+          <button id="pp" aria-label="Пауза или продолжить">▶</button>
+          <button id="back" class="opt" aria-label="Назад на 10 секунд">−10</button>
+          <button id="fwd" class="opt" aria-label="Вперёд на 10 секунд">+10</button>
+          <span class="time" id="tcur">0:00</span>
+          <input type="range" id="seek" min="0" max="1000" step="1" value="0" aria-label="Перемотка">
+          <span class="time opt" id="tdur">0:00</span>
+          <span class="q" id="q"></span>
+          <label class="vol" title="Громкость фильма">🔊<input type="range" id="vol" min="0" max="1" step="0.02" aria-label="Громкость фильма"></label>
+          <button id="subBtn" aria-label="Субтитры">CC</button>
+          <button id="fsBtn" aria-label="На весь экран">⛶</button>
+        </div>
+        <div class="submenu" id="subMenu" hidden>
+          <b>Субтитры</b>
+          <span id="subName">Не загружены</span>
+          <button id="subLoad">Загрузить .srt или .vtt</button>
+          <div class="row"><button id="subEarly">−0,5 с</button><span id="subShift">сдвиг 0,0 с</span><button id="subLate">+0,5 с</button></div>
+          <button id="subOff">Убрать субтитры</button>
+          <small>Файл субтитров увидят все. Сдвиг — только у тебя. Субтитры внутри MKV браузер не видит, их можно вытащить: <code>ffmpeg -i "фильм.mkv" -map 0:s:0 subs.srt</code></small>
+        </div>
+        <form class="fsform" id="fsForm"><input type="text" id="fsInput" maxlength="500" placeholder="Сообщение в чат, Enter — отправить" autocomplete="off"></form>
+      </div>
+      <div class="ctrls">
+        <button class="main" id="fileBtn" hidden>Выбрать фильм</button>
+        <button id="ownBtn" hidden>У меня есть этот файл</button>
+        <button id="shareBtn">Показать экран</button>
+        <select id="shareQ" aria-label="Качество показа экрана">
+          <option value="motion">1080p · 60 к/с — игры и видео (до 30 Мбит/с)</option>
+          <option value="max">Родное разрешение · 60 к/с — максимум (до 40 Мбит/с)</option>
+          <option value="detail">Текст и код — чёткость, 30 к/с (до 20 Мбит/с)</option>
+        </select>
+        <input type="file" id="file" accept="video/*,.mkv,.avi,.mov,.m4v" hidden>
+        <input type="file" id="subFile" accept=".srt,.vtt,.sub,text/vtt" hidden>
+        <span class="grow" id="movieName"></span>
+        <button id="micBtn">Микрофон вкл</button>
+        <button id="camBtn">Камера вкл</button>
+        <button id="leaveBtn">Выйти</button>
+      </div>
+      <div class="help panel" id="help" hidden>
+        <h2 id="helpTitle">Браузер не тянет этот файл</h2>
+        <p id="helpText"></p>
+        <code id="helpCmd"></code>
+        <p>Нет ffmpeg? Поставь одной командой: <b>winget install Gyan.FFmpeg</b> и перезапусти PowerShell. Команду запускай в папке с фильмом: Shift + правый клик по пустому месту → «Открыть в Терминале».</p>
+        <div class="row"><button class="main" id="helpCopy">Скопировать команду</button><button id="helpX">Закрыть</button></div>
+      </div>
+      <p class="keys">Пробел — пауза · ← → — 10 секунд · F — весь экран · M — микрофон · Enter в полноэкранном — чат</p>
+    </div>
+    <aside class="side">
+      <div class="panel">
+        <h2 id="peopleTitle">В зале</h2>
+        <div id="tiles"></div>
+        <label class="cvol">Голоса <input type="range" id="callVol" min="0" max="1" step="0.02" aria-label="Громкость голосов"></label>
+      </div>
+      <div class="panel chat">
+        <h2>Чат</h2>
+        <div id="msgs" aria-live="polite"></div>
+        <form id="chatForm"><input type="text" id="chatInput" maxlength="500" placeholder="Написать…" autocomplete="off"><button aria-label="Отправить">➤</button></form>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<div class="modal" id="picker" hidden role="dialog" aria-labelledby="pickTitle">
+  <div class="modal-box">
+    <h2 id="pickTitle">Что показать?</h2>
+    <div id="srcs"></div>
+    <div class="pickrow">
+      <label class="chk"><input type="checkbox" id="pickAudio" checked> Звук компьютера</label>
+      <span id="pickQ"></span>
+      <span class="grow"></span>
+      <button id="pickCancel">Отмена</button>
+      <button class="main" id="pickGo" disabled>Показать</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+{
+const $=s=>document.querySelector(s);
+const PREFIX='kinozal-v2-';
+const ICE={iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']}]};
+
+let peer=null,isHost=false,inRoom=false,leaving=false,hostGone=false,code='',myName='',local=null;
+let hostConn=null,joinTimer=0,retryTimer=0,retries=0;
+let mode='none';          // none | host (ведущий играет файл) | stream (гость смотрит трансляцию) | local (гость играет свой файл)
+let movie=null;           // {title,dur}
+let movieStream=null;     // у ведущего: захват видео для трансляции
+let st=null;              // у гостя: последнее состояние ведущего
+let rtt=150,fileUrl='',dragging=false,offerHidden='';
+let subs={cues:[],name:'',shift:0};
+const guests=new Map();     // у ведущего: id -> {conn,name,local}
+const names=new Map();      // id -> имя
+const camCalls=new Map();   // id -> звонок с камерой
+const movieCalls=new Map(); // у ведущего: id -> трансляция; у гостя: 'host'
+const screen=$('#screen'),stage=$('#stage');
+
+const store={get(k,d){try{const v=localStorage.getItem('kinozal-'+k);return v===null?d:v;}catch(e){return d;}},set(k,v){try{localStorage.setItem('kinozal-'+k,v);}catch(e){}}};
+let vol=+store.get('vol',1),callVol=+store.get('callVol',1);
+$('#vol').value=vol;$('#callVol').value=callVol;
+
+const rand=(n,abc='ABCDEFGHJKLMNPQRSTUVWXYZ23456789')=>Array.from({length:n},()=>abc[Math.floor(Math.random()*abc.length)]).join('');
+const clean=s=>String(s||'').trim().slice(0,24);
+const title=s=>String(s||'').trim().slice(0,200);
+const fmt=t=>{t=Math.max(0,Math.floor(t||0));const h=Math.floor(t/3600),m=Math.floor(t/60)%60,s=String(t%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+s:m+':'+s;};
+
+function toast(t){const el=$('#toast');el.textContent=t;el.classList.add('on');clearTimeout(toast.h);toast.h=setTimeout(()=>el.classList.remove('on'),4500);}
+function osd(t){const el=$('#osd');el.textContent=t;el.classList.add('on');clearTimeout(osd.h);osd.h=setTimeout(()=>el.classList.remove('on'),1600);}
+
+// ---------- чат ----------
+function addMsg(name,text,me){
+  const d=document.createElement('div');d.className='msg'+(me?' me':'');
+  const b=document.createElement('b');b.textContent=name;d.append(b,document.createTextNode(text));push(d);
+  if(document.fullscreenElement&&!me){
+    const f=document.createElement('div');const b2=document.createElement('b');b2.textContent=name;f.append(b2,document.createTextNode(text));
+    const log=$('#fslog');log.append(f);while(log.children.length>4)log.firstChild.remove();
+    setTimeout(()=>{f.style.opacity=0;setTimeout(()=>f.remove(),600);},8000);
+  }
+}
+function sys(text){const d=document.createElement('div');d.className='msg sys';d.textContent=text;push(d);}
+function push(d){const m=$('#msgs');m.appendChild(d);m.scrollTop=m.scrollHeight;}
+function sendChat(t){
+  t=t.trim().slice(0,500);if(!t)return;
+  addMsg(myName,t,true);
+  if(isHost)broadcast({t:'chat',name:myName,text:t});else if(hostConn?.open)hostConn.send({t:'chat',text:t});
+}
+$('#chatForm').onsubmit=e=>{e.preventDefault();const i=$('#chatInput');sendChat(i.value);i.value='';};
+$('#fsForm').onsubmit=e=>{e.preventDefault();const i=$('#fsInput');sendChat(i.value);i.value='';i.blur();$('#fsForm').classList.remove('on');};
+$('#fsInput').addEventListener('keydown',e=>{if(e.key==='Escape'){e.target.blur();$('#fsForm').classList.remove('on');}});
+
+// ---------- камера и микрофон ----------
+function blankStream(){
+  const c=document.createElement('canvas');c.width=c.height=16;c.getContext('2d').fillRect(0,0,16,16);
+  const s=c.captureStream(1);
+  try{const ac=new AudioContext();s.addTrack(ac.createMediaStreamDestination().stream.getAudioTracks()[0]);}catch(e){}
+  s.blank=true;return s;
+}
+async function initMedia(){
+  const audio={echoCancellation:true,noiseSuppression:true,autoGainControl:true};
+  try{local=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:640},height:{ideal:480}},audio});}
+  catch(e){
+    try{local=await navigator.mediaDevices.getUserMedia({audio});toast('Камера недоступна — подключаюсь только с микрофоном');}
+    catch(e2){local=blankStream();toast('Нет доступа к камере и микрофону — проверь разрешения браузера');}
+  }
+  addTile('me',myName+' (ты)',local,true);syncBtns();
+}
+function syncBtns(){
+  const a=local?.getAudioTracks()[0],v=local?.getVideoTracks()[0],blank=!!local?.blank;
+  const mic=$('#micBtn'),cam=$('#camBtn');
+  mic.disabled=!a||blank;cam.disabled=!v||blank;
+  const aon=!!(a&&a.enabled&&!blank),von=!!(v&&v.enabled&&!blank);
+  mic.textContent=aon?'Микрофон вкл':'Микрофон выкл';mic.classList.toggle('off',!aon);
+  cam.textContent=von?'Камера вкл':'Камера выкл';cam.classList.toggle('off',!von);
+  document.getElementById('tile-me')?.classList.toggle('novideo',!von);
+}
+function toggleMic(){const a=local?.getAudioTracks()[0];if(a&&!local.blank){a.enabled=!a.enabled;syncBtns();osd(a.enabled?'Микрофон включён':'Микрофон выключен');}}
+$('#micBtn').onclick=toggleMic;
+$('#camBtn').onclick=()=>{const v=local?.getVideoTracks()[0];if(v){v.enabled=!v.enabled;syncBtns();}};
+
+// ---------- плитки участников ----------
+function addTile(id,name,stream,mine){
+  let t=document.getElementById('tile-'+id);
+  if(!t){t=document.createElement('figure');t.className='tile';t.id='tile-'+id;
+    t.innerHTML='<video autoplay playsinline></video><span class="ava"></span><figcaption></figcaption>';
+    if(mine){t.classList.add('mine');$('#tiles').prepend(t);}else $('#tiles').appendChild(t);}
+  const v=t.querySelector('video');v.muted=!!mine;if(!mine)v.volume=callVol;
+  if(v.srcObject!==stream){v.srcObject=stream;v.play().catch(()=>{});}
+  setName(t,name);
+  t.classList.toggle('novideo',!stream.getVideoTracks().length||!!stream.blank);
+  count();refreshPip();
+}
+function setName(t,name){t.querySelector('figcaption').textContent=name;t.querySelector('.ava').textContent=(name.trim()[0]||'?').toUpperCase();}
+function rename(id){const t=document.getElementById('tile-'+id);if(t&&names.get(id))setName(t,names.get(id));}
+function dropTile(id){document.getElementById('tile-'+id)?.remove();count();refreshPip();}
+function count(){$('#peopleTitle').textContent='В зале: '+$('#tiles').children.length;}
+$('#callVol').oninput=e=>{callVol=+e.target.value;store.set('callVol',callVol);document.querySelectorAll('.tile:not(.mine) video').forEach(v=>v.volume=callVol);};
+
+// камеры поверх фильма в полноэкранном режиме
+function refreshPip(){
+  const pip=$('#pip');pip.innerHTML='';
+  if(document.fullscreenElement!==stage)return;
+  for(const t of $('#tiles').children){
+    if(t.classList.contains('mine')||t.classList.contains('novideo'))continue;
+    const src=t.querySelector('video').srcObject;if(!src)continue;
+    const v=document.createElement('video');v.muted=true;v.autoplay=true;v.playsInline=true;v.srcObject=src;pip.append(v);
+  }
+}
+$('#pip').onclick=e=>{e.stopPropagation();$('#pip').classList.toggle('small');};
+document.addEventListener('fullscreenchange',()=>{refreshPip();$('#fslog').innerHTML='';$('#fsBtn').textContent=document.fullscreenElement?'🗗':'⛶';});
+
+// ---------- звонки ----------
+// стерео и высокий битрейт для звука фильма
+function stereo(sdp){
+  const m=sdp.match(/a=rtpmap:(\d+) opus\/48000\/2/i);if(!m)return sdp;
+  return sdp.replace(new RegExp('a=fmtp:'+m[1]+' ([^\\r\\n]*)'),(_,p)=>{
+    const ps=p.split(';').map(x=>x.trim()).filter(x=>x&&!/^(stereo|sprop-stereo|maxaveragebitrate)=/.test(x));
+    ps.push('stereo=1','sprop-stereo=1','maxaveragebitrate=510000');
+    return 'a=fmtp:'+m[1]+' '+ps.join(';');
+  });
+}
+// + видео стартует сразу с ~10 Мбит, а не разгоняется с 0,3 Мбит секунд 15
+const VCODEC=/a=rtpmap:(\d+) (VP8|VP9|H264|AV1)\/90000/gi,START='x-google-start-bitrate=10000;x-google-max-bitrate=40000';
+// H.264 вперёд: High-профиль Chromium предлагает, когда видеокарта кодирует сама (NVENC/AMF/QuickSync) —
+// это 1080p60 без нагрузки на процессор. Нет такого — дальше по списку.
+function preferH264(sdp){
+  const nl=sdp.includes('\r\n')?'\r\n':'\n',lines=sdp.split(nl);
+  const mi=lines.findIndex(l=>l.startsWith('m=video'));if(mi<0)return sdp;
+  const parts=lines[mi].split(' '),pts=parts.slice(3),name={},fmtp={};
+  for(const l of lines){let m=l.match(/^a=rtpmap:(\d+) ([^/]+)/);if(m)name[m[1]]=m[2].toUpperCase();m=l.match(/^a=fmtp:(\d+) (.*)/);if(m)fmtp[m[1]]=m[2];}
+  const score=pt=>{if(name[pt]!=='H264')return 0;const f=fmtp[pt]||'';if(!/packetization-mode=1/.test(f))return 1;if(/profile-level-id=64/i.test(f))return 4;if(/profile-level-id=4d/i.test(f))return 3;return 2;};
+  const main=pts.filter(pt=>!/^(RTX|RED|ULPFEC|FLEXFEC)/.test(name[pt]||''));
+  const other=pts.filter(pt=>!main.includes(pt));
+  lines[mi]=parts.slice(0,3).concat([...main].sort((a,b)=>score(b)-score(a)),other).join(' ');
+  return lines.join(nl);
+}
+function hq(sdp){
+  sdp=preferH264(stereo(sdp));
+  const pts=[...sdp.matchAll(VCODEC)].map(m=>m[1]);
+  for(const pt of pts){
+    const re=new RegExp('a=fmtp:'+pt+' ([^\\r\\n]*)');
+    if(re.test(sdp))sdp=sdp.replace(re,l=>/x-google-start-bitrate/.test(l)?l:l+';'+START);
+    else sdp=sdp.replace(new RegExp('(a=rtpmap:'+pt+' [^\\r\\n]*)(\\r?\\n)'),'$1$2a=fmtp:'+pt+' '+START+'$2');
+  }
+  return sdp;
+}
+// снимаем стандартный потолок качества WebRTC (~2,5 Мбит): фильм — до 20 Мбит, экран — по пресету
+function tuneMovie(c){tune(c,{bitrate:20000000,fps:60,degr:'maintain-resolution',scale:()=>{const h=screen.videoHeight||0;return h>1080?h/1080:1;}});}
+function tune(c,o){
+  let n=0;
+  const apply=()=>{
+    const pc=c.peerConnection;
+    if(!pc){if(++n<30)setTimeout(apply,300);return;}
+    if(!pc._kz){pc._kz=1;pc.addEventListener('connectionstatechange',()=>{if(pc.connectionState==='connected')apply();});}
+    for(const s of pc.getSenders()){
+      if(!s.track)continue;
+      const p=s.getParameters();if(!p.encodings||!p.encodings.length)continue;
+      const e=p.encodings[0];
+      if(s.track.kind==='video'){
+        e.maxBitrate=o.bitrate;e.maxFramerate=o.fps;e.scaleResolutionDownBy=o.scale?o.scale():1;
+      }else e.maxBitrate=320000;
+      // держим разрешение: при нехватке ресурсов лучше чуть меньше кадров, чем мыло
+      s.setParameters(p).then(()=>{
+        if(!o.degr||s.track?.kind!=='video')return;
+        const q=s.getParameters();if(q.degradationPreference===o.degr)return;
+        q.degradationPreference=o.degr;return s.setParameters(q);
+      }).catch(()=>{});
+    }
+  };
+  apply();
+}
+function callCam(id){
+  if(camCalls.has(id))return;
+  wireCam(peer.call(id,local,{metadata:{kind:'cam',name:myName}}));
+}
+function wireCam(c){
+  camCalls.set(c.peer,c);
+  c.on('stream',s=>{if(camCalls.get(c.peer)===c)addTile(c.peer,names.get(c.peer)||'Гость',s);});
+  const end=()=>{if(camCalls.get(c.peer)===c){camCalls.delete(c.peer);dropTile(c.peer);}};
+  c.on('close',end);c.on('error',end);
+}
+function onCall(c){
+  const m=c.metadata||{};
+  if(m.kind==='screen'){onShareCall(c,m);return;}
+  if(m.kind==='movie'){
+    if(isHost||mode==='local'){c.close();return;}
+    if(mode==='none')mode='stream';
+    movieCalls.get('host')?.close();movieCalls.set('host',c);
+    c.answer(undefined,{sdpTransform:hq});
+    c.on('stream',s=>{if(movieCalls.get('host')===c&&mode==='stream')showRemoteMovie(s);});
+    const end=()=>{if(movieCalls.get('host')===c){movieCalls.delete('host');if(mode==='stream')clearScreen('Трансляция остановлена','Ждём, пока ведущий включит снова');}};
+    c.on('close',end);c.on('error',end);
+    return;
+  }
+  if(m.name)names.set(c.peer,clean(m.name));
+  camCalls.get(c.peer)?.close();
+  c.answer(local);wireCam(c);
+}
+
+// ---------- показ экрана ----------
+// лимиты битрейта: сколько реально уйдёт, зависит от картинки (статичный экран весит мало) и от скорости отдачи
+const PRESETS={
+  motion:{w:1920,h:1080,fps:60,bitrate:30000000,hint:'motion'},
+  max:{fps:60,bitrate:40000000,hint:'motion'},
+  detail:{fps:30,bitrate:20000000,hint:'detail'}
+};
+const roster=new Set();      // у гостя: кто ещё в зале (включая ведущего)
+let shareOut=null;           // я показываю: {stream,calls,p,prev,pv}
+let shareIn=null;            // мне показывают: {call,from,name}
+const shareVid=$('#shareVid');
+const isApp=!!window.kinozalApp;
+if(isApp){document.documentElement.classList.add('app');$('#pickQ').append($('#shareQ'));$('#copyBtn').textContent='Скопировать код';}
+$('#shareQ').value=PRESETS[store.get('shareQ','motion')]?store.get('shareQ','motion'):'motion';
+$('#shareQ').onchange=e=>store.set('shareQ',e.target.value);
+$('#pickAudio').checked=store.get('pickAudio','1')==='1';
+$('#pickAudio').onchange=e=>store.set('pickAudio',e.target.checked?'1':'0');
+if(!navigator.mediaDevices?.getDisplayMedia){$('#shareBtn').hidden=true;$('#shareQ').hidden=true;}
+$('#shareBtn').onclick=()=>shareOut?stopShare():startShare();
+$('#shareStop').onclick=()=>stopShare();
+$('#pvBtn').onclick=()=>{
+  if(!shareOut)return;shareOut.pv=!shareOut.pv;
+  shareVid.srcObject=shareOut.pv?shareOut.stream:null;if(shareOut.pv)shareVid.play().catch(()=>{});
+  $('#pvOff').hidden=shareOut.pv;$('#pvBtn').textContent=shareOut.pv?'Скрыть превью':'Показать превью';
+};
+
+window.__kz={get shareOut(){return shareOut;},get shareIn(){return shareIn;}}; // для диагностики
+function roomPeers(){return isHost?[...guests.keys()]:[...roster];}
+function shareMsg(on){
+  if(isHost)broadcast({t:'share',on,name:myName,from:peer?.id});
+  else if(hostConn?.open)hostConn.send({t:'share',on});
+}
+
+// в приложении — своё окно выбора: экраны и окна с миниатюрами, галочка звука, качество
+let pickSel=null;
+function startShare(){if(!inRoom)return;if(isApp)openPicker();else doShare();}
+async function openPicker(){
+  const box=$('#srcs');box.textContent='Ищу экраны и окна…';
+  $('#picker').hidden=false;$('#pickGo').disabled=true;pickSel=null;
+  let list=[];try{list=await window.kinozalApp.getSources();}catch(e){}
+  box.textContent='';
+  const screens=list.filter(s=>s.screen),wins=list.filter(s=>!s.screen);
+  for(const[title,items]of[['Экраны',screens],['Окна',wins]]){
+    if(!items.length)continue;
+    const h=document.createElement('h3');h.textContent=title;
+    const g=document.createElement('div');g.className='srcgrid';
+    items.forEach((s,i)=>{
+      const b=document.createElement('button');b.type='button';b.className='src';
+      const img=document.createElement('img');img.alt='';if(s.thumb)img.src=s.thumb;
+      const n=document.createElement('span');n.textContent=s.screen?(screens.length>1?'Экран '+(i+1):'Весь экран'):s.name;n.title=s.name;
+      b.append(img,n);
+      b.onclick=()=>{box.querySelectorAll('.src.sel').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');pickSel=s.id;$('#pickGo').disabled=false;};
+      b.ondblclick=()=>{pickSel=s.id;goPick();};
+      g.append(b);
+    });
+    box.append(h,g);
+  }
+  if(!list.length)box.textContent='Не нашёл, что показать. Проверь в Windows: Параметры → Конфиденциальность → разрешения на запись экрана.';
+  box.querySelector('.src')?.click();$('#pickGo').focus();
+}
+async function goPick(){
+  if(!pickSel)return;
+  await window.kinozalApp.pick(pickSel,$('#pickAudio').checked);
+  $('#picker').hidden=true;doShare();
+}
+$('#pickGo').onclick=goPick;
+$('#pickCancel').onclick=()=>{$('#picker').hidden=true;};
+$('#picker').addEventListener('click',e=>{e.stopPropagation();if(e.target.id==='picker')$('#picker').hidden=true;});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#picker').hidden){$('#picker').hidden=true;e.stopPropagation();}},true);
+
+async function doShare(){
+  if(!inRoom)return;
+  const key=$('#shareQ').value,p=PRESETS[key]||PRESETS.motion;
+  const video={frameRate:{ideal:p.fps,max:p.fps}};
+  if(p.w){video.width={max:p.w};video.height={max:p.h};}
+  let s;
+  try{
+    s=await navigator.mediaDevices.getDisplayMedia({
+      video,
+      audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:2,sampleRate:48000,suppressLocalAudioPlayback:false,restrictOwnAudio:true},
+      systemAudio:'include',selfBrowserSurface:'exclude',surfaceSwitching:'include',monitorTypeSurfaces:'include'
+    });
+  }catch(e){if(e.name!=='NotAllowedError'&&e.name!=='AbortError')toast('Не получилось начать показ: '+(e.message||e.name));return;}
+  if(!inRoom){s.getTracks().forEach(t=>t.stop());return;}
+  const vt=s.getVideoTracks()[0];
+  try{vt.contentHint=p.hint;}catch(e){}
+  vt.addEventListener('ended',()=>{if(shareOut?.stream===s)stopShare();});
+  if(shareIn){const c=shareIn.call;shareIn=null;c.close();}
+  if(movie&&isPlaying())userCtl('pause');
+  shareOut={stream:s,calls:new Map(),p,prev:null,pv:true};
+  for(const id of roomPeers())callShare(id);
+  shareMsg(true);
+  // превью: показывающий видит то же, что уходит зрителям
+  shareVid.srcObject=s;shareVid.muted=true;shareVid.play().catch(()=>{});
+  $('#pvOff').hidden=true;$('#pvBtn').textContent='Скрыть превью';
+  $('#share').hidden=false;$('#shareMe').hidden=false;$('#shareTag').textContent='';$('#shareUnmute').hidden=true;
+  $('#shareWarn').textContent=s.getAudioTracks().length?'':isApp?'Звук компьютера выключен':'Без звука — в окне выбора не была отмечена галочка «Поделиться звуком»';
+  stage.classList.add('sharing');
+  $('#shareBtn').textContent='Остановить показ';$('#shareBtn').classList.add('off');$('#shareQ').disabled=true;
+  sys('Ты показываешь экран');
+  shareStats();
+}
+// звонок не установился (сбой сервера соединений, сеть) — повторяем
+function retryCall(c,still,again,tries){
+  if(tries>=3)return;
+  setTimeout(()=>{const s=c.peerConnection?.connectionState||'new';if(still()&&['new','failed','closed'].includes(s))again(tries+1);},8000);
+}
+function callShare(id,tries=0){
+  if(!shareOut||!peer)return;
+  shareOut.calls.get(id)?.close();
+  const c=peer.call(id,shareOut.stream,{metadata:{kind:'screen',name:myName},sdpTransform:hq});
+  shareOut.calls.set(id,c);tune(c,{bitrate:shareOut.p.bitrate,fps:shareOut.p.fps,degr:'maintain-resolution'});
+  const o=shareOut,end=()=>{if(o.calls.get(id)===c)o.calls.delete(id);};
+  c.on('close',end);c.on('error',end);
+  retryCall(c,()=>shareOut===o&&o.calls.get(id)===c&&roomPeers().includes(id),t=>callShare(id,t),tries);
+}
+function stopShare(silent){
+  if(!shareOut)return;
+  const o=shareOut;shareOut=null;
+  o.calls.forEach(c=>c.close());o.stream.getTracks().forEach(t=>t.stop());
+  if(!silent){shareMsg(false);sys('Показ экрана остановлен');}
+  $('#shareBtn').textContent='Показать экран';$('#shareBtn').classList.remove('off');$('#shareQ').disabled=false;
+  if(!shareIn)hideShare();
+}
+function onShareCall(c,m){
+  if(shareOut)stopShare();   // показывает тот, кто начал последним
+  const old=shareIn;
+  shareIn={call:c,from:c.peer,name:clean(m.name)||names.get(c.peer)||'Кто-то',frames:0};
+  old?.call.close();
+  c.answer(undefined,{sdpTransform:hq});
+  c.on('stream',s=>{if(shareIn?.call===c)showShare(s);});
+  const end=()=>{if(shareIn?.call===c){shareIn=null;hideShare();}};
+  c.on('close',end);c.on('error',end);
+}
+function endShareFrom(id){if(shareIn?.from===id){const c=shareIn.call;shareIn=null;c.close();hideShare();}}
+function showShare(s){
+  if(shareVid.srcObject===s)return;   // поток приходит событием дважды (звук + видео)
+  shareVid.srcObject=s;shareVid.muted=false;shareVid.volume=vol;
+  $('#share').hidden=false;$('#shareMe').hidden=true;$('#pvOff').hidden=true;stage.classList.add('sharing');
+  $('#shareTag').textContent=shareIn.name+' показывает экран';
+  shareVid.play().then(()=>$('#shareUnmute').hidden=true).catch(e=>{if(e.name!=='NotAllowedError')return;shareVid.muted=true;shareVid.play().catch(()=>{});$('#shareUnmute').hidden=false;});
+}
+function hideShare(){
+  shareVid.srcObject=null;$('#share').hidden=true;$('#shareMe').hidden=true;$('#pvOff').hidden=true;$('#shareUnmute').hidden=true;
+  stage.classList.remove('sharing');
+}
+$('#shareUnmute').onclick=()=>{shareVid.muted=false;shareVid.play().catch(()=>{});$('#shareUnmute').hidden=true;};
+shareVid.addEventListener('dblclick',toggleFs);
+
+// что реально уходит зрителям и что приходит к ним
+async function shareStats(o=shareOut){
+  if(!o||o!==shareOut)return;
+  const set=o.stream.getVideoTracks()[0]?.getSettings()||{};
+  $('#shareCap').textContent='Захват: '+(set.width?set.width+'×'+set.height:'?')+(set.frameRate?' · '+Math.round(set.frameRate)+' к/с':'');
+  const c=[...o.calls.values()].find(x=>x.peerConnection?.connectionState==='connected')||[...o.calls.values()].find(x=>x.peerConnection);
+  const mb=x=>(x/1e6).toFixed(1).replace('.',',');
+  let line=o.calls.size?'Подключаю зрителей…':'Ждём зрителей…',net='',warn='';
+  if(c){
+    try{
+      const rep=await c.peerConnection.getStats();
+      rep.forEach(r=>{
+        if(r.type==='candidate-pair'&&r.nominated&&r.state==='succeeded'&&r.availableOutgoingBitrate)net='Канал до зрителя: ~'+mb(r.availableOutgoingBitrate)+' Мбит/с';
+        if(r.type!=='outbound-rtp'||r.kind!=='video')return;
+        let rate='';
+        if(o.prev&&o.prev.call===c&&r.timestamp>o.prev.ts)rate=' · '+mb((r.bytesSent-o.prev.b)*8000/(r.timestamp-o.prev.ts))+' Мбит/с';
+        o.prev={call:c,b:r.bytesSent,ts:r.timestamp};
+        if(r.frameHeight)line='Уходит зрителям: '+r.frameWidth+'×'+r.frameHeight+(r.framesPerSecond?' · '+Math.round(r.framesPerSecond)+' к/с':'')+rate+' (лимит '+Math.round(o.p.bitrate/1e6)+')';
+        if(r.qualityLimitationReason==='bandwidth')warn='Качество режет интернет — не хватает скорости отдачи';
+        else if(r.qualityLimitationReason==='cpu')warn='Качество режет процессор — закрой лишнее или выбери «1080p · 60 к/с»';
+      });
+    }catch(e){}
+  }
+  if(o.stream.getAudioTracks().length||warn)$('#shareWarn').textContent=warn;
+  $('#shareOutStat').textContent=line;$('#shareNet').textContent=net;
+  setTimeout(()=>shareStats(o),2000);
+}
+setInterval(()=>{
+  if(!shareIn||!shareVid.srcObject||!shareVid.getVideoPlaybackQuality)return;
+  const f=shareVid.getVideoPlaybackQuality().totalVideoFrames,fps=f-shareIn.frames;shareIn.frames=f;
+  $('#shareTag').textContent=shareIn.name+' показывает экран'+(shareVid.videoHeight?' · '+shareVid.videoWidth+'×'+shareVid.videoHeight+' · '+fps+' к/с':'');
+},1000);
+
+// ---------- экран ----------
+function showRemoteMovie(s){
+  if(screen.srcObject===s)return;
+  screen.removeAttribute('src');screen.srcObject=s;screen.muted=false;screen.volume=vol;
+  stage.classList.add('live');showOffer();clearTimeout(showRemoteMovie.h);showRemoteMovie.h=setTimeout(()=>hideOffer(false),20000);
+  screen.play().then(()=>$('#unmute').hidden=true).catch(e=>{if(e.name!=='NotAllowedError')return;screen.muted=true;screen.play().catch(()=>{});$('#unmute').hidden=false;});
+}
+function clearScreen(t1,t2){
+  screen.pause();screen.srcObject=null;screen.removeAttribute('src');screen.load();screen.playbackRate=1;
+  stage.classList.remove('live','idle');$('#emptyTitle').textContent=t1;$('#emptyText').textContent=t2;$('#unmute').hidden=true;
+}
+function playFile(f){
+  const old=fileUrl;
+  fileUrl=URL.createObjectURL(f);
+  screen.srcObject=null;screen.src=fileUrl;screen.muted=false;screen.volume=vol;screen.playbackRate=1;
+  if(old)URL.revokeObjectURL(old);
+  stage.classList.add('live');$('#unmute').hidden=true;
+  playFile.name_=f.name;playFile.checked=false;hideHelp();
+}
+$('#unmute').onclick=()=>{screen.muted=false;screen.play().catch(()=>{});$('#unmute').hidden=true;};
+
+// кто сейчас что видит
+const fileMode=()=>mode==='host'||mode==='local';
+function hostTime(){if(!st)return 0;return st.time+(st.playing?((performance.now()-st.recv)/1000+rtt/2000)*(st.rate||1):0);}
+function timeNow(){if(fileMode())return screen.currentTime||0;if(mode==='stream')return Math.max(0,hostTime()-.3);return 0;}
+function durNow(){if(fileMode()&&isFinite(screen.duration))return screen.duration;return st?.dur||movie?.dur||0;}
+function isPlaying(){if(fileMode())return !screen.paused;return !!st?.playing;}
+
+// ---------- управление: пауза/перемотка общие ----------
+function userCtl(a,t){
+  if(isHost){if(mode==='host')doCtl(a,t,myName);}
+  else if(hostConn?.open&&movie)hostConn.send({t:'ctl',a,time:t});
+}
+function doCtl(a,t,who){
+  if(mode!=='host')return;
+  if(a==='toggle')a=screen.paused?'play':'pause';
+  let text;
+  if(a==='play'){screen.play().catch(()=>{});text='▶ поехали';}
+  else if(a==='pause'){screen.pause();text='❚❚ пауза';}
+  else if(a==='seek'&&isFinite(+t)){t=Math.max(0,Math.min(+t,(screen.duration||1e9)-.5));screen.currentTime=t;text='⟲ '+fmt(t);}
+  else return;
+  const line=who+': '+text;osd(line);broadcast({t:'osd',text:line});
+}
+$('#pp').onclick=()=>userCtl('toggle');
+$('#back').onclick=()=>userCtl('seek',timeNow()-10);
+$('#fwd').onclick=()=>userCtl('seek',timeNow()+10);
+$('#seek').addEventListener('input',()=>{dragging=true;});
+$('#seek').addEventListener('change',e=>{dragging=false;const d=durNow();if(d)userCtl('seek',e.target.value/1000*d);e.target.blur();});
+$('#vol').oninput=e=>{vol=+e.target.value;screen.volume=vol;$('#shareVid').volume=vol;store.set('vol',vol);};
+function toggleFs(){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else stage.requestFullscreen?.().catch(()=>{});}
+$('#fsBtn').onclick=toggleFs;
+// клик по видео — пауза, двойной — весь экран
+let clickT=0;
+screen.addEventListener('click',()=>{clearTimeout(clickT);clickT=setTimeout(()=>userCtl('toggle'),230);});
+screen.addEventListener('dblclick',()=>{clearTimeout(clickT);toggleFs();});
+
+// панель прячется, пока фильм идёт и мышь не двигается
+let idleT=0;
+function wake(){
+  stage.classList.remove('idle');clearTimeout(idleT);
+  idleT=setTimeout(()=>{if((isPlaying()||shareIn||shareOut)&&$('#subMenu').hidden&&document.activeElement!==$('#fsInput'))stage.classList.add('idle');},2600);
+}
+stage.addEventListener('mousemove',wake);stage.addEventListener('pointerdown',wake);
+stage.addEventListener('mouseleave',()=>{clearTimeout(idleT);idleT=setTimeout(()=>{if(isPlaying()&&$('#subMenu').hidden)stage.classList.add('idle');},600);});
+
+// ---------- субтитры ----------
+function ts(t){const p=t.trim().split(/\s+/)[0].replace(',','.').split(':').map(Number);while(p.length<3)p.unshift(0);return p[0]*3600+p[1]*60+p[2];}
+function parseSubs(txt){
+  txt=txt.replace(/^﻿/,'').replace(/\r/g,'');
+  const out=[];
+  for(const block of txt.split(/\n\s*\n/)){
+    const lines=block.split('\n');const i=lines.findIndex(l=>l.includes('-->'));if(i<0)continue;
+    const [a,b]=lines[i].split('-->');const s=ts(a),e=ts(b||'');if(!isFinite(s)||!isFinite(e))continue;
+    const text=lines.slice(i+1).join('\n').replace(/<[^>]+>/g,'').replace(/\{[^}]*\}/g,'').trim();
+    if(text)out.push([s,e,text.slice(0,500)]);
+  }
+  return out.sort((x,y)=>x[0]-y[0]).slice(0,20000);
+}
+function cleanCues(c){return Array.isArray(c)?c.slice(0,20000).filter(x=>Array.isArray(x)&&isFinite(x[0])&&isFinite(x[1])).map(x=>[+x[0],+x[1],String(x[2]||'').slice(0,500)]):[];}
+function setSubs(cues,name){subs.cues=cues;subs.name=name;updSubUi();}
+function updSubUi(){
+  $('#subName').textContent=subs.cues.length?subs.name+' · '+subs.cues.length+' реплик':'Не загружены';
+  $('#subOff').hidden=!subs.cues.length;
+  $('#subShift').textContent='сдвиг '+(subs.shift>0?'+':'')+subs.shift.toFixed(1).replace('.',',')+' с';
+  $('#subBtn').classList.toggle('main',!!subs.cues.length);
+}
+function shareSubs(name){
+  if(isHost)broadcast({t:'subs',cues:subs.cues,name,from:myName});
+  else if(hostConn?.open)hostConn.send({t:'subs',cues:subs.cues,name});
+}
+$('#subBtn').onclick=e=>{e.stopPropagation();$('#subMenu').hidden=!$('#subMenu').hidden;wake();};
+$('#subMenu').addEventListener('click',e=>e.stopPropagation());
+document.addEventListener('click',()=>{$('#subMenu').hidden=true;});
+$('#subLoad').onclick=()=>$('#subFile').click();
+$('#subEarly').onclick=()=>{subs.shift=Math.round((subs.shift-.5)*10)/10;updSubUi();};
+$('#subLate').onclick=()=>{subs.shift=Math.round((subs.shift+.5)*10)/10;updSubUi();};
+$('#subOff').onclick=()=>{setSubs([],'');shareSubs('');sys('Субтитры убраны');};
+$('#subFile').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  const buf=await f.arrayBuffer();let txt;
+  try{txt=new TextDecoder('utf-8',{fatal:true}).decode(buf);}catch(_){txt=new TextDecoder('windows-1251').decode(buf);}
+  const cues=parseSubs(txt);
+  if(!cues.length){toast('Не нашёл в файле субтитров — нужен .srt или .vtt');return;}
+  setSubs(cues,f.name.slice(0,120));shareSubs(subs.name);sys('Субтитры загружены: '+subs.name);
+};
+let lastSub=null;
+function renderSubs(){
+  let txt='';
+  if(subs.cues.length&&stage.classList.contains('live')){
+    const t=timeNow()-subs.shift;
+    for(const c of subs.cues){if(c[0]>t)break;if(c[1]>=t)txt+=(txt?'\n':'')+c[2];}
+  }
+  if(txt===lastSub)return;lastSub=txt;
+  const el=$('#subs');el.textContent='';
+  if(txt){const s=document.createElement('span');s.textContent=txt;el.append(s);}
+}
+
+// ---------- проверка кодеков и подсказка с ffmpeg ----------
+function showHelp(kind){
+  const n=playFile.name_||'фильм.mkv',base=n.replace(/\.[^.]+$/,''),out=base+' (для кинозала).mp4';
+  const audioOnly=kind==='audio';
+  $('#helpTitle').textContent=audioOnly?'Фильм без звука: браузер не знает эту звуковую дорожку':'Браузер не может открыть этот файл';
+  $('#helpText').textContent=audioOnly
+    ?'Скорее всего, звук в AC3 или DTS. Картинку трогать не нужно — переделаем только звук, это быстро (пара минут) и без потери качества видео.'
+    :'Скорее всего, кодек видео или контейнер не поддерживается. Перекодируй в обычный MP4 (H.264 + AAC) — займёт время, но потом откроется где угодно.';
+  $('#helpCmd').textContent=audioOnly
+    ?`ffmpeg -i "${n}" -map 0:v:0 -map 0:a:0 -c:v copy -c:a aac -b:a 256k -ac 2 -sn "${out}"`
+    :`ffmpeg -i "${n}" -map 0:v:0 -map 0:a:0 -c:v libx264 -preset fast -crf 20 -pix_fmt yuv420p -c:a aac -b:a 256k -ac 2 -sn "${out}"`;
+  $('#help').hidden=false;
+}
+function hideHelp(){$('#help').hidden=true;}
+$('#helpX').onclick=hideHelp;
+$('#helpCopy').onclick=async()=>{try{await navigator.clipboard.writeText($('#helpCmd').textContent);toast('Команда скопирована');}catch(e){toast('Выдели команду и скопируй вручную');}};
+screen.addEventListener('error',()=>{if(fileMode()&&screen.getAttribute('src')){showHelp('video');if(isHost)toast('Этот файл не открылся — смотри подсказку под экраном');}});
+screen.addEventListener('playing',()=>{
+  if(!fileMode()||playFile.checked)return;playFile.checked=true;const url=fileUrl;
+  setTimeout(()=>{
+    if(url!==fileUrl||!fileMode())return;
+    if(!screen.videoWidth)showHelp('video');
+    else if('webkitAudioDecodedByteCount' in screen&&screen.webkitAudioDecodedByteCount===0&&screen.currentTime>1)showHelp('audio');
+  },3000);
+});
+
+// ---------- ведущий ----------
+function broadcast(m,except){for(const[id,g]of guests)if(id!==except&&g.conn.open)g.conn.send(m);}
+function hostState(){return{t:'state',playing:!screen.paused,time:screen.currentTime||0,rate:screen.playbackRate||1,dur:isFinite(screen.duration)?screen.duration:0};}
+function sendState(){if(mode==='host'&&guests.size)broadcast(hostState());}
+['play','pause','seeked','ratechange'].forEach(ev=>screen.addEventListener(ev,sendState));
+setInterval(sendState,1000);
+
+$('#fileBtn').onclick=()=>$('#file').click();
+$('#file').onchange=e=>{const f=e.target.files[0];e.target.value='';if(!f)return;if(isHost)hostOpen(f);else guestOpen(f);};
+function hostOpen(f){
+  stopMovie();
+  mode='host';movie={title:title(f.name.replace(/\.[^.]+$/,'')),dur:0};
+  setSubs([],'');
+  playFile(f);
+  $('#movieName').textContent=movie.title;$('#fileBtn').textContent='Другой фильм';
+  screen.play().catch(()=>osd('Нажми ▶, чтобы начать'));
+}
+screen.addEventListener('loadedmetadata',()=>{
+  if(mode==='host'){
+    movie.dur=screen.duration||0;
+    broadcast({t:'movie',title:movie.title,dur:movie.dur});sendState();
+    if(guests.size)sys('Включаем «'+movie.title+'». Если у кого-то этот файл уже есть — пусть нажмёт «У меня есть этот файл».');
+  }else if(mode==='local'){
+    if(movie?.dur&&Math.abs(screen.duration-movie.dur)>5)toast('Длительность не совпадает с фильмом ведущего — похоже, другая версия файла. Синхронизация может сбиваться.');
+    syncLocal();
+  }
+});
+screen.addEventListener('playing',()=>{
+  if(mode!=='host'||movieStream)return;
+  const cap=screen.captureStream||screen.mozCaptureStream;
+  if(!cap){toast('Этот браузер не умеет транслировать видео — открой в Chrome или Edge');return;}
+  movieStream=cap.call(screen);
+  movieStream.getVideoTracks().forEach(t=>{try{t.contentHint='motion';}catch(e){}});
+  for(const id of guests.keys())callMovie(id);
+});
+function callMovie(id,tries=0){
+  const g=guests.get(id);if(!movieStream||!g||g.local)return;
+  movieCalls.get(id)?.close();
+  const ms=movieStream,c=peer.call(id,ms,{metadata:{kind:'movie'},sdpTransform:hq});
+  movieCalls.set(id,c);tuneMovie(c);
+  const end=()=>{if(movieCalls.get(id)===c)movieCalls.delete(id);};
+  c.on('close',end);c.on('error',end);
+  retryCall(c,()=>movieStream===ms&&movieCalls.get(id)===c&&guests.has(id)&&!guests.get(id).local,t=>callMovie(id,t),tries);
+}
+function stopMovie(){
+  for(const c of movieCalls.values())c.close();movieCalls.clear();
+  movieStream?.getTracks().forEach(t=>t.stop());movieStream=null;
+  if(screen.getAttribute('src'))screen.pause();
+}
+function onGuestConn(c){
+  c.on('open',()=>{
+    const name=clean(c.metadata?.name)||'Гость';
+    const back=guests.has(c.peer);
+    const others=[...guests].filter(([id])=>id!==c.peer).map(([id,g])=>({id,name:g.name}));
+    guests.set(c.peer,{conn:c,name,local:!!c.metadata?.local});names.set(c.peer,name);rename(c.peer);
+    c.send({t:'welcome',host:myName,peers:others,movie:mode==='host'?movie:null,state:mode==='host'?hostState():null,subs:subs.cues.length?{cues:subs.cues,name:subs.name}:null});
+    if(!back){broadcast({t:'joined',id:c.peer,name},c.peer);sys(name+' зашёл в зал');}
+    if(movieStream)callMovie(c.peer);
+    if(shareOut)callShare(c.peer);
+  });
+  c.on('data',d=>{
+    const g=guests.get(c.peer);if(!g||g.conn!==c||!d)return;
+    switch(d.t){
+      case 'chat':{const text=String(d.text||'').slice(0,500);if(!text)return;addMsg(g.name,text);broadcast({t:'chat',name:g.name,text},c.peer);break;}
+      case 'ctl':if(['toggle','play','pause','seek'].includes(d.a))doCtl(d.a,d.time,g.name);break;
+      case 'ping':c.send({t:'pong',a:d.a});break;
+      case 'local':
+        g.local=!!d.on;
+        if(g.local){movieCalls.get(c.peer)?.close();movieCalls.delete(c.peer);sys(g.name+' смотрит свой файл — синхронно, в полном качестве');}
+        else callMovie(c.peer);
+        break;
+      case 'share':
+        broadcast({t:'share',on:!!d.on,name:g.name,from:c.peer},c.peer);
+        sys(g.name+(d.on?' показывает экран':' закончил показ экрана'));
+        if(!d.on)endShareFrom(c.peer);
+        break;
+      case 'subs':{
+        const cues=cleanCues(d.cues),name=String(d.name||'').slice(0,120);
+        setSubs(cues,name);broadcast({t:'subs',cues,name,from:g.name},c.peer);
+        sys(cues.length?g.name+' загрузил субтитры: '+name:g.name+' убрал субтитры');break;
+      }
+    }
+  });
+  const bye=()=>{
+    const g=guests.get(c.peer);if(!g||g.conn!==c)return;
+    guests.delete(c.peer);movieCalls.get(c.peer)?.close();camCalls.get(c.peer)?.close();dropTile(c.peer);
+    shareOut?.calls.get(c.peer)?.close();endShareFrom(c.peer);
+    broadcast({t:'left',id:c.peer});sys(g.name+' вышел');
+  };
+  c.on('close',bye);c.on('error',bye);
+}
+function makePeer(id){
+  const p=new Peer(id,{config:ICE,debug:1});
+  p.on('disconnected',()=>setTimeout(()=>{if(!p._bye&&!p.destroyed&&p.disconnected)p.reconnect();},1500));
+  return p;
+}
+async function createRoom(){
+  if(!start())return;
+  isHost=true;
+  await initMedia();
+  openHost(rand(5));
+}
+function openHost(c){
+  code=c;
+  const p=peer=makePeer(PREFIX+code);
+  p.on('open',()=>{if(inRoom)return;enterRoom();sys('Зал открыт. Отправь код '+code+' и выбери фильм.');});
+  p.on('connection',onGuestConn);
+  p.on('call',onCall);
+  p.on('error',e=>{
+    if(e.type==='unavailable-id'&&!inRoom){p._bye=true;p.destroy();openHost(rand(5));return;}
+    if(e.type==='peer-unavailable')return;
+    netError(e);
+  });
+}
+
+// ---------- гость ----------
+async function joinRoom(){
+  const c=$('#codeIn').value.trim().toUpperCase();
+  if(!/^[A-Z0-9]{5}$/.test(c)){toast('Код зала — 5 букв и цифр');$('#codeIn').focus();return;}
+  if(!start())return;
+  isHost=false;code=c;
+  await initMedia();
+  const p=peer=makePeer(PREFIX+code+'-'+rand(6).toLowerCase());
+  p.on('call',onCall);
+  p.on('error',e=>{
+    if(e.type==='peer-unavailable'){if(!inRoom){toast('Зал с кодом '+code+' не найден. Проверь код или попроси создать зал заново');reset();}return;}
+    if(inRoom&&(e.type==='network'||e.type==='server-error'))return;
+    netError(e);
+  });
+  p.on('open',()=>{
+    if(inRoom||hostConn)return;
+    connectHost();
+    joinTimer=setTimeout(()=>{if(!inRoom){toast('Не получилось достучаться до зала. Возможно, мешает сеть — попробуй другой интернет или VPN');reset();}},20000);
+  });
+}
+function connectHost(){
+  const p=peer;if(!p||p.destroyed)return null;
+  const hid=PREFIX+code;
+  const c=p.connect(hid,{metadata:{name:myName,local:mode==='local'},reliable:true});
+  hostConn=c;
+  c.on('open',()=>{
+    if(hostConn!==c)return;
+    clearTimeout(joinTimer);clearTimeout(retryTimer);
+    const again=inRoom;retries=0;
+    if(!again)enterRoom();else{sys('Связь с залом восстановлена');camCalls.get(hid)?.close();camCalls.delete(hid);}
+    callCam(hid);
+    if(again&&shareOut)callShare(hid);
+  });
+  c.on('data',d=>{if(hostConn===c)onGuestData(d);});
+  const lost=()=>{if(hostConn!==c||!inRoom||leaving||hostGone)return;hostConn=null;lostHost();};
+  c.on('close',lost);c.on('error',lost);
+  return c;
+}
+function lostHost(){
+  clearTimeout(retryTimer);
+  if(!inRoom||leaving||hostGone)return;
+  if(retries===0)sys('Связь с залом пропала — переподключаюсь…');
+  if(++retries>10){sys('Не получилось вернуться в зал. Возможно, ведущий вышел.');clearScreen('Связь потеряна','Попроси ведущего создать зал заново');return;}
+  retryTimer=setTimeout(()=>{
+    if(!inRoom||leaving||hostGone)return;
+    const c=connectHost();
+    retryTimer=setTimeout(()=>{if(hostConn===c&&!c?.open){hostConn=null;lostHost();}},7000);
+  },2500);
+}
+setInterval(()=>{if(!isHost&&hostConn?.open)hostConn.send({t:'ping',a:performance.now()});},3000);
+
+function setMovie(m){
+  const t=title(m.title);
+  if(mode==='local'&&movie&&movie.title===t){movie.dur=+m.dur||movie.dur;return;}
+  if(mode==='local')dropLocal();
+  movie={title:t,dur:+m.dur||0};mode='stream';
+  if(!movieCalls.has('host'))clearScreen('Включается «'+t+'»','Трансляция начнётся, когда ведущий нажмёт ▶. Или открой свой такой же файл.');
+  $('#movieName').textContent=t;showOffer();syncOwnBtn();
+}
+function onGuestData(d){
+  switch(d?.t){
+    case 'welcome':
+      names.set(hostConn.peer,clean(d.host)||'Ведущий');rename(hostConn.peer);
+      roster.clear();roster.add(hostConn.peer);
+      (d.peers||[]).forEach(p=>{roster.add(p.id);names.set(p.id,clean(p.name));rename(p.id);callCam(p.id);});
+      if(!retries)sys('Ты в зале у '+(clean(d.host)||'ведущего'));
+      if(d.state)st={...d.state,recv:performance.now()};
+      if(d.movie)setMovie(d.movie);else{if(mode==='local')dropLocal();movie=null;mode='none';syncOwnBtn();hideOffer();sys('Ждём, пока ведущий выберет фильм');}
+      if(d.subs)setSubs(cleanCues(d.subs.cues),String(d.subs.name||'').slice(0,120));
+      if(mode==='local')syncLocal();
+      break;
+    case 'joined':roster.add(d.id);names.set(d.id,clean(d.name));rename(d.id);sys(clean(d.name)+' зашёл в зал');if(shareOut)callShare(d.id);break;
+    case 'left':roster.delete(d.id);camCalls.get(d.id)?.close();dropTile(d.id);shareOut?.calls.get(d.id)?.close();endShareFrom(d.id);sys((names.get(d.id)||'Гость')+' вышел');break;
+    case 'share':sys((clean(d.name)||'Кто-то')+(d.on?' показывает экран':' закончил показ экрана'));if(!d.on)endShareFrom(d.from);break;
+    case 'chat':addMsg(clean(d.name),String(d.text||'').slice(0,500));break;
+    case 'movie':setSubs([],'');setMovie(d);sys('Ведущий включает «'+title(d.title)+'»');break;
+    case 'state':st={playing:!!d.playing,time:+d.time||0,rate:+d.rate||1,dur:+d.dur||0,recv:performance.now()};syncLocal();break;
+    case 'osd':osd(String(d.text||'').slice(0,120));break;
+    case 'pong':{const r=performance.now()-d.a;if(r>0&&r<5000)rtt=rtt*.7+r*.3;break;}
+    case 'subs':{
+      const cues=cleanCues(d.cues);setSubs(cues,String(d.name||'').slice(0,120));
+      const who=clean(d.from)||'Кто-то';sys(cues.length?who+' загрузил субтитры: '+subs.name:who+' убрал субтитры');break;
+    }
+    case 'bye':hostGone=true;sys('Ведущий закрыл зал');stopShare(true);endShareFrom(hostConn?.peer);mode='none';movie=null;syncOwnBtn();hideOffer();clearScreen('Зал закрыт','Ведущий вышел');break;
+  }
+}
+// гость со своим файлом подстраивается под ведущего: большие расхождения — прыжком, мелкие — чуть быстрее/медленнее
+function syncLocal(){
+  if(mode!=='local'||!st||screen.readyState<1||screen.seeking)return;
+  const target=hostTime(),rate=st.rate||1;
+  if(!st.playing){
+    if(!screen.paused)screen.pause();
+    screen.playbackRate=rate;
+    if(Math.abs(screen.currentTime-target)>.25)screen.currentTime=target;
+    return;
+  }
+  const diff=screen.currentTime-target;
+  if(Math.abs(diff)>1.5){screen.currentTime=target+.15;screen.playbackRate=rate;}
+  else if(Math.abs(diff)>.12)screen.playbackRate=rate*(1-Math.max(-.06,Math.min(.06,diff*.25)));
+  else screen.playbackRate=rate;
+  if(screen.paused)screen.play().catch(()=>{$('#unmute').textContent='Продолжить';$('#unmute').hidden=false;});
+}
+function guestOpen(f){
+  if(!movie){toast('Сначала ведущий должен выбрать фильм');return;}
+  mode='local';
+  const mc=movieCalls.get('host');movieCalls.delete('host');mc?.close();
+  playFile(f);
+  if(hostConn?.open)hostConn.send({t:'local',on:true});
+  hideOffer(true);syncOwnBtn();
+  sys('Смотришь свой файл. Пауза и перемотка по-прежнему общие.');
+}
+function dropLocal(){
+  clearScreen('Подключаю трансляцию…','');
+  if(fileUrl){URL.revokeObjectURL(fileUrl);fileUrl='';}
+  hideHelp();
+}
+function backToStream(){
+  dropLocal();mode='stream';
+  if(hostConn?.open)hostConn.send({t:'local',on:false});
+  syncOwnBtn();
+}
+function syncOwnBtn(){const b=$('#ownBtn');b.hidden=isHost||!movie;b.textContent=mode==='local'?'Вернуться к трансляции':'У меня есть этот файл';}
+$('#ownBtn').onclick=()=>{if(mode==='local')backToStream();else $('#file').click();};
+function showOffer(){
+  if(isHost||!movie||mode==='local'||offerHidden===movie.title){$('#offer').hidden=true;return;}
+  $('#offerText').textContent='«'+movie.title+'» есть у тебя на компьютере? Открой свой файл — будет полное качество, а пауза и перемотка останутся общими.';
+  $('#offer').hidden=false;
+}
+function hideOffer(forever){$('#offer').hidden=true;if(forever&&movie)offerHidden=movie.title;}
+$('#offerOpen').onclick=()=>$('#file').click();
+$('#offerX').onclick=()=>hideOffer(true);
+
+// ---------- общее ----------
+function start(){
+  if(typeof Peer==='undefined'){toast('Не загрузилась библиотека связи — проверь интернет и обнови страницу');return false;}
+  if(!navigator.mediaDevices)toast('Браузер не даёт доступ к камере. Открой файл в Chrome');
+  myName=clean($('#name').value)||'Зритель '+rand(2,'0123456789');
+  store.set('name',myName);
+  leaving=false;hostGone=false;retries=0;
+  $('#createBtn').disabled=$('#joinBtn').disabled=true;
+  return true;
+}
+function netError(e){
+  const map={network:'Пропала связь с сервером соединений','server-error':'Сервер соединений недоступен, попробуй позже','browser-incompatible':'Браузер не поддерживает видеосвязь — открой в Chrome или Edge'};
+  toast(map[e.type]||'Ошибка связи: '+(e.type||e.message));
+  if(!inRoom)reset();
+}
+function enterRoom(){
+  inRoom=true;$('#lobby').hidden=true;$('#room').hidden=false;$('#codeOut').textContent=code;
+  $('#fileBtn').hidden=!isHost;syncOwnBtn();
+  if(isHost)clearScreen('Экран пока тёмный','Нажми «Выбрать фильм» — и он появится у всех');
+  else clearScreen('Экран пока тёмный','Фильм появится, когда ведущий его включит');
+  try{history.replaceState(null,'','#'+code);}catch(e){}
+}
+function reset(){
+  clearTimeout(joinTimer);clearTimeout(retryTimer);
+  const p=peer;peer=null;
+  if(p){p._bye=true;setTimeout(()=>{try{p.destroy();}catch(e){}},isHost?300:0);}
+  stopShare(true);if(shareIn){const sc=shareIn.call;shareIn=null;sc.close();}hideShare();roster.clear();
+  hostConn=null;inRoom=false;mode='none';movie=null;st=null;movieStream=null;offerHidden='';
+  local?.getTracks().forEach(t=>t.stop());local=null;
+  guests.clear();camCalls.clear();movieCalls.clear();
+  if(fileUrl){URL.revokeObjectURL(fileUrl);fileUrl='';}
+  subs={cues:[],name:'',shift:0};updSubUi();
+  $('#tiles').innerHTML='';$('#msgs').innerHTML='';$('#movieName').textContent='';$('#fileBtn').textContent='Выбрать фильм';
+  hideHelp();hideOffer();$('#ownBtn').hidden=true;
+  if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
+  $('#createBtn').disabled=$('#joinBtn').disabled=false;
+  $('#room').hidden=true;$('#lobby').hidden=false;
+  try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}
+}
+$('#leaveBtn').onclick=()=>{leaving=true;stopShare();if(isHost)broadcast({t:'bye'});stopMovie();clearScreen('Экран пока тёмный','');reset();};
+window.addEventListener('beforeunload',()=>{if(isHost)broadcast({t:'bye'});try{if(peer){peer._bye=true;peer.destroy();}}catch(e){}});
+
+$('#copyBtn').onclick=async()=>{
+  const link=!isApp&&/^https?:/.test(location.protocol)?location.href.split('#')[0]+'#'+code:'';
+  const text=isApp?'Заходи в Кинозал! Код зала: '+code:link?'Заходи в кинозал: '+link+' (код '+code+')':'Заходи в кинозал! Открой kinozal.html в Chrome и введи код '+code;
+  try{await navigator.clipboard.writeText(text);toast('Приглашение скопировано');}
+  catch(e){toast('Код зала: '+code);}
+};
+
+// горячие клавиши
+document.addEventListener('keydown',e=>{
+  if(!inRoom||e.ctrlKey||e.altKey||e.metaKey)return;
+  const tg=e.target;
+  if(tg.tagName==='INPUT'&&tg.type==='text'||tg.tagName==='TEXTAREA')return;
+  if(tg.tagName==='BUTTON'&&(e.key===' '||e.key==='Enter'))return;
+  if(e.code==='Space'||e.code==='KeyK'){e.preventDefault();userCtl('toggle');wake();}
+  else if(e.code==='ArrowLeft'){e.preventDefault();userCtl('seek',timeNow()-10);wake();}
+  else if(e.code==='ArrowRight'){e.preventDefault();userCtl('seek',timeNow()+10);wake();}
+  else if(e.code==='KeyF'){e.preventDefault();toggleFs();}
+  else if(e.code==='KeyM'){e.preventDefault();toggleMic();}
+  else if(e.key==='Enter'&&document.fullscreenElement){e.preventDefault();$('#fsForm').classList.add('on');$('#fsInput').focus();wake();}
+});
+
+// обновление панели и субтитров
+setInterval(()=>{
+  if(!inRoom)return;
+  const d=durNow(),t=timeNow(),pl=isPlaying();
+  $('#pp').textContent=pl?'❚❚':'▶';
+  $('#tcur').textContent=fmt(dragging?$('#seek').value/1000*d:t);$('#tdur').textContent=fmt(d);
+  if(!dragging)$('#seek').value=d?Math.round(Math.min(1,t/d)*1000):0;
+  $('#seek').disabled=!d;
+  $('#q').textContent=mode==='stream'&&screen.videoHeight?screen.videoHeight+'p':mode==='local'?'свой файл':'';
+  if(!pl&&!shareIn&&!shareOut&&stage.classList.contains('idle'))stage.classList.remove('idle');
+  renderSubs();
+},120);
+
+$('#createBtn').onclick=createRoom;
+$('#joinBtn').onclick=joinRoom;
+$('#codeIn').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom();});
+updSubUi();
+const n=store.get('name','');if(n)$('#name').value=n;
+const h=location.hash.slice(1).toUpperCase();
+if(/^[A-Z0-9]{5}$/.test(h)){$('#codeIn').value=h;$('#joinBtn').classList.add('main');}
+}
+</script>
+</body>
+</html>
