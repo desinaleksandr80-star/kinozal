@@ -6,6 +6,15 @@ const path = require('path');
 const prof = process.argv.find(a => a.startsWith('--profile='));
 if (prof) app.setPath('userData', path.join(app.getPath('appData'), 'Kinozal-' + prof.split('=')[1].replace(/[^\w-]/g, '')));
 
+// только одно окно: повторный запуск (двойной клик, ярлык после установщика) показывает уже открытое
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) app.quit();
+app.on('second-instance', () => {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show(); win.focus();
+});
+
 // фильм и показ экрана не должны тормозить, когда окно свёрнуто или закрыто игрой
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
@@ -61,6 +70,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!gotLock) return;
   const ses = session.defaultSession;
   const allowed = ['media', 'display-capture', 'fullscreen', 'clipboard-sanitized-write', 'clipboard-read'];
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(allowed.includes(perm)));
