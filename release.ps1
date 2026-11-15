@@ -6,7 +6,9 @@ param(
   [Parameter(Mandatory = $true)][string]$Version,
   [string]$Notes = ''
 )
-$ErrorActionPreference = 'Stop'
+# Не 'Stop': PowerShell 5.1 считает ошибкой любую строку, которую git/npm пишут в stderr (даже предупреждения).
+# Успех внешних команд проверяем по коду возврата — функцией Step.
+$ErrorActionPreference = 'Continue'
 Set-Location $PSScriptRoot
 function Step($what) { if ($LASTEXITCODE -ne 0) { throw "Не получилось: $what (код $LASTEXITCODE)" } }
 
