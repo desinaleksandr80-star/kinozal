@@ -1,8 +1,8 @@
 {
   "name": "kinozal",
   "productName": "Кинозал",
-  "version": "1.4.2",
-  "description": "Кинозал — смотрим фильмы и показываем экран вместе",
+  "version": "1.5.0",
+  "description": "Кинозал — мессенджер, видеозвонки и кино вместе",
   "main": "main.js",
   "author": "Kinozal",
   "license": "MIT",
@@ -37,7 +37,11 @@
       "theme.css",
       "build/icon.png",
       "package.json",
-      "node_modules/peerjs/dist/peerjs.min.js"
+      "web.js",
+      "mobile.css",
+      "vendor/**",
+      "icons/**",
+      "manifest.webmanifest"
     ],
     "win": {
       "target": "nsis",

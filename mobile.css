@@ -1,0 +1,121 @@
+/* Кинозал на телефоне и планшете: раскладка звонка под палец, шторка чата, поля под клавиатуру.
+   Здесь же — реакции, летящие поверх экрана (они есть и на компьютере). */
+.touch-only,.phone-only{display:none!important}
+html.touch .touch-only{display:inline-flex!important}
+
+/* реакции поверх экрана */
+.fx{position:absolute;bottom:12%;z-index:6;pointer-events:none;display:grid;justify-items:center;gap:2px;animation:kzfx 2.9s ease-out forwards}
+.fx i{font-style:normal;font-size:clamp(34px,6vw,58px);line-height:1.1;filter:drop-shadow(0 4px 10px rgba(0,0,0,.5))}
+.fx span{font:700 12px Manrope,sans-serif;color:#fff;background:rgba(0,0,0,.55);padding:1px 8px;border-radius:8px;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@keyframes kzfx{0%{transform:translate(0,30px) scale(.4);opacity:0}12%{transform:translate(0,0) scale(1.15);opacity:1}75%{opacity:1}100%{transform:translate(var(--dx,0),-55vh) scale(1);opacity:0}}
+.fxbar{position:fixed;z-index:25;display:flex;gap:2px;padding:6px;border-radius:28px;background:var(--panel);border:1px solid var(--line);box-shadow:0 14px 40px rgba(0,0,0,.6);max-width:calc(100vw - 16px);overflow-x:auto}
+.fxbar button{flex:none;min-height:44px;width:44px;padding:0;border:0;border-radius:50%;background:transparent;font-size:24px;line-height:1}
+#room #fxBtn{padding:6px 14px;font-size:20px;line-height:1}
+/* вертикальное видео (с телефона) на большом экране не обрезаем */
+#room.hallview .tile.port:not(.float) video{object-fit:contain}
+#room .tile.mine.rear video{transform:none}
+#room #chatBtn.new{box-shadow:0 0 0 2px var(--acc2)}
+
+/* общее для сенсорных экранов */
+html.touch body{overscroll-behavior-y:none}
+html.touch *{-webkit-tap-highlight-color:transparent}
+html.touch #mx{height:var(--kzh,100dvh);bottom:auto}
+html.touch #mx textarea,html.touch #mx input,html.touch .mx-card input,html.touch .mx-card textarea,html.touch #room input[type=text],html.touch #room select{font-size:16px}
+html.touch .m{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html.touch .rec-btn{touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+html.touch .mx-top{padding-top:calc(14px + env(safe-area-inset-top))}
+html.touch .mx-chead{padding-top:calc(10px + env(safe-area-inset-top))}
+html.touch .mx-input{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
+html.touch .mx-list{padding-bottom:calc(90px + env(safe-area-inset-bottom))}
+html.touch .mx-fab{bottom:calc(20px + env(safe-area-inset-bottom))}
+html.touch .mx-card{max-height:calc(var(--kzh,100dvh) - 24px)}
+html.touch .mx-modal,html.touch .mx-hello{height:var(--kzh,100dvh);bottom:auto}
+html.touch .float .rz{opacity:1}
+html.touch .mx-input textarea{scrollbar-width:none}
+html.touch #room.hallview .tile:not(.float) .tvol{opacity:.9;left:8px;right:auto;top:8px;width:min(190px,60%)}
+html.touch #room .keys{display:none}
+
+@media(max-width:760px){
+  #room.hallview .phone-only{display:inline-flex!important}
+  .mx-card{padding:18px;border-radius:20px;gap:13px}
+  .mx-chead{gap:8px;padding-left:6px;padding-right:6px}
+  .mx-chead .callzone{gap:4px}
+  .cz{height:38px;min-height:38px!important;padding:0 10px}
+  .cz.live span:first-of-type{display:none!important}
+  .mx-input{gap:6px;padding-left:8px;padding-right:8px}
+  .mx-pre{left:8px;right:8px}
+  .mx-msgs{padding-left:8px;padding-right:8px}
+  .mx-down{right:12px}
+  .plancard,.capsule,.callcard{min-width:0}
+  .recbar{left:8px;right:8px}
+
+  /* ---- зал на телефоне: видео во весь экран, круглые кнопки внизу ---- */
+  #room{height:var(--kzh,100dvh);min-height:0;overflow:hidden}
+  #room .bar{flex-wrap:nowrap;gap:8px;padding:calc(6px + env(safe-area-inset-top)) 8px 6px}
+  #room .bar h1{display:none}
+  #room .barl{gap:0}
+  #room .bar .back{font-size:0;width:40px;min-height:40px;padding:0;border-radius:50%;flex:none}
+  #room .bar .back::before{content:'←';font-size:20px}
+  #room .viewsw{flex:none}
+  #room .viewsw button{font-size:13px;padding:5px 9px;min-height:32px;white-space:nowrap}
+  #room .codebox{flex-wrap:nowrap;font-size:0;gap:6px;margin-left:auto}
+  #room .codebox strong{font-size:13px;letter-spacing:.08em}
+  #room #copyBtn{font-size:0;width:38px;min-height:38px;padding:0;border-radius:50%;flex:none;background:var(--panel2) center/20px no-repeat url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'><path d='M12 15V3M7 8l5-5 5 5M5 14v6h14v-6'/></svg>")}
+  #room .hall{display:flex;flex-direction:column;gap:8px;padding:8px 8px calc(80px + env(safe-area-inset-bottom));min-height:0;overflow:hidden}
+  #room:not(.hallview) .left{display:flex;flex-direction:column;gap:8px;flex:none}
+  #room .stage{border-radius:12px;box-shadow:none}
+  #room .side{display:flex;flex-direction:column;gap:8px;flex:1 1 0;min-height:0;height:auto;position:static;align-self:stretch}
+  #room #peoplePanel{padding:8px;flex:none;max-height:46%;overflow-y:auto}
+  #room .phead{margin-bottom:6px}
+  #room:not(.hallview) #tiles{display:flex;gap:6px;overflow-x:auto}
+  #room:not(.hallview) #tiles .tile{flex:0 0 92px;width:92px}
+  #room:not(.hallview) .cvol{margin-top:6px}
+  #room .panel.chat{flex:1 1 0;min-height:0;padding:8px 10px;grid-template-rows:minmax(0,1fr) auto}
+  #room .panel.chat h2{display:none}
+  #room #msgs{max-height:none}
+  #room .help{max-height:40vh;overflow:auto}
+  /* кнопки управления — закреплены внизу */
+  #room .ctrls{position:fixed;left:0;right:0;bottom:0;z-index:6;flex-wrap:nowrap;justify-content:safe center;gap:8px;padding:12px 8px calc(12px + env(safe-area-inset-bottom));background:linear-gradient(transparent,var(--bg) 40%);overflow-x:auto;scrollbar-width:none}
+  #room .ctrls>button{flex:0 0 50px;width:50px;height:50px;min-height:50px;padding:0;border-radius:50%;font-size:0;background-color:var(--panel2);background-repeat:no-repeat;background-position:center;background-size:24px;border:1px solid var(--line);box-shadow:0 6px 18px rgba(0,0,0,.4)}
+  #room .ctrls .grow,#room #movieName,#room #shareQ,#room #hallFs{display:none!important}
+  #room #micBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'><rect x='9' y='2' width='6' height='12' rx='3'/><path d='M5 11a7 7 0 0 0 14 0M12 18v4'/></svg>")}
+  #room #micBtn.off{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb3a3' stroke-width='2' stroke-linecap='round'><rect x='9' y='2' width='6' height='12' rx='3'/><path d='M5 11a7 7 0 0 0 14 0M12 18v4M4 3l16 18'/></svg>")}
+  #room #camBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 10l5-3v10l-5-3z'/><rect x='2' y='6' width='13' height='12' rx='3'/></svg>")}
+  #room #camBtn.off{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb3a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 10l5-3v10l-5-3z'/><rect x='2' y='6' width='13' height='12' rx='3'/><path d='M3 3l18 18'/></svg>")}
+  #room #flipBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 10a8 8 0 0 1 14-4l2 2M20 4v4h-4M20 14a8 8 0 0 1-14 4l-2-2M4 20v-4h4'/></svg>")}
+  #room #chatBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 5h16v11H9l-5 4z'/></svg>")}
+  #room #shareBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'><rect x='3' y='4' width='18' height='12' rx='2'/><path d='M8 20h8M12 16v4'/></svg>")}
+  #room #fileBtn{background-color:var(--acc);border-color:var(--acc);background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231b0b06' stroke-width='2' stroke-linecap='round'><rect x='3' y='4' width='18' height='16' rx='3'/><path d='M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4'/></svg>")}
+  #room #ownBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linejoin='round'><path d='M3 6h6l2 2h10v11H3z'/></svg>")}
+  #room #leaveBtn{background-color:#e5484d;border-color:#e5484d;background-size:28px;background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23fff'><path d='M2.5 14.2c5.3-5.2 13.7-5.2 19 0l-2.6 2.6-3.6-2v-2.6a10 10 0 0 0-6.6 0v2.6l-3.6 2z'/></svg>")}
+  #room #fxBtn{font-size:24px;padding:0}
+  #room .ctrls>button.off{background-color:#3a1d18;border-color:#6b2d22}
+  /* «только зал»: камеры во весь экран, чат — шторкой */
+  #room.hallview .callarea{flex:1 1 0;height:auto;min-height:0;gap:0}
+  #room .callstage{flex:1 1 0;height:auto;border-radius:16px;padding:0}
+  #room.hallview #tiles{gap:6px}
+  #room.hallview #tiles.solo{display:block}
+  #room.hallview #tiles.solo .tile:not(.float){width:100%;height:100%;aspect-ratio:auto;border-radius:16px}
+  #room.hallview .tile.float{border-radius:12px}
+  #room .alone{top:12px;bottom:auto;font-size:13px}
+  #room.hallview #tiles.solo .tile.mine video{object-fit:cover!important}
+  #room.hallview .callnote{margin-bottom:8px}
+  #room.hallview .callarea .fslog{display:flex;left:10px;bottom:92px;width:min(320px,78%)}
+  #room.hallview .callarea .fslog div{font-size:14px}
+  #room.hallview .side{display:none}
+  #room.hallview.sheet .side{display:flex;position:fixed;left:0;right:0;top:auto;bottom:calc(78px + env(safe-area-inset-bottom));height:min(64%,520px);z-index:8;background:var(--bg);border-radius:18px 18px 0 0;border-top:1px solid var(--line);padding:10px;box-shadow:0 -14px 40px rgba(0,0,0,.6)}
+  .toast{bottom:calc(92px + env(safe-area-inset-bottom))}
+  .upd{bottom:calc(86px + env(safe-area-inset-bottom))}
+}
+@media(max-width:760px) and (orientation:portrait){
+  #room.hallview #tiles.solo .tile.port:not(.float) video{object-fit:cover}
+  #room.hallview #tiles.solo .tile:not(.port):not(.float) video{object-fit:contain}
+}
+/* телефон боком */
+@media(max-height:520px) and (pointer:coarse){
+  #room .hall{overflow-y:auto}
+  #room .side{height:auto;position:static;min-height:280px}
+  #room .stage{aspect-ratio:auto;height:calc(var(--kzh,100dvh) - 70px)}
+  #room.hallview .callarea{height:calc(var(--kzh,100dvh) - 150px);min-height:200px}
+  #room .callstage{height:auto;flex:1 1 0}
+}

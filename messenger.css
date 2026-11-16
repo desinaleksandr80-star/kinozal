@@ -271,3 +271,56 @@
   .m{max-width:90%}
 }
 @media(prefers-reduced-motion:reduce){#mx *,.mx-modal,.mx-card{animation:none!important}}
+
+/* ---------- ответы, реакции, капсула времени, киносеансы, QR ---------- */
+.quote{display:grid;gap:1px;margin:0 0 5px;padding:4px 9px;border-left:3px solid var(--acc2);border-radius:6px;background:color-mix(in srgb,currentColor 9%,transparent);font-size:.9em;cursor:pointer;max-width:340px}
+.quote b{font-size:.93em;color:var(--acc2)}
+.quote span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85}
+.m.mine .quote{border-color:currentColor}.m.mine .quote b{color:inherit}
+.m.circ .quote{background:var(--bub);color:var(--bubInk)}
+.m.flash .b{animation:mxflash 1.4s}
+@keyframes mxflash{0%,55%{box-shadow:0 0 0 3px var(--acc2),0 0 26px var(--acc2)}100%{box-shadow:0 0 0 0 transparent}}
+.m{transition:transform .18s;position:relative}
+.m.swiped::after{content:'↩';position:absolute;right:-58px;top:50%;translate:0 -50%;width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--acc2);color:#06211d;font-weight:800}
+.rx{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0 1px}
+.rx button{min-height:26px!important;padding:2px 9px;border-radius:13px;border:1px solid transparent;background:color-mix(in srgb,currentColor 13%,transparent);color:inherit;font:600 13px/1.2 var(--font),Manrope,sans-serif;cursor:pointer}
+.rx button.mine{border-color:currentColor}
+.m.circ .rx button{background:var(--bub);color:var(--bubInk)}
+.menu .rxrow{display:flex;gap:2px;padding:0 0 6px;margin-bottom:4px;border-bottom:1px solid var(--line2)}
+.menu .rxrow button{flex:1;width:auto;justify-content:center;padding:7px 0;font-size:21px;line-height:1;border-radius:10px}
+.menu .rxrow button.on{background:var(--btnh)}
+.capsule{display:flex;align-items:center;gap:12px;min-width:230px;padding:6px 4px}
+.capsule .ic{font-size:30px;width:52px;height:52px;border-radius:50%;display:grid;place-items:center;flex:none;background:color-mix(in srgb,var(--acc2) 22%,transparent);animation:mxcap 2.4s ease-in-out infinite}
+@keyframes mxcap{50%{transform:rotate(12deg) scale(1.06);box-shadow:0 0 22px color-mix(in srgb,var(--acc2) 55%,transparent)}}
+.capsule b{display:block}.capsule .cd{display:block;font-size:13.5px;font-variant-numeric:tabular-nums;color:var(--acc2);font-weight:700}.capsule small{display:block;font-size:12px;opacity:.65}
+.capnote{font-size:12px;opacity:.7;margin-top:3px}
+.plancard{display:grid;gap:10px;min-width:250px;max-width:340px;padding:6px 2px 2px}
+.plancard .top{display:flex;align-items:center;gap:12px}
+.plancard .ic{font-size:26px;width:48px;height:48px;border-radius:14px;display:grid;place-items:center;flex:none;background:color-mix(in srgb,currentColor 12%,transparent)}
+.plancard b{display:block;overflow-wrap:anywhere}.plancard .cd{display:block;font-size:13.5px;font-variant-numeric:tabular-nums;opacity:.85}
+.plancard .row{display:flex;flex-wrap:wrap;gap:6px}
+.plancard .btn{min-height:34px!important;padding:4px 12px;font-size:13px}
+.plancard .btn.on{border-color:var(--acc2);box-shadow:inset 0 0 0 1px var(--acc2)}
+.m.mine .plancard .btn{background:color-mix(in srgb,var(--mineInk) 14%,transparent);color:var(--mineInk);border-color:color-mix(in srgb,var(--mineInk) 30%,transparent)}
+.m.mine .plancard .btn.on,.m.mine .plancard .btn.pri{background:var(--mineInk);color:var(--mine1);border-color:transparent;box-shadow:none}
+.mx-pre{position:absolute;left:max(14px,calc((100% - 860px)/2));right:max(14px,calc((100% - 860px)/2));bottom:100%;display:grid;gap:4px;padding:0 0 4px;z-index:2}
+.mx-pre .pl{display:flex;align-items:center;gap:10px;padding:6px 6px 6px 12px;border-radius:14px;background:var(--card);border:1px solid var(--line2);box-shadow:0 8px 24px rgba(0,0,0,.35);font-size:13.5px}
+.mx-pre .pl>i{font-style:normal;font-size:18px;color:var(--acc2);flex:none}
+.mx-pre .pl>div{flex:1;min-width:0}
+.mx-pre b{display:block;color:var(--acc2);font-size:12.5px}
+.mx-pre span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--mute)}
+.mx-pre .ib{width:32px!important;height:32px!important;min-height:32px!important;font-size:14px!important}
+.mx-card .chips{display:flex;flex-wrap:wrap;gap:6px}
+.mx-card .chips .btn{min-height:36px!important;padding:4px 13px;font-size:13px}
+.mx-card .btn.on{border-color:var(--acc2);box-shadow:inset 0 0 0 1px var(--acc2)}
+.mx-card input[type=datetime-local]{width:100%;min-height:48px;padding:10px 14px;border-radius:14px;border:1px solid var(--line2);background:var(--field);color:var(--ink);font:600 16px var(--font),Manrope,sans-serif;color-scheme:dark}
+.mx-card a.btn{text-decoration:none}
+.adv{border:1px solid var(--line2);border-radius:14px;padding:10px 14px}
+.adv summary{cursor:pointer;font-weight:700;font-size:14px;color:var(--mute)}
+.adv[open]{display:grid;gap:10px}.adv[open] summary{color:var(--ink)}
+.qrbox{width:min(250px,70vw);aspect-ratio:1;padding:10px;border-radius:18px;background:#fff;overflow-wrap:anywhere;color:#111;font-size:12px}
+.qrbox svg{width:100%;height:100%;display:block}
+.qrlink{font-size:12px!important;user-select:all;max-width:100%}
+.idcard{flex-wrap:wrap}.idcard>div{flex:1 1 150px}
+html.kz-shake body{animation:kzshake .6s}
+@keyframes kzshake{10%,50%,90%{transform:translateX(-9px)}30%,70%{transform:translateX(9px)}}

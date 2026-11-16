@@ -2,14 +2,26 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Кинозал — смотрим вместе</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
+<meta name="theme-color" content="#111a1c">
+<meta name="description" content="Кинозал — мессенджер с голосовыми, кружочками и видеозвонками, и кино вместе секунда в секунду. Без регистрации и серверов.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Кинозал">
+<title>Кинозал</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="messenger.css">
 <link rel="stylesheet" href="theme.css">
+<link rel="stylesheet" href="mobile.css">
 <script src="theme.js"></script>
-<script src="node_modules/peerjs/dist/peerjs.min.js"></script>
+<script src="web.js"></script>
+<script src="vendor/peerjs.min.js"></script>
+<script src="vendor/qrcode.js"></script>
 <script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <style>
 :root{color-scheme:dark;--bg:#0e1416;--panel:#162023;--panel2:#1c282b;--line:#2a3639;--ink:#eef3f1;--mute:#93a5a3;--acc:#ff6b4a;--acc2:#5fd4c4}
@@ -310,6 +322,9 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
         <span class="grow hall-only"></span>
         <button id="micBtn">Микрофон вкл</button>
         <button id="camBtn">Камера вкл</button>
+        <button id="flipBtn" class="touch-only" title="Другая камера" aria-label="Другая камера">Другая камера</button>
+        <button id="fxBtn" title="Реакция — её увидят все в зале" aria-label="Реакция">😊</button>
+        <button id="chatBtn" class="hall-only phone-only" aria-label="Чат и участники">Чат</button>
         <button class="hall-only" id="hallFs" title="Зал на весь экран (F)">⛶ Весь экран</button>
         <button id="leaveBtn">Выйти</button>
       </div>
@@ -324,7 +339,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
     </div>
     <div class="callarea" id="callarea">
       <div class="callnote" id="callNote" hidden><span id="callNoteText"></span><button class="main" id="callNoteGo">Смотреть</button></div>
-      <div class="callstage" id="callStage"><div class="alone" id="alone" hidden>Ты пока один. Код зала <b id="aloneCode"></b> — отправь брату</div></div>
+      <div class="callstage" id="callStage"><div class="alone" id="alone" hidden>Пока здесь только ты · код зала <b id="aloneCode"></b></div></div>
       <div class="fslog"></div>
       <form class="fsform"><input type="text" maxlength="500" placeholder="Сообщение в чат, Enter — отправить" autocomplete="off"></form>
     </div>
@@ -381,7 +396,9 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 {
 const $=s=>document.querySelector(s);
 const PREFIX='kinozal-v2-';
-const ICE={iceServers:[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']}]};
+// свой TURN-сервер из профиля — на случай строгого NAT (мобильная сеть)
+const ICE={get iceServers(){const l=[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']}];try{const t=JSON.parse(localStorage.getItem('kinozal-turn')||'null');if(t?.url&&/^turns?:/i.test(t.url))l.push({urls:t.url,username:t.user||'',credential:t.pass||''});}catch(e){}return l;}};
+const TOUCHDEV=matchMedia('(pointer:coarse)').matches;let facing='user';
 
 let peer=null,isHost=false,inRoom=false,leaving=false,hostGone=false,code='',myName='',local=null;
 let hostConn=null,joinTimer=0,retryTimer=0,retries=0;
@@ -425,7 +442,9 @@ function osd(t){const el=$('#osd');el.textContent=t;el.classList.add('on');clear
 // ---------- чат ----------
 // в полноэкранном режиме (кино или зал) сообщения всплывают поверх
 function fsLog(name,node){
-  const log=document.fullscreenElement?.querySelector('.fslog');if(!log)return;
+  const log=document.fullscreenElement?.querySelector('.fslog')||(innerWidth<=760&&view==='hall'&&!$('#room').classList.contains('sheet')?$('#callarea .fslog'):null);
+  if(innerWidth<=760&&view==='hall'&&!$('#room').classList.contains('sheet'))$('#chatBtn').classList.add('new');
+  if(!log)return;
   const f=document.createElement('div');const b=document.createElement('b');b.textContent=name;f.append(b,node);
   log.append(f);while(log.children.length>4)log.firstChild.remove();
   setTimeout(()=>{f.style.opacity=0;setTimeout(()=>f.remove(),600);},8000);
@@ -532,14 +551,14 @@ const gum=async c=>{
   }
 };
 const audioC=id=>({...(id?{deviceId:{exact:id}}:{}),echoCancellation:ecVal(),noiseSuppression:true,autoGainControl:true});
-const videoC=id=>({...(id?{deviceId:{exact:id}}:{}),width:{ideal:640},height:{ideal:480}});
+const videoC=id=>({...(id?{deviceId:{exact:id}}:TOUCHDEV?{facingMode:facing}:{}),width:{ideal:640},height:{ideal:480}});
 function ctx(){if(!actx||actx.state==='closed'){try{actx=new AudioContext();}catch(e){}}if(actx?.state==='suspended')actx.resume().catch(()=>{});return actx;}
 function silentTrack(){const t=ctx()?.createMediaStreamDestination().stream.getAudioTracks()[0];if(t)t.fake=true;return t;}
 function blackTrack(){const c=document.createElement('canvas');c.width=c.height=16;c.getContext('2d').fillRect(0,0,16,16);const t=c.captureStream(1).getVideoTracks()[0];t.fake=true;return t;}
 function why(e,what){
   const f=what==='Камера'; // род: камера — она, микрофон — он
   switch(e?.name){
-    case 'NotAllowedError':case 'SecurityError':return what+': доступ запрещён. Windows: Параметры → Конфиденциальность и защита → '+what+' → разрешить классическим приложениям';
+    case 'NotAllowedError':case 'SecurityError':return what+': доступ запрещён. '+(window.kinozalApp?'Windows: Параметры → Конфиденциальность и защита → '+what+' → разрешить классическим приложениям':'Разреши его для этого сайта: значок замка в адресной строке или настройки браузера');
     case 'NotReadableError':case 'AbortError':return what+(f?' занята':' занят')+' другой программой (Discord, Zoom, Teams?) или устройство отвалилось';
     case 'NotFoundError':case 'OverconstrainedError':return what+(f?' не найдена — подключи или выбери другую':' не найден — подключи или выбери другой');
     default:return what+': '+(e?.message||e?.name||'ошибка');
@@ -621,12 +640,12 @@ async function fillDevices(){
   const cams=list.filter(d=>d.kind==='videoinput');
   const curA=local?.getAudioTracks()[0],curV=local?.getVideoTracks()[0];
   const ms=$('#micSel');ms.textContent='';
-  for(const d of mics){const o=document.createElement('option');o.value=d.deviceId==='default'?'':d.deviceId;o.textContent=d.deviceId==='default'?'Как в Windows ('+cleanLabel(d.label)+')':cleanLabel(d.label);ms.append(o);}
+  for(const d of mics){const o=document.createElement('option');o.value=d.deviceId==='default'?'':d.deviceId;o.textContent=d.deviceId==='default'?'По умолчанию ('+cleanLabel(d.label)+')':cleanLabel(d.label);ms.append(o);}
   if(!mics.length){const o=document.createElement('option');o.value='';o.textContent='Микрофоны не найдены';ms.append(o);}
   ms.value=micId;if(ms.value!==micId)ms.value='';
   const cs=$('#camSel');cs.textContent='';
   const off=document.createElement('option');off.value='off';off.textContent='Без камеры';
-  const def=document.createElement('option');def.value='';def.textContent='Как в Windows';
+  const def=document.createElement('option');def.value='';def.textContent=TOUCHDEV?'Основная':'По умолчанию';
   cs.append(def);for(const d of cams){const o=document.createElement('option');o.value=d.deviceId;o.textContent=cleanLabel(d.label);cs.append(o);}cs.append(off);
   cs.value=camId;if(cs.value!==camId)cs.value='';
   const notes=[];
@@ -739,6 +758,7 @@ function addTile(id,name,stream,mine){
     }
   }
   const v=t.querySelector('video');
+  if(!v._ar){v._ar=1;v.addEventListener('resize',()=>{t.classList.toggle('port',v.videoHeight>v.videoWidth*1.15);layoutGrid();});}
   if(v.srcObject!==stream){v.srcObject=stream;v.play().catch(()=>{});}
   if(mine)v.muted=true;else attachVoice(id,stream,v);
   setName(t,name);
@@ -846,7 +866,7 @@ function setView(v){
   if(v===view)return;
   view=v;
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
-  $('#room').classList.toggle('hallview',v==='hall');
+  $('#room').classList.toggle('hallview',v==='hall');$('#room').classList.remove('sheet');
   $('#viewCine').classList.toggle('on',v!=='hall');$('#viewHall').classList.toggle('on',v==='hall');
   if(v==='hall'){$('#callStage').prepend($('#tiles'));$('#callarea').insertBefore($('#ctrls'),$('#callarea .fslog'));}
   else{$('#peoplePanel').insertBefore($('#tiles'),$('#cvolRow'));$('.left').insertBefore($('#ctrls'),$('#help'));}
@@ -872,7 +892,7 @@ function syncMineFloat(){
 function layoutGrid(){
   if(view!=='hall')return;
   const box=$('#callStage'),tl=$('#tiles');
-  const n=[...tl.children].filter(t=>!t.classList.contains('float')).length||1;
+  const n=[...tl.children].filter(t=>!t.classList.contains('float')).length||1;tl.classList.toggle('solo',n===1);
   const W=box.clientWidth-20,H=box.clientHeight-20,gap=10;if(W<=0||H<=0)return;
   let best=1,bw=0;
   for(let cols=1;cols<=n;cols++){
@@ -1592,6 +1612,7 @@ function onGuestConn(c){
     const g=guests.get(c.peer);if(!g||g.conn!==c||!d)return;
     switch(d.t){
       case 'chat':{const text=String(d.text||'').slice(0,500);if(!text)return;addMsg(g.name,text);broadcast({t:'chat',name:g.name,text},c.peer);break;}
+      case 'fx':{const e=fxClean(d.e);if(!e)return;showFx(e,g.name);broadcast({t:'fx',e,name:g.name},c.peer);break;}
       case 'img':{const b=addImg(g.name,d.b,d.mime);if(b)broadcast({t:'img',name:g.name,mime:String(d.mime),b},c.peer);break;}
       case 'ctl':if(['toggle','play','pause','seek'].includes(d.a))doCtl(d.a,d.time,g.name);break;
       case 'ping':c.send({t:'pong',a:d.a});break;
@@ -1724,6 +1745,7 @@ function onGuestData(d){
     case 'left':roster.delete(d.id);camCalls.get(d.id)?.close();dropTile(d.id);shareOut?.calls.get(d.id)?.close();endShareFrom(d.id);sys((names.get(d.id)||'Гость')+' вышел');break;
     case 'share':sys((clean(d.name)||'Кто-то')+(d.on?' показывает экран':' закончил показ экрана'));if(!d.on)endShareFrom(d.from);break;
     case 'chat':addMsg(clean(d.name),String(d.text||'').slice(0,500));break;
+    case 'fx':showFx(fxClean(d.e),clean(d.name));break;
     case 'img':addImg(clean(d.name)||'Кто-то',d.b,d.mime);break;
     case 'movie':setSubs([],'');setMovie(d);sys('Ведущий включает «'+title(d.title)+'»');break;
     case 'state':st={playing:!!d.playing,time:+d.time||0,rate:+d.rate||1,dur:+d.dur||0,recv:performance.now()};syncLocal();break;
@@ -1831,8 +1853,7 @@ $('#leaveBtn').onclick=()=>{leaving=true;stopShare();if(isHost)broadcast({t:'bye
 window.addEventListener('beforeunload',()=>{if(isHost)broadcast({t:'bye'});try{if(peer){peer._bye=true;peer.destroy();}}catch(e){}});
 
 $('#copyBtn').onclick=async()=>{
-  const link=!isApp&&/^https?:/.test(location.protocol)?location.href.split('#')[0]+'#'+code:'';
-  const text=isApp?'Заходи в Кинозал! Код зала: '+code:link?'Заходи в кинозал: '+link+' (код '+code+')':'Заходи в кинозал! Открой kinozal.html в Chrome и введи код '+code;
+  const text='Заходи в Кинозал: https://desinaleksandr80-star.github.io/kinozal/#'+code+'\nСсылка открывается на телефоне и компьютере. Или в самом Кинозале: ✎ → «Созвон по коду» → '+code;
   try{await navigator.clipboard.writeText(text);toast('Приглашение скопировано');}
   catch(e){toast('Код зала: '+code);}
 };
@@ -1869,6 +1890,7 @@ setInterval(()=>{
 },120);
 
 // ---------- обновления (только в приложении) ----------
+if(!isApp)fetch('package.json',{cache:'no-cache'}).then(r=>r.json()).then(j=>{myVer=String(j.version||'');}).catch(()=>{});
 if(isApp&&window.kinozalApp.version){
   window.kinozalApp.version().then(v=>{myVer=String(v||'');$('#ver').textContent='Версия '+v+' · обновляется сама';});
   let updHidden='';
@@ -1902,6 +1924,37 @@ document.addEventListener('drop',e=>e.preventDefault());
     jlog('[показ] страница упала во время показа ('+c.code+') — дальше программный кодировщик');
     setTimeout(()=>toast('Показ экрана сбоил на этой видеокарте — дальше он идёт через совместимый кодировщик'),3000);
   }
+})();
+// ---------- телефон: другая камера, чат шторкой ----------
+$('#flipBtn').onclick=()=>{facing=facing==='user'?'environment':'user';camId='';store.set('cam','');switchCam('').then(()=>{document.getElementById('tile-me')?.classList.toggle('rear',facing==='environment');});};
+$('#chatBtn').onclick=()=>{const r=$('#room');r.classList.toggle('sheet');$('#chatBtn').classList.remove('new');if(r.classList.contains('sheet'))$('#msgs').scrollTop=$('#msgs').scrollHeight;};
+$('#callStage').addEventListener('click',()=>$('#room').classList.remove('sheet'));
+// ---------- реакции поверх экрана: видят все в зале ----------
+const FX=['👍','❤️','😂','😮','😢','🔥','👏','🍿'];
+const fxClean=e=>{e=String(e||'');return e.length<=16&&/\p{Extended_Pictographic}/u.test(e)?e:'';};
+function showFx(e,name){
+  if(!e)return;
+  const box=document.fullscreenElement||(view==='hall'?$('#callStage'):$('#stage'));
+  if(!box||box.querySelectorAll('.fx').length>14)return;
+  const d=document.createElement('div');d.className='fx';d.style.left=(8+Math.random()*78)+'%';d.style.setProperty('--dx',Math.round(Math.random()*80-40)+'px');
+  const i=document.createElement('i');i.textContent=e;const s=document.createElement('span');s.textContent=name||'';d.append(i,s);
+  box.append(d);setTimeout(()=>d.remove(),3000);
+}
+let fxAt=0;
+function sendFx(e){
+  if(Date.now()-fxAt<250)return;fxAt=Date.now();
+  showFx(e,myName);
+  if(isHost)broadcast({t:'fx',e,name:myName});else if(hostConn?.open)hostConn.send({t:'fx',e});
+}
+(()=>{
+  const bar=document.createElement('div');bar.className='fxbar';bar.hidden=true;
+  for(const e of FX){const b=document.createElement('button');b.type='button';b.textContent=e;b.onclick=ev=>{ev.stopPropagation();sendFx(e);};bar.append(b);}
+  document.body.append(bar);
+  $('#fxBtn').onclick=ev=>{
+    ev.stopPropagation();bar.hidden=!bar.hidden;if(bar.hidden)return;
+    const r=$('#fxBtn').getBoundingClientRect();bar.style.left=Math.max(8,Math.min(innerWidth-bar.offsetWidth-8,r.left+r.width/2-bar.offsetWidth/2))+'px';bar.style.top=Math.max(8,r.top-bar.offsetHeight-10)+'px';
+  };
+  document.addEventListener('click',()=>{bar.hidden=true;});
 })();
 // мост для мессенджера: звонок и кинозал из чата — это обычный зал по коду
 window.kzRoom={
