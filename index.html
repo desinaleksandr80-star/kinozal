@@ -686,38 +686,37 @@ $('#camBtn').onclick=()=>{
 };
 
 // ---------- голоса: у каждого своя громкость ----------
-// Голос каждого идёт через WebAudio: свой регулятор (0–200 %) → общий «Голоса» → динамики.
-// Видео на плитке при этом без звука, иначе голос звучал бы дважды. Если WebAudio не завёлся — звук через само видео.
+// Голос играет само видео на плитке — это путь, который эхоподавление микрофона видит на любой Windows
+// (на Windows 10 режим «весь звук компьютера» не работает, и голос через WebAudio мог возвращаться собеседнику эхом).
+// Громкость = общий «Голоса» × регулятор на плитке (0–100 %). Параллельно голоса собираются в «немую» шину
+// WebAudio — она ничего не играет, это образец для эхо-защиты показа экрана.
 let voiceBus=null;
 const voices=new Map(); // id -> {src,gain,track}
 function bus(){
   const ac=ctx();if(!ac)return null;
-  if(!voiceBus||voiceBus.context!==ac){voiceBus=ac.createGain();voiceBus.gain.value=callVol;voiceBus.connect(ac.destination);voices.clear();}
+  if(!voiceBus||voiceBus.context!==ac){voiceBus=ac.createGain();voiceBus.gain.value=callVol;voices.clear();}
   return voiceBus;
 }
 const volKey=id=>'pv-'+(names.get(id)||id);
-function peerVol(id){const v=+store.get(volKey(id),1);return isFinite(v)?Math.max(0,Math.min(2,v)):1;}
+function peerVol(id){const v=+store.get(volKey(id),1);return isFinite(v)?Math.max(0,Math.min(1,v)):1;}
 function attachVoice(id,stream,v){
   const t=stream?.getAudioTracks()[0];
-  const cur=voices.get(id);if(cur&&cur.track===t){v.muted=true;return;}
-  dropVoice(id);
-  const b=t&&bus();
-  if(b){
-    try{
-      const src=b.context.createMediaStreamSource(new MediaStream([t]));const gain=b.context.createGain();
-      gain.gain.value=peerVol(id);src.connect(gain).connect(b);voices.set(id,{src,gain,track:t});
-      v.muted=true;return;
-    }catch(e){}
-  }
   v.muted=false;v.volume=Math.min(1,callVol*peerVol(id));
-  if(!t)stream?.addEventListener('addtrack',()=>attachVoice(id,stream,v),{once:true});
+  if(!t){stream?.addEventListener('addtrack',()=>attachVoice(id,stream,v),{once:true});return;}
+  const cur=voices.get(id);if(cur&&cur.track===t)return;
+  dropVoice(id);
+  const b=bus();if(!b)return;
+  try{
+    const src=b.context.createMediaStreamSource(new MediaStream([t]));const gain=b.context.createGain();
+    gain.gain.value=peerVol(id);src.connect(gain).connect(b);voices.set(id,{src,gain,track:t});
+  }catch(e){}
 }
 function dropVoice(id){const o=voices.get(id);if(!o)return;try{o.src.disconnect();o.gain.disconnect();}catch(e){}voices.delete(id);}
 function setPeerVol(id,val){
-  val=Math.max(0,Math.min(2,+val||0));store.set(volKey(id),val);
+  val=Math.max(0,Math.min(1,+val||0));store.set(volKey(id),val);
   const o=voices.get(id);if(o)o.gain.gain.setTargetAtTime(val,o.gain.context.currentTime,.03);
   const t=document.getElementById('tile-'+id);
-  if(t){const v=t.querySelector('video');if(!o&&v)v.volume=Math.min(1,callVol*val);syncVolUi(t,val);}
+  if(t){const v=t.querySelector('video');if(v)v.volume=Math.min(1,callVol*val);syncVolUi(t,val);}
 }
 function syncVolUi(t,val){
   const r=t.querySelector('.tvol input'),sp=t.querySelector('.tvol span');
@@ -733,7 +732,7 @@ function addTile(id,name,stream,mine){
     if(mine){t.classList.add('mine');$('#tiles').prepend(t);}
     else{
       const l=document.createElement('label');l.className='tvol';l.title='Громкость — только у тебя';
-      l.innerHTML='🔊<input type="range" min="0" max="2" step="0.05" aria-label="Громкость"><span></span>';
+      l.innerHTML='🔊<input type="range" min="0" max="1" step="0.05" aria-label="Громкость"><span></span>';
       const r=l.querySelector('input');r.oninput=()=>setPeerVol(id,r.value);
       r.ondblclick=()=>setPeerVol(id,1);
       t.append(l);$('#tiles').appendChild(t);
@@ -760,7 +759,7 @@ function count(){
 $('#callVol').oninput=e=>{
   callVol=+e.target.value;store.set('callVol',callVol);
   if(voiceBus)voiceBus.gain.setTargetAtTime(callVol,voiceBus.context.currentTime,.03);
-  document.querySelectorAll('.tile:not(.mine)').forEach(t=>{const id=t.id.slice(5);if(!voices.has(id))t.querySelector('video').volume=Math.min(1,callVol*peerVol(id));});
+  document.querySelectorAll('.tile:not(.mine)').forEach(t=>{const id=t.id.slice(5);t.querySelector('video').volume=Math.min(1,callVol*peerVol(id));});
 };
 
 // ---------- окошки, которые можно таскать и растягивать ----------
@@ -919,8 +918,11 @@ function preferH264(sdp){
   lines[mi]=parts.slice(0,3).concat([...main].sort((a,b)=>score(b)-score(a)),other).join(' ');
   return lines.join(nl);
 }
+// Аппаратный H.264 быстрый, но на части видеокарт со старыми драйверами страница падает во время показа.
+// Если так уже случилось — дальше показываем через программный кодировщик (VP8/VP9), он есть везде.
+let safeCodec=store.get('safeCodec','0')==='1';
 function hq(sdp){
-  sdp=preferH264(stereo(sdp));
+  sdp=safeCodec?stereo(sdp):preferH264(stereo(sdp));
   const pts=[...sdp.matchAll(VCODEC)].map(m=>m[1]);
   for(const pt of pts){
     const re=new RegExp('a=fmtp:'+pt+' ([^\\r\\n]*)');
@@ -1125,9 +1127,10 @@ function findDelay(cap,ref,maxLag){
     ar[k]=r/m;ai[k]=i/m;
   }
   fft(ar,ai,true);
-  let best=-1,bv=0,sum=0;
-  for(let l=0;l<=maxLag;l++){const v=Math.abs(ar[l]);sum+=v;if(v>bv){bv=v;best=l;}}
-  const mean=sum/(maxLag+1);
+  // звук не может вернуться в захват быстрее ~5 мс (буферы вывода и захвата) — короче не ищем: там ложные совпадения
+  const minLag=60;let best=-1,bv=0,sum=0;
+  for(let l=minLag;l<=maxLag;l++){const v=Math.abs(ar[l]);sum+=v;if(v>bv){bv=v;best=l;}}
+  const mean=sum/(maxLag-minLag+1);
   return bv>mean*8?{lag:best,score:bv/mean}:null;
 }
 async function echoGuard(raw){
@@ -1141,7 +1144,7 @@ async function echoGuard(raw){
   const src=ac.createMediaStreamSource(new MediaStream([raw]));src.connect(node,0,0);b.connect(node,0,1);
   const dst=ac.createMediaStreamDestination();dst.channelCount=2;node.connect(dst);
   const g={track:dst.stream.getAudioTracks()[0],delay:-1,erle:0,talk:false};
-  const SEC=12000,keep=new Float32Array(SEC*2.5),keepR=new Float32Array(SEC*2.5);let fill=0,cand=null;
+  const SEC=12000,keep=new Float32Array(SEC*2.5),keepR=new Float32Array(SEC*2.5);let fill=0,cand=null,candN=0,lockScore=0;
   const ms=d=>Math.round(d/48);
   const saved=+store.get('aecDelay',-1);
   if(saved>=0){g.delay=saved;node.port.postMessage({delay:saved});}  // с прошлого раза — защита работает с первой секунды
@@ -1153,11 +1156,15 @@ async function echoGuard(raw){
     if(fill<keep.length||!g.talk)return;
     const f=findDelay(keep,keepR,Math.round(SEC*.6));if(!f)return;
     const d=f.lag*4;
-    if(g.delay>=0&&Math.abs(d-g.delay)<=8){cand=null;return;}   // задержка та же — фильтр уже работает
-    if(cand!==null&&Math.abs(cand-d)<=8||f.score>40&&g.delay<0){
-      g.delay=d;cand=null;node.port.postMessage({delay:d});store.set('aecDelay',d);
+    lockScore*=.97;                                                       // старая уверенность понемногу тает — путь звука мог правда смениться
+    if(g.delay>=0&&Math.abs(d-g.delay)<=8){cand=null;candN=0;lockScore=Math.max(lockScore,f.score);return;}   // та же задержка — фильтр уже работает
+    // новую задержку берём, только если она уверенно повторилась три раза — иначе фильтр сбрасывается зря и эхо проскакивает
+    if(cand!==null&&Math.abs(cand-d)<=8)candN++;else{cand=d;candN=1;}
+    const first=g.delay<0&&f.score>40, sure=candN>=3&&f.score>=Math.max(40,lockScore*.3);
+    if(first||sure){
+      g.delay=d;cand=null;candN=0;lockScore=f.score;node.port.postMessage({delay:d});store.set('aecDelay',d);
       jlog('[эхо-защита] задержка '+ms(d)+' мс (уверенность '+f.score.toFixed(0)+')');
-    }else cand=d;
+    }
   };
   g.stop=()=>{try{src.disconnect();b.disconnect(node);node.disconnect();node.port.onmessage=null;}catch(e){}g.track.stop();};
   return g;
@@ -1284,6 +1291,7 @@ async function doShare(){
   $('#share').hidden=false;$('#shareMe').hidden=false;$('#shareTag').textContent='';$('#shareUnmute').hidden=true;
   $('#shareWarn').textContent=s.getAudioTracks().length?'':isApp?'Звук компьютера выключен':'Без звука — в окне выбора не была отмечена галочка «Поделиться звуком»';
   stage.classList.add('sharing');
+  store.set('sharingNow',String(Date.now()));
   $('#shareBtn').textContent='Остановить показ';$('#shareBtn').classList.add('off');$('#shareQ').disabled=true;
   sys('Ты показываешь экран');
   shareStats();
@@ -1305,6 +1313,7 @@ function callShare(id,tries=0){
 function stopShare(silent){
   if(!shareOut)return;
   const o=shareOut;shareOut=null;
+  try{localStorage.removeItem('kinozal-sharingNow');}catch(e){}
   o.calls.forEach(c=>c.close());o.guard?.stop();o.raw.getTracks().forEach(t=>t.stop());
   if(!silent){shareMsg(false);sys('Показ экрана остановлен');}
   $('#shareBtn').textContent='Показать экран';$('#shareBtn').classList.remove('off');$('#shareQ').disabled=false;
@@ -1353,6 +1362,7 @@ async function shareStats(o=shareOut){
         if(o.prev&&o.prev.call===c&&r.timestamp>o.prev.ts)rate=' · '+mb((r.bytesSent-o.prev.b)*8000/(r.timestamp-o.prev.ts))+' Мбит/с';
         o.prev={call:c,b:r.bytesSent,ts:r.timestamp};
         if(r.frameHeight)line='Уходит зрителям: '+r.frameWidth+'×'+r.frameHeight+(r.framesPerSecond?' · '+Math.round(r.framesPerSecond)+' к/с':'')+rate+' (лимит '+Math.round(o.p.bitrate/1e6)+')';
+        if(r.encoderImplementation&&!o.encLogged){o.encLogged=1;jlog('[показ] кодировщик:',r.encoderImplementation,r.powerEfficientEncoder?'(видеокарта)':'(процессор)',r.frameWidth+'x'+r.frameHeight);}
         if(r.qualityLimitationReason==='bandwidth')warn='Качество режет интернет — не хватает скорости отдачи';
         else if(r.qualityLimitationReason==='cpu')warn='Качество режет процессор — закрой лишнее или выбери «1080p · 60 к/с»';
       });
@@ -1680,7 +1690,7 @@ function lostHost(){
   clearTimeout(retryTimer);
   if(!inRoom||leaving||hostGone)return;
   if(retries===0)sys('Связь с залом пропала — переподключаюсь…');
-  if(++retries>10){sys('Не получилось вернуться в зал. Возможно, ведущий вышел.');clearScreen('Связь потеряна','Попроси ведущего создать зал заново');return;}
+  if(++retries>10){sys('Не получилось вернуться в зал. Возможно, ведущий вышел.');clearScreen('Связь потеряна','Попроси ведущего создать зал заново');window.kzOnRoom?.('hostgone',{});return;}
   retryTimer=setTimeout(()=>{
     if(!inRoom||leaving||hostGone)return;
     const c=connectHost();
@@ -1882,6 +1892,17 @@ if(isApp&&window.kinozalApp.version){
 
 document.addEventListener('dragover',e=>e.preventDefault());   // файл, брошенный мимо чата, не должен открыться вместо программы
 document.addEventListener('drop',e=>e.preventDefault());
+// страница упала во время показа экрана? — дальше показываем через совместимый (программный) кодировщик
+(async()=>{
+  const was=+store.get('sharingNow',0);if(!was)return;
+  try{localStorage.removeItem('kinozal-sharingNow');}catch(e){}
+  const c=await window.kinozalApp?.crashed?.().catch(()=>null);
+  if(c&&c.at>=was&&!safeCodec){
+    safeCodec=true;store.set('safeCodec','1');
+    jlog('[показ] страница упала во время показа ('+c.code+') — дальше программный кодировщик');
+    setTimeout(()=>toast('Показ экрана сбоил на этой видеокарте — дальше он идёт через совместимый кодировщик'),3000);
+  }
+})();
 // мост для мессенджера: звонок и кинозал из чата — это обычный зал по коду
 window.kzRoom={
   get inRoom(){return inRoom;},get code(){return code;},get busy(){return inRoom||!!peer;},

@@ -1,7 +1,7 @@
 {
   "name": "kinozal",
   "productName": "Кинозал",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Кинозал — смотрим фильмы и показываем экран вместе",
   "main": "main.js",
   "author": "Kinozal",

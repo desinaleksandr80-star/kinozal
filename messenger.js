@@ -252,6 +252,16 @@ async function onData(L, d) {
     case 'profile': { const ct = S.contacts[u]; const n = clean(d.name, 40); if (ct) { if (n) ct.name = n; ct.avatar = cleanAvatar(d.avatar); ct.frame = window.kzTheme?.cleanFrame(d.frame) || null; } for (const g of groupsWith(u)) if (n) g.names[u] = n; save(); renderList(); renderHead(); return; }
     case 'typing': { const c = String(d.chat || ''); if (!shares(c, u)) return; typing.set(c + '|' + u, Date.now() + 4500); renderHead(); renderList(); setTimeout(() => { renderHead(); renderList(); }, 4700); return; }
     case 'decline': if (myCall && d.code === myCall.code) toast(nameOf(u) + ' сейчас не может ответить'); return;
+    case 'calls': {   // какие звонки у собеседника на самом деле идут — остальные его приглашения гаснут
+      const live = new Set([].concat(d.live || []).map(x => clean(x, 8)));
+      let ch = false;
+      for (const [code, x] of Object.entries(S.calls || {})) if (x.from === u && !live.has(code) && !S.ended[code] && Date.now() - x.ts > 15000) {
+        S.ended[code] = Date.now(); ch = true; if (ringing?.code === code) stopRing();
+        if (window.kzRoom?.inRoom && window.kzRoom.code === code) { jlog('[зал] у хозяина звонка его больше нет — выхожу'); toast('Звонок оборвался'); window.kzRoom.leave(); }
+      }
+      if (ch) { save(); refreshCallCards(); }
+      return;
+    }
     case 'callend': { const code = clean(d.code, 8); if (!code) return; S.ended[code] = Date.now(); save(); if (ringing?.code === code) stopRing(); refreshCallCards(); return; }
   }
 }
@@ -271,6 +281,7 @@ function linkUp(L) {
   save(); presence(u);
   const gl = groupsWith(u).map(gWire); if (gl.length) send(u, { t: 'groups', list: gl });
   for (const c of sharedChats(u)) { const ch = S.chats[c]; if (ch?.myRead) send(u, { t: 'read', chat: c, ts: ch.myRead }); }
+  send(u, { t: 'calls', live: myCall && window.kzRoom?.inRoom ? [myCall.code] : [] });
   sendSync(u);
 }
 async function sendSync(u) {
@@ -340,6 +351,7 @@ function arrived(m) {
   save(); renderList();
   if (open === m.chat) appendMsg(m);
   if (viewing && !mine) markRead(m.chat);
+  if (m.kind === 'call') { S.calls ||= {}; S.calls[m.code] = { from: m.from, ts: m.ts }; const k = Object.keys(S.calls); if (k.length > 200) delete S.calls[k[0]]; }
   if (!mine && Date.now() - m.ts < 5 * 6e4) {
     if (m.kind === 'call' && Date.now() - m.ts < 90000 && !S.ended[m.code]) ring(m);
     else if (!viewing && m.kind !== 'sys') notify(m);
@@ -501,7 +513,8 @@ async function renderChat() {
   const main = $('#mxMain'); main.textContent = '';
   const sec = el('section', 'mx-chat'); sec.innerHTML = `
     <header class="mx-chead"><button class="ib back" title="К чатам">${IC.back}</button><div class="avwrap"></div><div class="who"><b></b><span></span></div>
-      <div class="act"><button class="ib call" title="Видеозвонок">${IC.phone}</button><button class="ib cine" title="Кинозал — смотреть вместе">${IC.film}</button><button class="ib more" title="Ещё">${IC.dots}</button></div></header>
+      <div class="callzone"><button class="cz call" title="Видеозвонок">${IC.phone}<span>Позвонить</span></button><button class="cz cine" title="Кинозал — смотреть вместе">${IC.film}<span>Кинозал</span></button><button class="cz live" hidden title="Вернуться к звонку"><i class="pulse"></i><span>Идёт звонок</span><b class="tm"></b><span>· Вернуться</span></button></div>
+      <div class="act"><button class="ib more" title="Ещё">${IC.dots}</button></div></header>
     <div class="mx-banner" hidden></div>
     <div class="mx-msgs" tabindex="-1"></div>
     <div class="mx-input"><div class="field"><button class="ib clip" title="Фото или файл">${IC.clip}</button><textarea rows="1" placeholder="Сообщение" maxlength="4000"></textarea></div>
@@ -514,11 +527,12 @@ async function renderChat() {
   $('.call', sec).onclick = () => startCall(c, 'call');
   $('.cine', sec).onclick = () => startCall(c, 'cinema');
   $('.more', sec).onclick = e => { e.stopPropagation(); chatMenu(c, e.currentTarget); };
+  $('.cz.live', sec).onclick = () => window.kzRoom?.show();
   setupInput(sec, c);
   const box = $('.mx-msgs', sec);
   box.addEventListener('scroll', () => { if (nearBottom(box)) { downCount = 0; updDown(); } else $('.mx-down', sec).hidden = false; });
   $('.mx-down', sec).onclick = () => { box.scrollTop = box.scrollHeight; downCount = 0; updDown(); };
-  renderHead();
+  renderHead(); updCallUi();
   shown = await chatMsgs(c, 400);
   if (open !== c) return;
   box.textContent = '';
@@ -711,11 +725,11 @@ function callEl(m) {
   const w = el('div', 'callcard'); w.dataset.code = m.code;
   const cine = m.room === 'cinema';
   const ic = el('span', 'ic', cine ? '🎬' : '📞'), t = el('div', 't');
-  const ended = S.ended[m.code] || Date.now() - m.ts > 6 * 3600e3;
+  const here = window.kzRoom?.inRoom && window.kzRoom.code === m.code;
+  const ended = !here && (S.ended[m.code] || Date.now() - m.ts > 6 * 3600e3 || (m.from === myId && myCall?.code !== m.code && Date.now() - m.ts > 15000));
   t.append(el('b', '', cine ? 'Кинозал' : 'Видеозвонок'), el('span', '', ended ? 'завершён' : m.from === myId ? 'ты зовёшь' : 'зовут присоединиться'));
   w.append(ic, t);
   if (!ended) {
-    const here = window.kzRoom?.inRoom && window.kzRoom.code === m.code;
     const b = el('button', 'btn', here ? 'Вернуться' : 'Войти'); b.onclick = () => here ? window.kzRoom.show() : joinCall(m);
     w.append(b);
   }
@@ -882,7 +896,15 @@ function stopRec(sendIt) {
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && rec) { e.stopPropagation(); stopRec(false); } }, true);
 
 // ---------- звонки и кинозал ----------
-let myCall = null, ringing = null;
+let myCall = null, ringing = null, callT0 = 0;
+// где видно идущий звонок: в шапке открытого чата, а если чат не открыт — плашкой над списком чатов
+function updCallUi() {
+  const inCall = !!window.kzRoom?.inRoom, t = inCall && callT0 ? fmtDur((Date.now() - callT0) / 1000) : '';
+  const live = $('.mx-chead .cz.live');
+  if (live) { live.hidden = !inCall; $('.mx-chead .cz.call').hidden = $('.mx-chead .cz.cine').hidden = inCall; live.querySelector('.tm').textContent = t; }
+  const bar = $('#mxCallbar'); if (bar) { bar.hidden = !inCall || !!live; const s = bar.querySelector('span'); if (s) s.textContent = 'Идёт звонок' + (t ? ' · ' + t : ''); }
+}
+setInterval(updCallUi, 1000);
 async function startCall(c, kind) {
   const R = window.kzRoom; if (!R) return;
   if (R.inRoom) { toast('Ты уже в звонке — вернись к нему или выйди'); R.show(); return; }
@@ -925,11 +947,12 @@ function ring(m) {
 function stopRing() { clearInterval(ringT); ringT = 0; try { ringAc?.close(); } catch (e) {} ringAc = null; if (ringing) clearTimeout(ringing.to); ringing = null; document.querySelector('.mx-modal.ring')?.remove(); APP?.flash?.(false); }
 window.kzOnRoom = (ev, info) => {
   jlog('[зал]', ev, info?.code || '');
+  if (ev === 'enter') callT0 = Date.now();
   if (ev === 'enter' || ev === 'show') { root.hidden = true; stopRing(); }
-  if (ev === 'hide') { root.hidden = false; $('#mxCallbar').hidden = false; renderList(); }
+  if (ev === 'hide') { root.hidden = false; renderList(); updCallUi(); }
   if (ev === 'hostgone') { toast('Звонок завершён'); setTimeout(() => window.kzRoom?.leave(), 1500); }
   if (ev === 'exit') {
-    root.hidden = !S.me; $('#mxCallbar').hidden = true;
+    root.hidden = !S.me; callT0 = 0; updCallUi();
     if (myCall) { S.ended[myCall.code] = Date.now(); save(); sendChat(myCall.chat, { t: 'callend', code: myCall.code }); myCall = null; }
     refreshCallCards(); if (open) markRead(open);
   }

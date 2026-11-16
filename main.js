@@ -1,5 +1,5 @@
 // Кинозал — настольное приложение (Electron)
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification, screen } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -116,9 +116,20 @@ function setupUpdates() {
   setInterval(check, 4 * 3600 * 1000);
 }
 
+// окно не больше экрана: на ноутбуке с крупным масштабом 1440×900 не помещается, и низ (поле ввода) уходит за край
+function fitToScreen() {
+  if (!win || win.isDestroyed() || win.isMaximized() || win.isFullScreen()) return;
+  const wa = screen.getDisplayMatching(win.getBounds()).workArea, b = win.getBounds();
+  const w = Math.min(b.width, wa.width), h = Math.min(b.height, wa.height);
+  const x = Math.min(Math.max(b.x, wa.x), wa.x + wa.width - w), y = Math.min(Math.max(b.y, wa.y), wa.y + wa.height - h);
+  if (w !== b.width || h !== b.height || x !== b.x || y !== b.y) { log('[окно] подгоняю под экран', JSON.stringify({ was: b, wa })); win.setBounds({ x, y, width: w, height: h }); }
+}
+let lastCrash = null;
 function createWindow() {
+  const wa = screen.getPrimaryDisplay().workArea;
+  const W = Math.min(1440, wa.width), H = Math.min(900, wa.height);
   win = new BrowserWindow({
-    width: 1440, height: 900, minWidth: 900, minHeight: 600,
+    width: W, height: H, minWidth: Math.min(900, wa.width), minHeight: Math.min(600, wa.height), center: true,
     backgroundColor: '#0e1416', title: TITLE, autoHideMenuBar: true,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
@@ -138,7 +149,10 @@ function createWindow() {
   wc.on('did-fail-load', (e, code, desc) => log('[окно] не загрузилось:', code, desc));
   // страница упала — поднимаем заново, а не оставляем чёрное окно
   wc.on('render-process-gone', (e, d) => {
-    log('[окно] страница упала:', d.reason, d.exitCode);
+    const hex = '0x' + ((d.exitCode >>> 0).toString(16).toUpperCase());
+    const what = { '0xC000001D': 'аварийная проверка Chromium (CHECK)', '0xC0000005': 'обращение к чужой памяти', '0xE0000008': 'не хватило памяти', '0xC00000FD': 'переполнение стека' }[hex] || '';
+    lastCrash = { at: Date.now(), reason: d.reason, code: hex };
+    log('[окно] страница упала:', d.reason, d.exitCode, hex, what);
     if (!quitting && d.reason !== 'clean-exit') setTimeout(() => { if (!win.isDestroyed()) { log('[окно] перезагружаю'); wc.reload(); } }, 1000);
   });
   // зависла дольше 20 секунд — тоже перезагружаем
@@ -160,6 +174,9 @@ function createWindow() {
   });
   win.on('page-title-updated', e => e.preventDefault());
   win.loadFile(path.join(__dirname, 'index.html'));
+  if (wa.width < 1300 || wa.height < 820) win.once('ready-to-show', () => { if (!startHidden) win.maximize(); });  // небольшой экран — сразу на весь
+  win.on('show', fitToScreen); win.on('restore', fitToScreen);
+  screen.on('display-metrics-changed', fitToScreen); screen.on('display-removed', fitToScreen);
   if (startHidden) win.once('ready-to-show', () => win.hide());
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
@@ -226,6 +243,7 @@ app.whenReady().then(() => {
     n.show();
   });
   // журнал — чтобы отправить его в чат (например, разработчику)
+  ipcMain.handle('kz:crashed', () => lastCrash);
   ipcMain.handle('kz:readLog', () => {
     let s = '';
     for (const f of ['kinozal.old.log', 'kinozal.log']) try { s += fs.readFileSync(path.join(logDir(), f), 'utf8'); } catch (e) {}

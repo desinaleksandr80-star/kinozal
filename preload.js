@@ -16,5 +16,6 @@ contextBridge.exposeInMainWorld('kinozalApp', {
   autostart: on => ipcRenderer.invoke('kz:autostart', on),
   onOpenChat: cb => ipcRenderer.on('kz:openChat', (e, id) => cb(id)),
   readLog: () => ipcRenderer.invoke('kz:readLog'),
+  crashed: () => ipcRenderer.invoke('kz:crashed'),
   log: (...a) => ipcRenderer.send('kz:log', ...a)
 });
