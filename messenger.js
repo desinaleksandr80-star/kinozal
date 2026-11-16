@@ -5,7 +5,8 @@
 // Звонок и кинозал — это обычный зал по коду (код в index.html), приглашение уходит сообщением в чат.
 (async () => {
 'use strict';
-const APP = window.kinozalApp || null;
+const APP = window.kinozalApp || window.kzAndroid || null;   // программа для Windows или приложение для Android; на сайте — null
+const ANDROID = !!APP?.android;
 // свой TURN-сервер (профиль → «Связь через свой сервер») выручает, когда оба за строгим NAT — например, в мобильной сети
 function iceCfg() {
   const list = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
@@ -15,7 +16,9 @@ function iceCfg() {
 const LIMIT = 25e6;                 // самый большой файл в сообщении (кружочек ~5 МБ, фото до 8 МБ, документ до 25 МБ)
 const SYNC_DEPTH = 300;             // сколько последних сообщений чата сверяем при встрече
 const DOWNLOAD = 'https://github.com/desinaleksandr80-star/kinozal/releases/latest/download/Kinozal-Setup.exe';
-const WEB = 'https://desinaleksandr80-star.github.io/kinozal/';   // веб-версия: телефон и любой браузер
+const WEB = 'https://desinaleksandr80-star.github.io/kinozal/';
+const APK = 'https://github.com/desinaleksandr80-star/kinozal/releases/latest/download/Kinozal.apk';   // приложение для Android
+const ANDROID_WEB = !APP && /Android/i.test(navigator.userAgent);   // веб-версия: телефон и любой браузер
 const TOUCH = matchMedia('(pointer:coarse)').matches;
 
 // ---------- мелочи ----------
@@ -107,6 +110,7 @@ if (!keys) {
   await kvSet('keys', keys);
 }
 const myId = await idFromPub(keys.pub);
+if (S?.me?.id && S.me.id !== myId) console.error('[личность] сохранённый ключ не найден — создан новый: был ' + S.me.id + ', стал ' + myId);
 const sign = async s => b64(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.priv, enc(s)));
 async function verify(pub, sig, s) {
   try { const k = await crypto.subtle.importKey('jwk', pub, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']); return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, k, unb64(sig), enc(s)); }
@@ -393,7 +397,7 @@ function markRead(c) {
   const ch = S.chats[c]; if (!ch) return;
   const lastTs = ch.last?.ts || 0;
   if ((ch.unread || 0) === 0 && (ch.myRead || 0) >= lastTs) return;
-  ch.unread = 0; ch.myRead = Math.max(ch.myRead || 0, lastTs); save(); renderList();
+  ch.unread = 0; ch.myRead = Math.max(ch.myRead || 0, lastTs); save(); renderList(); APP?.seen?.(c);
   sendChat(c, { t: 'read', chat: c, ts: ch.myRead });
 }
 
@@ -518,7 +522,7 @@ function idCard() {
   c.append(t, b, q); return c;
 }
 async function copyInvite() {
-  const text = 'Пиши мне в Кинозале! Открой ссылку — на телефоне или компьютере, ставить ничего не нужно:\n' + inviteLink() + '\nМой ID: ' + fmtId(myId) + '\nПрограмма для Windows: ' + DOWNLOAD;
+  const text = 'Пиши мне в Кинозале! Открой ссылку — на телефоне или компьютере, ставить ничего не нужно:\n' + inviteLink() + '\nМой ID: ' + fmtId(myId) + '\nПриложение для Android: ' + APK + '\nПрограмма для Windows: ' + DOWNLOAD;
   try { await navigator.clipboard.writeText(text); toast('Приглашение скопировано'); } catch (e) { toast('Твой ID: ' + fmtId(myId)); }
 }
 async function openChat(c) {
@@ -1210,16 +1214,19 @@ function backable() {
   if (open && narrow()) return 'chat';
   return '';
 }
-if (TOUCH) {
+function goBack() {
+  const b = backable();
+  if (b === 'menu') closeMenus();
+  else if (b === 'photo') document.getElementById('lb').hidden = true;
+  else if (b === 'modal') [...document.querySelectorAll('.mx-modal:not(.ring)')].pop()?.remove();
+  else if (b === 'room') window.kzRoom?.hide();
+  else if (b === 'chat') closeChat();
+  return !!b;
+}
+window.kzBack = goBack;   // приложение для Android спрашивает напрямую; false — закрывать нечего, сворачиваемся
+if (TOUCH && !ANDROID) {
   setInterval(() => { if (backable() && !history.state?.kzb) try { history.pushState({ kzb: 1 }, ''); } catch (e) {} }, 350);
-  window.addEventListener('popstate', () => {
-    const b = backable();
-    if (b === 'menu') closeMenus();
-    else if (b === 'photo') document.getElementById('lb').hidden = true;
-    else if (b === 'modal') [...document.querySelectorAll('.mx-modal:not(.ring)')].pop()?.remove();
-    else if (b === 'room') window.kzRoom?.hide();
-    else if (b === 'chat') closeChat();
-  });
+  window.addEventListener('popstate', goBack);
 }
 
 // ---------- звонки и кинозал ----------
@@ -1271,15 +1278,17 @@ function ring(m) {
   APP?.flash?.(true); notify(m, (m.room === 'cinema' ? 'Зовёт в кинозал' : 'Видеозвонок'));
   ringing.to = setTimeout(stopRing, 45000);
 }
-function stopRing() { clearInterval(ringT); ringT = 0; try { ringAc?.close(); } catch (e) {} ringAc = null; if (ringing) clearTimeout(ringing.to); ringing = null; document.querySelector('.mx-modal.ring')?.remove(); APP?.flash?.(false); }
+// ответить или отклонить из уведомления Android
+window.kzRing = { answer() { if (ringing) joinCall(ringing); }, decline() { if (ringing) { send(ringing.from, { t: 'decline', code: ringing.code, chat: ringing.chat }); stopRing(); } } };
+function stopRing() { if (ringing) APP?.stopRing?.(); clearInterval(ringT); ringT = 0; try { ringAc?.close(); } catch (e) {} ringAc = null; if (ringing) clearTimeout(ringing.to); ringing = null; document.querySelector('.mx-modal.ring')?.remove(); APP?.flash?.(false); }
 window.kzOnRoom = (ev, info) => {
   jlog('[зал]', ev, info?.code || '');
-  if (ev === 'enter') callT0 = Date.now();
+  if (ev === 'enter') { callT0 = Date.now(); APP?.inCall?.(true); }
   if (ev === 'enter' || ev === 'show') { root.hidden = true; stopRing(); }
   if (ev === 'hide') { root.hidden = false; renderList(); updCallUi(); }
   if (ev === 'hostgone') { toast('Звонок завершён'); setTimeout(() => window.kzRoom?.leave(), 1500); }
   if (ev === 'exit') {
-    root.hidden = !S.me; callT0 = 0; updCallUi();
+    root.hidden = !S.me; callT0 = 0; updCallUi(); APP?.inCall?.(false);
     if (myCall) { S.ended[myCall.code] = Date.now(); save(); sendChat(myCall.chat, { t: 'callend', code: myCall.code }); myCall = null; }
     refreshCallCards(); if (open) markRead(open);
   }
@@ -1290,7 +1299,7 @@ async function notify(m, override) {
   const title = isDm(m.chat) ? nameOf(m.from) : chatTitle(m.chat);
   const [, t] = lastText(m.chat, m); const body = override || (isDm(m.chat) ? t : nameOf(m.from) + ': ' + t);
   ding();
-  if (APP?.notify) { APP.notify({ title, body, chat: m.chat }); APP.flash(true); }
+  if (APP?.notify) { APP.notify({ title, body, chat: m.chat, call: ringing === m }); APP.flash(true); }
   else if (document.hidden || !document.hasFocus()) sysNotify(title, body, m.chat);
 }
 APP?.onOpenChat?.(c => { if (window.kzRoom?.inRoom) window.kzRoom.hide(); if (S.chats[c]) openChat(c); });
@@ -1334,7 +1343,8 @@ function helloDlg() {
   });
   name.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
   card.append(el('h2', '', 'Добро пожаловать в Кинозал'), el('p', '', 'Мессенджер с голосовыми, кружочками и видеозвонками — а ещё можно смотреть кино вместе. Без регистрации: всё напрямую между вами.'), ap, inp, name, go);
-  setTimeout(() => name.focus(), 50);
+  if (ANDROID_WEB) { const a = el('a', 'btn', '📲 Удобнее в приложении для Android — уведомления и звонки даже в фоне'); a.href = APK; a.rel = 'noopener'; a.style.textDecoration = 'none'; card.append(a); }
+  if (!TOUCH) setTimeout(() => name.focus(), 50);
 }
 function addContactDlg() {
   modal((card, close) => {
@@ -1387,11 +1397,17 @@ function settingsDlg() {
     const snd = el('label', 'switch'), sc = el('input'); sc.type = 'checkbox'; sc.checked = store.get('mxSound', '1') === '1'; snd.append(document.createTextNode('Звук уведомлений'), sc);
     card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), el('div', 'sep'), snd);
     let auto = null;
-    if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode('Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
+    if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode(ANDROID ? 'Работать в фоне — сообщения и звонки приходят, даже когда Кинозал свёрнут' : 'Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
+    if (ANDROID) APP.info().then(i => {
+      if (!i.battery) card.insertBefore(btnEl('🔋 Не ограничивать в фоне — чтобы телефон не усыплял Кинозал', '', () => APP.askBattery()), card.querySelector('.adv'));
+      if (!i.fullScreen) card.insertBefore(btnEl('📞 Входящие звонки на весь экран', '', () => APP.askFullScreen()), card.querySelector('.adv'));
+      if (!i.notifications) card.insertBefore(btnEl('🔔 Включить уведомления', '', () => APP.openSettings()), card.querySelector('.adv'));
+    }).catch(() => {});
     if (APP?.readLog) card.append(btnEl('🧾 Отправить журнал ошибок в чат…', '', () => { close(); sendLogDlg(); }));
     if (!APP) {
       if ('Notification' in window && Notification.permission !== 'granted') card.append(btnEl('🔔 Включить уведомления', '', async () => { const p = await Notification.requestPermission().catch(() => 'denied'); toast(p === 'granted' ? 'Уведомления включены' : 'Браузер не разрешил уведомления — проверь настройки сайта'); }));
       if (window.kzWeb?.canInstall()) card.append(btnEl('📲 Установить как приложение', 'pri', async () => { if (await window.kzWeb.install()) close(); }));
+      if (ANDROID_WEB) { const a = el('a', 'btn pri', '📲 Скачать приложение для Android'); a.href = APK; a.rel = 'noopener'; card.append(a); }
       if (!TOUCH) { const a = el('a', 'btn', '⬇ Программа для Windows'); a.href = DOWNLOAD; a.target = '_blank'; a.rel = 'noopener'; card.append(a); }
     }
     // свой TURN-сервер — для сетей, где напрямую не соединяет
@@ -1400,7 +1416,7 @@ function settingsDlg() {
     for (const [i, ph, v] of [[tu, 'turn:example.com:3478', turn0.url], [tn, 'Логин', turn0.user], [tp, 'Пароль', turn0.pass]]) { i.type = 'text'; i.placeholder = ph; i.value = v || ''; i.autocomplete = 'off'; i.spellcheck = false; }
     adv.append(el('summary', '', 'Связь через свой сервер (TURN)'), el('p', '', 'Обычно не нужно. Если с кем-то не соединяет — так бывает в мобильных сетях и за строгими роутерами, — впиши адрес своего TURN-сервера, и связь пойдёт через него.'), tu, tn, tp);
     card.append(adv);
-    card.append(el('p', '', (APP ? 'Закрытое окно не выключает Кинозал: он ждёт сообщений у часов на панели задач. Совсем выйти — правый клик по значку → «Выйти».' : window.kzWeb?.standalone() ? 'Сообщения и звонки приходят, пока Кинозал открыт. Всё, что отправили без тебя, догрузится при следующей встрече.' : 'Сообщения и звонки приходят, пока Кинозал открыт. Чтобы он был под рукой, установи его: меню браузера → «Установить приложение» или «На экран „Домой“». Переписка хранится в этом браузере — не очищай данные сайта.') + (appVer ? ' Версия ' + appVer + '.' : '')));
+    card.append(el('p', '', (ANDROID ? 'Кнопка «Назад» на списке чатов сворачивает Кинозал, а не закрывает: он ждёт сообщений в фоне — в шторке виден значок «Кинозал в сети». Если смахнуть его из недавних, сообщения придут при следующем открытии.' : APP ? 'Закрытое окно не выключает Кинозал: он ждёт сообщений у часов на панели задач. Совсем выйти — правый клик по значку → «Выйти».' : window.kzWeb?.standalone() ? 'Сообщения и звонки приходят, пока Кинозал открыт. Всё, что отправили без тебя, догрузится при следующей встрече.' : 'Сообщения и звонки приходят, пока Кинозал открыт. Чтобы он был под рукой, установи его: меню браузера → «Установить приложение» или «На экран „Домой“». Переписка хранится в этом браузере — не очищай данные сайта.') + (appVer ? ' Версия ' + appVer + '.' : '')));
     const row = el('div', 'row');
     row.append(btnEl('Отмена', '', close), btnEl('Сохранить', 'pri', () => {
       const n = clean(name.value, 40); if (!n) { name.focus(); return; }

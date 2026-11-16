@@ -1,7 +1,7 @@
 {
   "name": "kinozal",
   "productName": "Кинозал",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "Кинозал — мессенджер, видеозвонки и кино вместе",
   "main": "main.js",
   "author": "Kinozal",
@@ -10,13 +10,17 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win nsis --x64 --publish never",
-    "release": "electron-builder --win nsis --x64 --publish always"
+    "release": "electron-builder --win nsis --x64 --publish always",
+    "android": "node scripts/build-www.js && npx cap sync android && cd android && gradlew.bat assembleRelease"
   },
   "dependencies": {
     "electron-updater": "6.3.9",
     "peerjs": "1.5.4"
   },
   "devDependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/cli": "8.6.2",
+    "@capacitor/core": "8.6.2",
     "electron": "45.2.1",
     "electron-builder": "25.1.8"
   },
@@ -38,6 +42,7 @@
       "build/icon.png",
       "package.json",
       "web.js",
+      "android.js",
       "mobile.css",
       "vendor/**",
       "icons/**",

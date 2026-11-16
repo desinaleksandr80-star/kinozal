@@ -1,0 +1,18 @@
+{
+  "appId": "app.kinozal.messenger",
+  "appName": "Кинозал",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0c1214",
+    "appendUserAgent": "KinozalAndroid",
+    "allowMixedContent": false,
+    "captureInput": false,
+    "webContentsDebuggingEnabled": true
+  },
+  "plugins": {
+    "SystemBars": {
+      "style": "DARK",
+      "initialViewportFitValueHint": "cover"
+    }
+  }
+}

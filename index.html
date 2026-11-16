@@ -20,6 +20,7 @@
 <link rel="stylesheet" href="mobile.css">
 <script src="theme.js"></script>
 <script src="web.js"></script>
+<script src="android.js"></script>
 <script src="vendor/peerjs.min.js"></script>
 <script src="vendor/qrcode.js"></script>
 <script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
@@ -322,6 +323,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
         <span class="grow hall-only"></span>
         <button id="micBtn">Микрофон вкл</button>
         <button id="camBtn">Камера вкл</button>
+        <button id="spkBtn" class="android-only" title="Громкая связь" aria-label="Громкая связь">Динамик</button>
         <button id="flipBtn" class="touch-only" title="Другая камера" aria-label="Другая камера">Другая камера</button>
         <button id="fxBtn" title="Реакция — её увидят все в зале" aria-label="Реакция">😊</button>
         <button id="chatBtn" class="hall-only phone-only" aria-label="Чат и участники">Чат</button>
@@ -542,7 +544,7 @@ let micReal=false,camReal=false,micErr='',camErr='',actx=null;
 // true — по-старому, только голоса звонка. Старый движок не знает 'all' — тогда тоже по-старому.
 let ecAll=store.get('ec','all')!=='voices';
 const ecVal=()=>ecAll?'all':true;
-const jlog=(...a)=>{try{window.kinozalApp?.log?.(...a);}catch(e){}};
+const jlog=(...a)=>{try{(window.kinozalApp||window.kzAndroid)?.log?.(...a);}catch(e){}};
 const gum=async c=>{
   try{return await navigator.mediaDevices.getUserMedia(c);}
   catch(e){
@@ -1218,7 +1220,7 @@ $('#shareQ').value=PRESETS[store.get('shareQ','motion')]?store.get('shareQ','mot
 $('#shareQ').onchange=e=>store.set('shareQ',e.target.value);
 $('#pickAudio').checked=store.get('pickAudio','1')==='1';
 $('#pickAudio').onchange=e=>store.set('pickAudio',e.target.checked?'1':'0');
-if(!navigator.mediaDevices?.getDisplayMedia){$('#shareBtn').hidden=true;$('#shareQ').hidden=true;}
+if(!navigator.mediaDevices?.getDisplayMedia||window.kzAndroid){$('#shareBtn').hidden=true;$('#shareQ').hidden=true;}
 $('#shareBtn').onclick=()=>shareOut?stopShare():startShare();
 $('#shareStop').onclick=()=>stopShare();
 $('#pvBtn').onclick=()=>{
@@ -1926,6 +1928,7 @@ document.addEventListener('drop',e=>e.preventDefault());
   }
 })();
 // ---------- телефон: другая камера, чат шторкой ----------
+$('#spkBtn').onclick=async()=>{const r=await window.kzAndroid?.toggleSpeaker();const b=$('#spkBtn');b.classList.toggle('off',r==='earpiece');osd(r==='headset'?'Звук в наушниках':r==='earpiece'?'Звук — у уха':'Громкая связь');};
 $('#flipBtn').onclick=()=>{facing=facing==='user'?'environment':'user';camId='';store.set('cam','');switchCam('').then(()=>{document.getElementById('tile-me')?.classList.toggle('rear',facing==='environment');});};
 $('#chatBtn').onclick=()=>{const r=$('#room');r.classList.toggle('sheet');$('#chatBtn').classList.remove('new');if(r.classList.contains('sheet'))$('#msgs').scrollTop=$('#msgs').scrollHeight;};
 $('#callStage').addEventListener('click',()=>$('#room').classList.remove('sheet'));

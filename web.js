@@ -13,7 +13,8 @@
   if (touch) { fit(); vv?.addEventListener('resize', fit); vv?.addEventListener('scroll', fit); addEventListener('orientationchange', () => setTimeout(fit, 350)); }
 
   // работа без сети и «установить как приложение»
-  if (!isApp && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  const native = !!window.Capacitor?.isNativePlatform?.();
+  if (!isApp && !native && 'serviceWorker' in navigator && /^https?:$/.test(location.protocol)) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   let deferred = null;
   addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; });
   addEventListener('appinstalled', () => { deferred = null; });

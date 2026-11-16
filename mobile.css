@@ -1,7 +1,7 @@
 /* Кинозал на телефоне и планшете: раскладка звонка под палец, шторка чата, поля под клавиатуру.
    Здесь же — реакции, летящие поверх экрана (они есть и на компьютере). */
-.touch-only,.phone-only{display:none!important}
-html.touch .touch-only{display:inline-flex!important}
+.touch-only,.phone-only,.android-only{display:none!important}
+html.touch .touch-only,html.android .android-only{display:inline-flex!important}
 
 /* реакции поверх экрана */
 .fx{position:absolute;bottom:12%;z-index:6;pointer-events:none;display:grid;justify-items:center;gap:2px;animation:kzfx 2.9s ease-out forwards}
@@ -82,6 +82,8 @@ html.touch #room .keys{display:none}
   #room #micBtn.off{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb3a3' stroke-width='2' stroke-linecap='round'><rect x='9' y='2' width='6' height='12' rx='3'/><path d='M5 11a7 7 0 0 0 14 0M12 18v4M4 3l16 18'/></svg>")}
   #room #camBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 10l5-3v10l-5-3z'/><rect x='2' y='6' width='13' height='12' rx='3'/></svg>")}
   #room #camBtn.off{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb3a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M15 10l5-3v10l-5-3z'/><rect x='2' y='6' width='13' height='12' rx='3'/><path d='M3 3l18 18'/></svg>")}
+  #room #spkBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 9v6h4l5 4V5L8 9z'/><path d='M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12'/></svg>")}
+  #room #spkBtn.off{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffb3a3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 9v6h4l5 4V5L8 9z'/></svg>")}
   #room #flipBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 10a8 8 0 0 1 14-4l2 2M20 4v4h-4M20 14a8 8 0 0 1-14 4l-2-2M4 20v-4h4'/></svg>")}
   #room #chatBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 5h16v11H9l-5 4z'/></svg>")}
   #room #shareBtn{background-image:url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'><rect x='3' y='4' width='18' height='12' rx='2'/><path d='M8 20h8M12 16v4'/></svg>")}
