@@ -7,7 +7,7 @@
 'use strict';
 const APP = window.kinozalApp || null;
 const ICE = { iceServers: [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }] };
-const LIMIT = 12e6;                 // самый большой файл в сообщении (кружочек ~5 МБ, фото до 8 МБ)
+const LIMIT = 25e6;                 // самый большой файл в сообщении (кружочек ~5 МБ, фото до 8 МБ, документ до 25 МБ)
 const SYNC_DEPTH = 300;             // сколько последних сообщений чата сверяем при встрече
 const DOWNLOAD = 'https://github.com/desinaleksandr80-star/kinozal/releases/latest/download/Kinozal-Setup.exe';
 
@@ -23,6 +23,7 @@ const uid = () => Date.now().toString(36) + '-' + b64(rnd(9)).replace(/[+/=]/g, 
 const hash = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) | 0; return Math.abs(h); };
 function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 const store = { get(k, d) { try { const v = localStorage.getItem('kinozal-' + k); return v === null ? d : v; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem('kinozal-' + k, v); } catch (e) {} } };
+const jlog = (...a) => { try { APP?.log?.(...a); } catch (e) {} };  // в журнал %APPDATA%\Кинозал\logs
 function toast(t) { const e = $('#toast'); if (!e) return; e.textContent = t; e.classList.add('on'); clearTimeout(toast.h); toast.h = setTimeout(() => e.classList.remove('on'), 4000); }
 const IC = {
   add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="4"/><path d="M2 21c0-3.9 3.1-7 7-7s7 3.1 7 7M19 8v6M16 11h6"/></svg>',
@@ -191,7 +192,7 @@ function startPeer() {
     console.warn('peer', e.type, e.message);
   });
 }
-function setNet(s) { net = s; const e = $('#mxNet'); if (!e) return; e.textContent = { on: 'в сети · ID ' + fmtId(myId), wait: 'подключаюсь…', off: 'нет связи — переподключаюсь', dup: 'этот профиль уже открыт в другом окне' }[s]; e.className = s === 'on' ? '' : 'off'; }
+function setNet(s) { if (s !== net) jlog('[сеть]', s); net = s; const e = $('#mxNet'); if (!e) return; e.textContent = { on: 'в сети · ID ' + fmtId(myId), wait: 'подключаюсь…', off: 'нет связи — переподключаюсь', dup: 'этот профиль уже открыт в другом окне' }[s]; e.className = s === 'on' ? '' : 'off'; }
 function dialList() {
   const set = new Set();
   for (const [u, ct] of Object.entries(S.contacts)) if (ct.state !== 'blocked' && (ct.state !== 'req' || S.chats[dmId(u)])) set.add(u);
@@ -211,10 +212,10 @@ window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
 function wire(c, outgoing, u) {
   const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, their: null, q: Promise.resolve() };
   c.on('open', () => { c.send({ t: 'hello', v: 1, id: myId, pub: keys.pub, name: S.me?.name || '', avatar: S.me?.avatar || '', nonce: L.nonce, ver: appVer }); });
-  c.on('data', d => { L.q = L.q.then(() => onData(L, d)).catch(e => console.warn('data', e)); });
+  c.on('data', d => { L.q = L.q.then(() => onData(L, d)).catch(e => console.error('[сообщение] ' + (e?.stack || e))); });
   const end = () => {
     if (outgoing) dialing.delete(u);
-    if (links.get(u) === L) { links.delete(u); if (S.contacts[u]) { S.contacts[u].seen = Date.now(); save(); } presence(u); }
+    if (links.get(u) === L) { links.delete(u); jlog('[связь] нет с', u); if (S.contacts[u]) { S.contacts[u].seen = Date.now(); save(); } presence(u); }
   };
   c.on('close', end); c.on('error', end);
   setTimeout(() => { if (!L.authed) { try { c.close(); } catch (e) {} end(); } }, 25000);
@@ -260,7 +261,7 @@ function linkUp(L) {
     if (exO < myO) { setTimeout(() => L.c.close(), 300); return; }
     setTimeout(() => ex.c.close(), 300);
   }
-  links.set(u, L); dialing.delete(u);
+  links.set(u, L); dialing.delete(u); jlog('[связь] есть с', u, L.their?.ver || '');
   const t = L.their; let ct = S.contacts[u];
   if (ct) { if (t.name) ct.name = t.name; ct.avatar = t.avatar; ct.ver = t.ver; if (ct.state === 'pending') ct.state = 'ok'; }
   else S.contacts[u] = ct = { id: u, name: t.name, avatar: t.avatar, ver: t.ver, state: groupsWith(u).length ? 'member' : 'req', added: Date.now() };
@@ -282,14 +283,15 @@ async function onSync(u, d) {
     for (const m of await chatMsgs(c)) if (!theirs.has(m.id)) { if (!await push(u, m)) return; await sleep(5); }
   }
 }
-const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, w: m.w, h: m.h });
+const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, w: m.w, h: m.h, name: m.name, size: m.size });
 async function push(u, m) {
   if (!isOn(u)) return false;
   let b = null;
   if (m.blob) { const bl = await blobGet(m.id); if (bl) b = await bl.arrayBuffer(); }
   return send(u, { t: 'msg', m: wireMsg(m), b });
 }
-const KINDS = ['text', 'img', 'voice', 'circle', 'call', 'sys'];
+const KINDS = ['text', 'img', 'voice', 'circle', 'call', 'sys', 'file'];
+const fileName = s => String(s || 'файл').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, 120) || 'файл';
 function cleanMsg(x) {
   if (!x || typeof x !== 'object') return null;
   const m = { id: clean(x.id, 60), chat: clean(x.chat, 60), from: normId(x.from), ts: +x.ts || 0, kind: String(x.kind) };
@@ -302,6 +304,10 @@ function cleanMsg(x) {
     if (x.dur != null) m.dur = Math.min(3600, Math.max(0, +x.dur || 0));
     if (Array.isArray(x.wave)) m.wave = x.wave.slice(0, 64).map(v => Math.max(0, Math.min(100, v | 0)));
     if (x.w) m.w = x.w | 0; if (x.h) m.h = x.h | 0;
+  }
+  if (m.kind === 'file') {
+    m.blob = 1; m.mime = /^[\w.+-]+\/[\w.+-]+$/.test(String(x.mime || '')) ? String(x.mime) : 'application/octet-stream';
+    m.name = fileName(x.name); m.size = Math.max(0, +x.size || 0);
   }
   if (m.kind === 'call') { m.code = clean(x.code, 8).toUpperCase(); m.room = x.room === 'cinema' ? 'cinema' : 'call'; if (!/^[A-Z0-9]{5}$/.test(m.code)) return null; }
   return m;
@@ -324,7 +330,7 @@ async function onMsg(u, d) {
 // новое сообщение (своё или чужое) — в список, в открытый чат, в уведомления
 function arrived(m) {
   const ch = ensureChat(m.chat);
-  if (!ch.last || m.ts >= ch.last.ts) ch.last = { ts: m.ts, from: m.from, kind: m.kind, text: m.text || '', id: m.id, room: m.room, ack: m.ack };
+  if (!ch.last || m.ts >= ch.last.ts) ch.last = { ts: m.ts, from: m.from, kind: m.kind, text: m.text || '', id: m.id, room: m.room, ack: m.ack, name: m.name };
   const mine = m.from === myId;
   const viewing = open === m.chat && document.visibilityState === 'visible' && document.hasFocus() && $('#mx') && !$('#mx').hidden;
   if (!mine && m.ts > (ch.myRead || 0) && !viewing) ch.unread = (ch.unread || 0) + 1;
@@ -408,7 +414,7 @@ function renderMe() { const b = $('#mxMe'); b.textContent = ''; if (S.me) b.appe
 function lastText(c, l) {
   if (!l) return ['', isDm(c) ? 'Напиши первым' : 'Группа создана'];
   const who = l.from === myId ? 'Ты: ' : !isDm(c) ? nameOf(l.from) + ': ' : '';
-  const t = { img: '🖼 Фото', voice: '🎤 Голосовое сообщение', circle: '⭕ Видеосообщение', call: l.room === 'cinema' ? '🎬 Кинозал' : '📞 Видеозвонок', sys: l.text }[l.kind] || l.text || '';
+  const t = { img: '🖼 Фото', voice: '🎤 Голосовое сообщение', circle: '⭕ Видеосообщение', call: l.room === 'cinema' ? '🎬 Кинозал' : '📞 Видеозвонок', sys: l.text, file: '📄 ' + (l.name || 'Файл') }[l.kind] || l.text || '';
   return [l.kind === 'sys' ? '' : who, t];
 }
 function typingIn(c) { const now = Date.now(); for (const [k, t] of typing) if (k.startsWith(c + '|') && t > now) return k.slice(c.length + 1); return null; }
@@ -495,8 +501,8 @@ async function renderChat() {
       <div class="act"><button class="ib call" title="Видеозвонок">${IC.phone}</button><button class="ib cine" title="Кинозал — смотреть вместе">${IC.film}</button><button class="ib more" title="Ещё">${IC.dots}</button></div></header>
     <div class="mx-banner" hidden></div>
     <div class="mx-msgs" tabindex="-1"></div>
-    <div class="mx-input"><div class="field"><button class="ib clip" title="Отправить фото">${IC.clip}</button><textarea rows="1" placeholder="Сообщение" maxlength="4000"></textarea></div>
-      <button class="rec-btn" title=""></button><div class="rec-hint"></div><input type="file" accept="image/*" multiple hidden></div>
+    <div class="mx-input"><div class="field"><button class="ib clip" title="Фото или файл">${IC.clip}</button><textarea rows="1" placeholder="Сообщение" maxlength="4000"></textarea></div>
+      <button class="rec-btn" title=""></button><div class="rec-hint"></div><input type="file" multiple hidden></div>
     <button class="mx-down" hidden title="Вниз">↓<b hidden></b></button>`;
   main.append(sec);
   $('.back', sec).onclick = closeChat;
@@ -574,6 +580,7 @@ function mEls(m, prev, next) {
   else if (m.kind === 'voice') { b.append(voiceEl(m), metaEl(m)); }
   else if (m.kind === 'circle') { b.append(circleEl(m)); row.append(b); const mt = metaEl(m); b.append(mt); }
   else if (m.kind === 'call') { b.append(callEl(m), metaEl(m)); }
+  else if (m.kind === 'file') { b.append(fileEl(m), metaEl(m)); }
   if (m.kind !== 'circle') row.append(b);
   row.addEventListener('contextmenu', e => { e.preventDefault(); msgMenu(m, e); });
   out.push(row); return out;
@@ -677,6 +684,25 @@ function circleEl(m) {
   };
   return w;
 }
+// документ: имя, размер, по клику — сохранить
+const fmtSize = n => n < 1024 ? n + ' Б' : n < 1048576 ? Math.round(n / 1024) + ' КБ' : (n / 1048576).toFixed(1).replace('.', ',') + ' МБ';
+function fileEl(m) {
+  const w = el('a', 'filecard'); w.href = '#'; w.title = 'Сохранить';
+  const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
+  const ic = el('span', 'ic', ext || '📄'), t = el('div', 't');
+  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить'));
+  w.append(ic, t);
+  w.onclick = async e => { e.preventDefault(); const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
+  return w;
+}
+async function sendFiles(c, files) {
+  for (const f of [...files].slice(0, 10)) {
+    if (f.size > LIMIT) { toast('«' + f.name + '» больше 25 МБ — такой файл не отправить'); continue; }
+    if (!f.size) continue;
+    await post(c, { kind: 'file', name: fileName(f.name), size: f.size }, f.type ? f : new Blob([f], { type: 'application/octet-stream' }));
+  }
+}
+const sendAny = (c, files) => { files = [...files]; const im = files.filter(f => /^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)); const ot = files.filter(f => !im.includes(f)); if (im.length) sendImages(c, im); if (ot.length) sendFiles(c, ot); };
 // приглашение в звонок / кинозал
 function callEl(m) {
   const w = el('div', 'callcard'); w.dataset.code = m.code;
@@ -712,17 +738,17 @@ function setupInput(sec, c) {
     if (ta.value && Date.now() - lastTyping > 2500) { lastTyping = Date.now(); sendChat(c, { t: 'typing', chat: c }); }
   });
   ta.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendText(); } });
-  ta.addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])].filter(x => /^image\//.test(x.type)); if (f.length) { e.preventDefault(); sendImages(c, f); } });
+  ta.addEventListener('paste', e => { const f = [...(e.clipboardData?.files || [])]; if (f.length) { e.preventDefault(); sendAny(c, f); } });
   const sendText = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; drafts[c] = ''; fit(); sync(); post(c, { kind: 'text', text: t.slice(0, 4000) }); };
   $('.clip', sec).onclick = () => file.click();
-  file.onchange = () => { const f = [...file.files]; file.value = ''; if (f.length) sendImages(c, f); };
+  file.onchange = () => { const f = [...file.files]; file.value = ''; if (f.length) sendAny(c, f); };
   // перетащить картинку в чат
   const chat = sec; let depth = 0;
   const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
   chat.addEventListener('dragenter', e => { if (hasFiles(e)) { e.preventDefault(); depth++; } });
   chat.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
   chat.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); });
-  chat.addEventListener('drop', e => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; sendImages(c, e.dataTransfer.files); });
+  chat.addEventListener('drop', e => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; sendAny(c, e.dataTransfer.files); });
   // кнопка справа: есть текст — «отправить»; нет — удерживать для записи, клик — сменить голос/кружочек
   let hold = 0, press = null;
   const say = t => { hint.textContent = t; hint.classList.add('on'); clearTimeout(say.h); say.h = setTimeout(() => hint.classList.remove('on'), 1800); };
@@ -893,7 +919,8 @@ function ring(m) {
   ringing.to = setTimeout(stopRing, 45000);
 }
 function stopRing() { clearInterval(ringT); ringT = 0; try { ringAc?.close(); } catch (e) {} ringAc = null; if (ringing) clearTimeout(ringing.to); ringing = null; document.querySelector('.mx-modal.ring')?.remove(); APP?.flash?.(false); }
-window.kzOnRoom = (ev) => {
+window.kzOnRoom = (ev, info) => {
+  jlog('[зал]', ev, info?.code || '');
   if (ev === 'enter' || ev === 'show') { root.hidden = true; stopRing(); }
   if (ev === 'hide') { root.hidden = false; $('#mxCallbar').hidden = false; renderList(); }
   if (ev === 'hostgone') { toast('Звонок завершён'); setTimeout(() => window.kzRoom?.leave(), 1500); }
@@ -1011,6 +1038,7 @@ function settingsDlg() {
     card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), el('div', 'sep'), snd);
     let auto = null;
     if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode('Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
+    if (APP?.readLog) card.append(btnEl('🧾 Отправить журнал ошибок в чат…', '', () => { close(); sendLogDlg(); }));
     card.append(el('p', '', 'Закрытое окно не выключает Кинозал: он ждёт сообщений у часов на панели задач. Совсем выйти — правый клик по значку → «Выйти».' + (appVer ? ' Версия ' + appVer + '.' : '')));
     const row = el('div', 'row');
     row.append(btnEl('Отмена', '', close), btnEl('Сохранить', 'pri', () => {
@@ -1023,6 +1051,30 @@ function settingsDlg() {
       close();
     }));
     card.append(row);
+  });
+}
+// журнал ошибок — файлом в выбранный чат (например, тому, кто чинит программу)
+function sendLogDlg() {
+  const chats = Object.values(S.chats).filter(ch => (isDm(ch.id) || (S.groups[ch.id] && !S.groups[ch.id].gone))).sort((a, b) => (b.last?.ts || 0) - (a.last?.ts || 0));
+  if (!chats.length) { toast('Сначала добавь собеседника'); return; }
+  modal((card, close) => {
+    const list = el('div', 'picklist');
+    for (const ch of chats) {
+      const p = el('div', 'pick'); p.style.cursor = 'pointer';
+      const t = el('div'); t.append(document.createTextNode(chatTitle(ch.id)));
+      p.append(avEl(ch.id, 38), t);
+      p.onclick = async () => {
+        close();
+        const txt = await APP.readLog().catch(() => '');
+        if (!txt) { toast('Журнал пока пуст'); return; }
+        const name = 'kinozal-log-' + clean(S.me.name, 20).replace(/\s+/g, '_') + '-' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.txt';
+        const blob = new Blob(['\ufeff' + txt], { type: 'text/plain' });
+        await post(ch.id, { kind: 'file', name: fileName(name), size: blob.size }, blob);
+        openChat(ch.id); toast('Журнал отправлен');
+      };
+      list.append(p);
+    }
+    card.append(el('h2', '', 'Кому отправить журнал?'), el('p', '', 'В журнале — запуски, сбои окна и видеокарты, ошибки программы. Переписки и фото туда не попадают.'), list, btnEl('Отмена', '', close));
   });
 }
 function infoDlg(c) {
@@ -1113,7 +1165,7 @@ function chatMenu(c, anchor) {
   const add = (ic, t, f, cls) => { const b = el('button', cls || ''); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
   add(isDm(c) ? '👤' : '👥', isDm(c) ? 'О собеседнике' : 'Участники и название', () => infoDlg(c));
   if (!isDm(c) && !S.groups[c]?.gone) add('➕', 'Добавить участников', () => addMembersDlg(c));
-  add('📷', 'Отправить фото', () => $('.mx-input input[type=file]')?.click());
+  add('📎', 'Отправить фото или файл', () => $('.mx-input input[type=file]')?.click());
   add('🧹', 'Удалить переписку у себя', () => deleteChat(c), 'danger');
   if (isDm(c)) { const u = dmPeer(c); add('⛔', S.contacts[u]?.state === 'blocked' ? 'Разблокировать' : 'Заблокировать', () => S.contacts[u]?.state === 'blocked' ? unblock(u) : block(u), 'danger'); }
   else if (!S.groups[c]?.gone) add('🚪', 'Выйти из группы', () => leaveGroup(c), 'danger');
@@ -1123,8 +1175,24 @@ function chatMenu(c, anchor) {
 // ---------- запуск ----------
 function boot() {
   root.hidden = !!window.kzRoom?.inRoom;
-  renderMe(); renderList(); showEmpty(); startPeer();
+  jlog('[мессенджер] запуск, ID', myId, '· контактов', Object.keys(S.contacts).length, '· чатов', Object.keys(S.chats).length);
+  try { renderMe(); renderList(); showEmpty(); } catch (e) { console.error('[мессенджер] отрисовка: ' + (e?.stack || e)); }
+  startPeer();
+  // страховка: если на экране вдруг не видно ни чатов, ни зала, ни приветствия — показываем чаты
+  setInterval(() => {
+    const room = document.getElementById('room');
+    if (S.me && root.hidden && room?.hidden && !document.querySelector('.mx-hello')) { console.warn('[мессенджер] экран был пустым — показываю чаты'); root.hidden = false; renderList(); }
+  }, 2000);
 }
 window.__mx = { get S() { return S; }, myId, links, openChat, post, get open() { return open; } }; // для диагностики
 if (S.me) boot(); else helloDlg();
-})().catch(e => { console.error('Мессенджер не запустился', e); const t = document.getElementById('toast'); if (t) { t.textContent = 'Мессенджер не запустился: ' + (e?.message || e); t.classList.add('on'); } });
+})().catch(e => {
+  // не оставляем пустой тёмный экран: показываем, что случилось, и кнопку перезапуска
+  console.error('[мессенджер] не запустился: ' + (e?.stack || e));
+  const d = document.createElement('div'); d.className = 'mx-hello';
+  const c = document.createElement('div'); c.className = 'mx-card';
+  const h = document.createElement('h2'); h.textContent = 'Кинозал не запустился';
+  const p = document.createElement('p'); p.textContent = 'Ошибка: ' + (e?.message || e) + '. Перезапусти программу. Если повторится — правый клик по значку у часов → «Открыть журнал ошибок» и пришли файл kinozal.log.';
+  const b = document.createElement('button'); b.className = 'btn pri'; b.textContent = 'Перезапустить'; b.onclick = () => location.reload();
+  c.append(h, p, b); d.append(c); document.body.append(d);
+});

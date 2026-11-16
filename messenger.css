@@ -144,6 +144,12 @@
 .callcard .t b{display:block}
 .callcard .t span{font-size:13px;opacity:.75}
 .callcard .btn{min-height:36px!important;padding:4px 14px}
+.filecard{display:flex;align-items:center;gap:12px;min-width:230px;max-width:340px;padding:4px 2px;color:inherit;text-decoration:none}
+.filecard .ic{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;flex:none;background:rgba(0,0,0,.2);font:800 12px Manrope,sans-serif;letter-spacing:.02em}
+.filecard .t{min-width:0}
+.filecard .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.filecard .t span{font-size:13px;opacity:.75}
+.filecard:hover .t span{text-decoration:underline}
 .m.mine .callcard .btn{background:var(--mineInk);color:var(--mine1);border-color:transparent}
 
 .mx-down{position:absolute;right:22px;bottom:86px;width:44px;height:44px;border-radius:50%;border:1px solid var(--line2);background:#1a2528;color:var(--ink);display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.4);z-index:2}

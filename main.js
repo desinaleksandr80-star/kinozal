@@ -2,10 +2,34 @@
 const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification } = require('electron');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
 // отдельный профиль: Kinozal.exe --profile=2 (удобно запустить две копии на одном компе)
 const prof = process.argv.find(a => a.startsWith('--profile='));
 if (prof) app.setPath('userData', path.join(app.getPath('appData'), 'Kinozal-' + prof.split('=')[1].replace(/[^\w-]/g, '')));
+
+// ---------- журнал: %APPDATA%\Кинозал\logs\kinozal.log ----------
+// Пишем запуск, сбои окна и видеокарты, ошибки страницы. Больше 1 МБ — старый уходит в kinozal.old.log.
+const logDir = () => path.join(app.getPath('userData'), 'logs');
+let logFile = null;
+function log(...a) {
+  try {
+    if (!logFile) {
+      fs.mkdirSync(logDir(), { recursive: true });
+      logFile = path.join(logDir(), 'kinozal.log');
+      try { if (fs.statSync(logFile).size > 1e6) fs.renameSync(logFile, path.join(logDir(), 'kinozal.old.log')); } catch (e) {}
+    }
+    const line = a.map(x => typeof x === 'string' ? x : (() => { try { return JSON.stringify(x); } catch (e) { return String(x); } })()).join(' ');
+    fs.appendFileSync(logFile, new Date().toISOString() + ' ' + line.slice(0, 4000) + '\n');
+  } catch (e) {}
+}
+process.on('uncaughtException', e => log('[main] ошибка:', e?.stack || String(e)));
+process.on('unhandledRejection', e => log('[main] ошибка (promise):', e?.stack || String(e)));
+
+// режим совместимости: без ускорения видеокарты — спасает, если окно чёрное из-за драйвера
+const noGpuFlag = () => path.join(app.getPath('userData'), 'no-gpu');
+const noGpu = (() => { try { return fs.existsSync(noGpuFlag()); } catch (e) { return false; } })();
+if (noGpu) app.disableHardwareAcceleration();
 
 // только одно окно: повторный запуск (двойной клик, ярлык после установщика) показывает уже открытое
 const gotLock = app.requestSingleInstanceLock();
@@ -13,8 +37,28 @@ if (!gotLock) app.quit();
 app.on('second-instance', () => showWin());
 function showWin() {
   if (!win || win.isDestroyed()) return;
+  const wasHidden = !win.isVisible() || win.isMinimized();
   if (win.isMinimized()) win.restore();
   win.show(); win.focus(); win.flashFrame(false);
+  if (wasHidden) repaint('show');
+}
+// На части видеокарт окно, которое достали из трея, остаётся чёрным, пока его не перерисовать.
+// Поэтому после показа просим страницу перерисоваться и чуть «шевелим» размер окна.
+function repaint(why) {
+  if (!win || win.isDestroyed()) return;
+  log('[окно] перерисовка:', why);
+  try { win.webContents.invalidate(); } catch (e) {}
+  setTimeout(() => {
+    if (!win || win.isDestroyed()) return;
+    try { win.webContents.invalidate(); } catch (e) {}
+    if (win.isMaximized() || win.isFullScreen() || win.isMinimized()) return;
+    const [w, h] = win.getSize(); win.setSize(w + 1, h); setTimeout(() => { if (!win.isDestroyed()) win.setSize(w, h); }, 80);
+  }, 200);
+}
+function setNoGpu(on) {
+  try { if (on) fs.writeFileSync(noGpuFlag(), 'Кинозал без ускорения видеокарты. Удалите файл, чтобы вернуть как было.'); else fs.rmSync(noGpuFlag(), { force: true }); } catch (e) {}
+  log('[gpu] режим совместимости:', on ? 'вкл' : 'выкл', '— перезапуск');
+  quitting = true; app.relaunch(); app.exit(0);
 }
 if (process.platform === 'win32') app.setAppUserModelId('local.kinozal.app'); // без этого Windows не показывает уведомления
 
@@ -32,13 +76,17 @@ let picked = null; // что выбрали в окне «Что показат�
 // мессенджер работает в фоне: крестик прячет окно в трей, выход — через меню значка
 let tray = null, quitting = false, trayHinted = false;
 const startHidden = process.argv.includes('--hidden'); // автозапуск с Windows — сразу в трей
-app.on('before-quit', () => { quitting = true; });
+app.on('before-quit', () => { quitting = true; log('[выход]'); });
 function setupTray() {
   const img = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 16, height: 16 });
   tray = new Tray(img);
   tray.setToolTip(TITLE);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: 'Открыть Кинозал', click: showWin },
+    { label: 'Перезагрузить окно', click: () => { log('[окно] перезагрузка из трея'); showWin(); win?.webContents.reload(); } },
+    { type: 'separator' },
+    { label: 'Чёрный экран? Режим без видеокарты', type: 'checkbox', checked: noGpu, click: i => setNoGpu(i.checked) },
+    { label: 'Открыть журнал ошибок', click: () => { log('[журнал] открыт'); shell.openPath(logDir()); } },
     { type: 'separator' },
     { label: 'Выйти', click: () => { quitting = true; app.quit(); } }
   ]));
@@ -61,7 +109,8 @@ function setupUpdates() {
   autoUpdater.on('update-available', i => sendUpd('available', { version: i.version }));
   autoUpdater.on('download-progress', p => sendUpd('progress', { version: updState?.version, percent: Math.round(p.percent) }));
   autoUpdater.on('update-downloaded', i => sendUpd('downloaded', { version: i.version }));
-  autoUpdater.on('error', e => { console.error('update:', e?.message || e); if (updState?.type !== 'downloaded') updState = null; });
+  autoUpdater.on('error', e => { log('[обновление] ошибка:', e?.message || String(e)); if (updState?.type !== 'downloaded') updState = null; });
+  autoUpdater.on('update-downloaded', i => log('[обновление] скачана', i.version));
   const check = () => autoUpdater.checkForUpdates().catch(() => {});
   setTimeout(check, 4000);
   setInterval(check, 4 * 3600 * 1000);
@@ -79,7 +128,29 @@ function createWindow() {
     }
   });
   win.setMenuBarVisibility(false);
+  const wc = win.webContents;
+  // ошибки страницы — в журнал
+  wc.on('console-message', (e, ...old) => {
+    const [level, message, line, source] = old;
+    const lv = e?.level ?? level, msg = e?.message ?? message, ln = e?.lineNumber ?? line, src = e?.sourceId ?? source;
+    if (lv === 'warning' || lv === 'error' || lv === 2 || lv === 3) log('[страница]', lv === 'error' || lv === 3 ? 'ОШИБКА' : 'предупр.', String(msg), '@' + String(src || '').split('/').pop() + ':' + ln);
+  });
+  wc.on('did-fail-load', (e, code, desc) => log('[окно] не загрузилось:', code, desc));
+  // страница упала — поднимаем заново, а не оставляем чёрное окно
+  wc.on('render-process-gone', (e, d) => {
+    log('[окно] страница упала:', d.reason, d.exitCode);
+    if (!quitting && d.reason !== 'clean-exit') setTimeout(() => { if (!win.isDestroyed()) { log('[окно] перезагружаю'); wc.reload(); } }, 1000);
+  });
+  // зависла дольше 20 секунд — тоже перезагружаем
+  let hang = 0;
+  wc.on('unresponsive', () => { log('[окно] не отвечает'); clearTimeout(hang); hang = setTimeout(() => { log('[окно] зависла — перезагружаю'); try { wc.forcefullyCrashRenderer(); } catch (e) {} setTimeout(() => !win.isDestroyed() && wc.reload(), 500); }, 20000); });
+  wc.on('responsive', () => { if (hang) log('[окно] снова отвечает'); clearTimeout(hang); hang = 0; });
+  wc.on('before-input-event', (e, i) => { if (i.type === 'keyDown' && (i.key === 'F5' || (i.control && i.key.toLowerCase() === 'r'))) { log('[окно] перезагрузка клавишей'); wc.reload(); e.preventDefault(); } });
+  win.on('restore', () => repaint('restore'));
+  win.on('show', () => log('[окно] показано'));
+  win.on('hide', () => log('[окно] спрятано в трей'));
   win.on('close', e => {
+    log('[окно] закрытие', quitting ? '(выход)' : tray ? '(в трей)' : '(без трея)');
     if (quitting || !tray) return;
     e.preventDefault(); win.hide();
     if (!trayHinted && Notification.isSupported()) {
@@ -98,6 +169,20 @@ function createWindow() {
 
 app.whenReady().then(() => {
   if (!gotLock) return;
+  log('==== запуск Кинозал', app.getVersion(), '| Windows', os.release(), process.arch, '| Electron', process.versions.electron,
+    '| без видеокарты:', noGpu, '| скрыто:', startHidden, '| GPU:', app.getGPUFeatureStatus?.());
+  // видеокарта: процесс GPU падает раз за разом — включаем режим совместимости сами
+  let gpuCrashes = 0;
+  app.on('child-process-gone', (e, d) => {
+    log('[процесс] упал:', d.type, d.reason, d.exitCode, d.name || '');
+    if (d.type === 'GPU' && d.reason !== 'clean-exit' && ++gpuCrashes >= 3 && !noGpu) {
+      log('[gpu] видеокарта падает — включаю режим совместимости');
+      if (Notification.isSupported()) new Notification({ title: TITLE, body: 'Видеокарта сбоит — перезапускаю Кинозал в режиме совместимости.' }).show();
+      setTimeout(() => setNoGpu(true), 1500);
+    }
+  });
+  setTimeout(() => log('[gpu] через 15 с:', app.getGPUFeatureStatus?.()), 15000);
+  app.getGPUInfo?.('basic').then(i => log('[gpu]', (i?.gpuDevice || []).map(g => (g.active ? '*' : '') + g.vendorId + ':' + g.deviceId + ' ' + (g.driverVersion || '')).join(' | '))).catch(() => {});
   const ses = session.defaultSession;
   const allowed = ['media', 'display-capture', 'fullscreen', 'clipboard-sanitized-write', 'clipboard-read'];
   ses.setPermissionRequestHandler((wc, perm, cb) => cb(allowed.includes(perm)));
@@ -140,6 +225,13 @@ app.whenReady().then(() => {
     n.on('click', () => { showWin(); if (o.chat) win?.webContents.send('kz:openChat', String(o.chat)); });
     n.show();
   });
+  // журнал — чтобы отправить его в чат (например, разработчику)
+  ipcMain.handle('kz:readLog', () => {
+    let s = '';
+    for (const f of ['kinozal.old.log', 'kinozal.log']) try { s += fs.readFileSync(path.join(logDir(), f), 'utf8'); } catch (e) {}
+    return s.slice(-1.5e6);
+  });
+  ipcMain.on('kz:log', (e, ...a) => log('[страница]', ...a.map(x => String(x).slice(0, 2000))));
   ipcMain.handle('kz:autostart', (e, on) => {
     if (!app.isPackaged) return false;
     if (typeof on === 'boolean') app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'] });
