@@ -5,7 +5,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Кинозал — смотрим вместе</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="messenger.css">
 <script src="node_modules/peerjs/dist/peerjs.min.js"></script>
 <script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <style>
@@ -27,24 +28,13 @@ label{display:block;font-size:14px;color:var(--mute);margin:0 0 6px}
 code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:block;overflow-wrap:anywhere;color:#cfe9e4}
 [hidden]{display:none!important}
 
-/* лобби */
-.lobby{max-width:1100px;margin:0 auto;padding:clamp(24px,5vw,64px) max(5vw,16px);display:grid;gap:32px}
-.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:center}
-.hero h1{font-size:clamp(34px,6vw,56px)}
-.hero p{color:var(--mute);font-size:17px;max-width:46ch;margin:16px 0 0}
-.art{width:100%;height:auto;display:block}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:20px}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px;display:grid;gap:14px;align-content:start}
-.card h2{font-size:20px}
-.card p{margin:0;color:var(--mute);font-size:15px}
-.code-in{text-transform:uppercase;letter-spacing:.2em;font-weight:700}
-.tips{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:12px 28px;margin:0;padding:0;list-style:none;color:var(--mute);font-size:14px}
-.tips b{color:var(--ink)}
 
 /* зал */
 .room{display:grid;grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 .bar{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;padding:12px max(2vw,14px);border-bottom:1px solid var(--line);background:var(--panel)}
 .bar h1{font-size:20px}
+.barl{display:flex;align-items:center;gap:14px}
+.bar .back{min-height:38px;padding:6px 14px;font-size:14px}
 .codebox{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px;color:var(--mute)}
 .codebox strong{font-family:Unbounded,sans-serif;font-size:20px;color:var(--acc);letter-spacing:.15em}
 .hall{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;padding:16px max(2vw,14px)}
@@ -184,8 +174,6 @@ button.mini{min-height:32px;padding:4px 10px;font-size:13px;font-weight:600;bord
 .alone{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);background:rgba(0,0,0,.6);padding:8px 16px;border-radius:999px;color:var(--mute);font-size:14px;white-space:nowrap;pointer-events:none}
 .alone b{color:var(--acc);letter-spacing:.12em}
 .room.hallview .cine,.room:not(.hallview) .hall-only{display:none!important}
-.create-row{display:flex;flex-wrap:wrap;gap:10px}
-.create-row button{flex:1 1 140px}
 .toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;pointer-events:none;background:#f3f6f5;color:#0e1416;padding:12px 18px;border-radius:12px;font-weight:600;max-width:min(90vw,520px);text-align:center;transition:.25s;z-index:9}
 .toast.on{opacity:1;transform:translate(-50%,0)}
 
@@ -233,68 +221,23 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 .upd{position:fixed;right:16px;bottom:16px;z-index:15;width:min(380px,calc(100vw - 32px));display:grid;gap:10px;background:var(--panel);border:1px solid var(--acc);border-radius:14px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.5);font-size:14px}
 .upd .row{display:flex;flex-wrap:wrap;gap:8px}
 .upd button{min-height:38px;padding:6px 14px;font-size:14px}
-.ver{margin:-16px 0 0;color:var(--mute);font-size:13px}
 
 @media(max-width:900px){.hall,.room.hallview .hall{grid-template-columns:minmax(0,1fr)}.side{position:static;height:auto}#msgs{max-height:50vh}.room.hallview .callarea{height:auto}.callstage{flex:none;height:60vh}.side{grid-template-rows:auto auto}#tiles{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}
-@media(max-width:600px){.hero{grid-template-columns:minmax(0,1fr)}.art{max-width:420px}.ctrls button{flex:1 1 auto}}
+@media(max-width:600px){.ctrls button{flex:1 1 auto}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
 
-<section class="lobby" id="lobby">
-  <div class="hero">
-    <div>
-      <h1>Кинозал на&nbsp;двоих, троих и&nbsp;больше</h1>
-      <p>Созваниваетесь с камерами и смотрите один фильм секунда в секунду. Пауза, перемотка и субтитры — общие: кто угодно нажал, у всех сработало.</p>
-    </div>
-    <svg class="art" viewBox="0 0 480 300" role="img" aria-label="Экран кинотеатра и луч проектора">
-      <defs>
-        <linearGradient id="beam" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".55"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient>
-        <linearGradient id="scr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd2c4"/><stop offset=".6" stop-color="#ff8a6c"/><stop offset="1" stop-color="#e2553a"/></linearGradient>
-      </defs>
-      <polygon points="440,262 40,26 300,26" fill="url(#beam)"/>
-      <rect x="40" y="26" width="260" height="150" rx="8" fill="url(#scr)"/>
-      <rect x="40" y="26" width="260" height="150" rx="8" fill="none" stroke="#fff" stroke-opacity=".35"/>
-      <circle cx="440" cy="262" r="12" fill="#ff6b4a"/>
-      <g fill="#162023" stroke="#2a3639">
-        <rect x="30" y="226" width="64" height="58" rx="18"/><rect x="110" y="226" width="64" height="58" rx="18"/>
-        <rect x="190" y="226" width="64" height="58" rx="18"/><rect x="270" y="226" width="64" height="58" rx="18"/>
-      </g>
-      <g fill="#5fd4c4"><circle cx="62" cy="214" r="14"/><circle cx="142" cy="210" r="15"/><circle cx="222" cy="214" r="14"/></g>
-    </svg>
-  </div>
-
-  <div class="cards">
-    <div class="card">
-      <h2>Твоё имя</h2>
-      <div><label for="name">Так тебя увидят остальные</label><input type="text" id="name" maxlength="24" placeholder="Например, Саша" autocomplete="nickname"></div>
-    </div>
-    <div class="card">
-      <h2>Я собираю зал</h2>
-      <p>Создай зал и отправь код. Можно сразу кино, а можно просто созвониться — экран включишь, когда захочешь.</p>
-      <div class="create-row"><button class="main" id="createBtn">Кинозал</button><button id="callBtn">Просто созвон</button></div>
-    </div>
-    <div class="card">
-      <h2>Меня позвали</h2>
-      <div><label for="codeIn">Код зала</label><input type="text" id="codeIn" class="code-in" maxlength="5" placeholder="ABCDE" autocomplete="off"></div>
-      <button id="joinBtn">Войти</button>
-    </div>
-  </div>
-  <ul class="tips">
-    <li><b>Лучшее качество.</b> Если фильм скачан у обоих — второй жмёт «У меня есть этот файл». Каждый смотрит свой файл в полном качестве, а зал держит вас синхронно.</li>
-    <li><b>Если файла нет.</b> Ведущий транслирует фильм сам — до 1080p со стерео-звуком, сколько позволит интернет.</li>
-    <li><b>Показ экрана.</b> Кнопка «Показать экран» в зале — игра, браузер, что угодно, до 60 к/с. В окне выбора оставь галочку «Поделиться системным звуком».</li>
-    <li><b>Наушники.</b> Иначе звук фильма попадёт в микрофон и будет эхо.</li>
-    <li class="web-only"><b>Браузер.</b> Chrome или Edge на компьютере. Файл этой страницы просто перешли брату — пусть откроет его так же.</li>
-    <li class="app-only"><b>Брату.</b> Перешли ему Kinozal-Setup.exe — ставится за пару секунд, дальше обновляется сам. Встречаетесь по коду зала.</li>
-  </ul>
-  <p class="ver app-only" id="ver"></p>
-</section>
+<!-- старое лобби больше не показывается: в зал попадают из мессенджера (messenger.js). Поля нужны коду зала. -->
+<div id="lobby" hidden>
+  <input type="text" id="name" maxlength="24"><input type="text" id="codeIn" maxlength="5">
+  <button id="createBtn"></button><button id="callBtn"></button><button id="joinBtn"></button><p id="ver"></p>
+</div>
 
 <section class="room" id="room" hidden>
   <header class="bar">
-    <h1>Кинозал</h1>
+    <div class="barl"><button class="back" id="backBtn" title="К чатам — звонок продолжится">← Чаты</button><h1>Кинозал</h1></div>
     <div class="viewsw" role="group" aria-label="Что на экране"><button id="viewCine" class="on">🎬 Кинозал</button><button id="viewHall">👥 Только зал</button></div>
     <div class="codebox">Код зала <strong id="codeOut">—</strong><button id="copyBtn">Скопировать приглашение</button></div>
   </header>
@@ -1729,7 +1672,7 @@ function onGuestData(d){
       const cues=cleanCues(d.cues);setSubs(cues,String(d.name||'').slice(0,120));
       const who=clean(d.from)||'Кто-то';sys(cues.length?who+' загрузил субтитры: '+subs.name:who+' убрал субтитры');break;
     }
-    case 'bye':hostGone=true;sys('Ведущий закрыл зал');stopShare(true);endShareFrom(hostConn?.peer);mode='none';movie=null;syncOwnBtn();hideOffer();clearScreen('Зал закрыт','Ведущий вышел');break;
+    case 'bye':hostGone=true;sys('Ведущий закрыл зал');window.kzOnRoom?.('hostgone',{});stopShare(true);endShareFrom(hostConn?.peer);mode='none';movie=null;syncOwnBtn();hideOffer();clearScreen('Зал закрыт','Ведущий вышел');break;
   }
 }
 // гость со своим файлом подстраивается под ведущего: большие расхождения — прыжком, мелкие — чуть быстрее/медленнее
@@ -1795,6 +1738,7 @@ function netError(e){
 }
 function enterRoom(){
   inRoom=true;$('#lobby').hidden=true;$('#room').hidden=false;$('#codeOut').textContent=code;
+  window.kzOnRoom?.('enter',{code,isHost});
   $('#fileBtn').hidden=!isHost;syncOwnBtn();
   if(isHost)clearScreen('Экран пока тёмный','Нажми «Выбрать фильм» — и он появится у всех');
   else clearScreen('Экран пока тёмный','Фильм появится, когда ведущий его включит');
@@ -1818,7 +1762,8 @@ function reset(){
   hideHelp();hideOffer();$('#ownBtn').hidden=true;
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   $('#createBtn').disabled=$('#callBtn').disabled=$('#joinBtn').disabled=false;
-  $('#room').hidden=true;$('#lobby').hidden=false;
+  $('#room').hidden=true;
+  window.kzOnRoom?.('exit',{});
   try{history.replaceState(null,'',location.pathname+location.search);}catch(e){}
 }
 $('#leaveBtn').onclick=()=>{leaving=true;stopShare();if(isHost)broadcast({t:'bye'});stopMovie();clearScreen('Экран пока тёмный','');reset();};
@@ -1886,6 +1831,27 @@ if(isApp&&window.kinozalApp.version){
 
 document.addEventListener('dragover',e=>e.preventDefault());   // файл, брошенный мимо чата, не должен открыться вместо программы
 document.addEventListener('drop',e=>e.preventDefault());
+// мост для мессенджера: звонок и кинозал из чата — это обычный зал по коду
+window.kzRoom={
+  get inRoom(){return inRoom;},get code(){return code;},get busy(){return inRoom||!!peer;},
+  async create(kind,name){
+    if(inRoom||peer)return code||null;
+    $('#name').value=name||'';await createRoom(kind);
+    for(let i=0;i<80&&!inRoom;i++)await new Promise(r=>setTimeout(r,150));
+    return inRoom?code:null;
+  },
+  async join(c,name){
+    if(inRoom||peer)return false;
+    $('#name').value=name||'';$('#codeIn').value=c;await joinRoom();
+    for(let i=0;i<150&&!inRoom&&peer;i++)await new Promise(r=>setTimeout(r,150));
+    return inRoom;
+  },
+  show(){if(inRoom){$('#room').hidden=false;window.kzOnRoom?.('show',{});requestAnimationFrame(()=>{layoutGrid();refreshPip();});}},
+  hide(){$('#room').hidden=true;window.kzOnRoom?.('hide',{});},
+  leave(){if(inRoom)$('#leaveBtn').click();},
+  setView(v){setView(v);}
+};
+$('#backBtn').onclick=()=>window.kzRoom.hide();
 $('#createBtn').onclick=()=>createRoom('cinema');
 $('#callBtn').onclick=()=>createRoom('call');
 $('#joinBtn').onclick=joinRoom;
@@ -1893,8 +1859,9 @@ $('#codeIn').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom();});
 updSubUi();
 const n=store.get('name','');if(n)$('#name').value=n;
 const h=location.hash.slice(1).toUpperCase();
-if(/^[A-Z0-9]{5}$/.test(h)){$('#codeIn').value=h;$('#joinBtn').classList.add('main');}
+
 }
 </script>
+<script src="messenger.js"></script>
 </body>
 </html>

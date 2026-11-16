@@ -1,5 +1,5 @@
 // Кинозал — настольное приложение (Electron)
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification } = require('electron');
 const path = require('path');
 const os = require('os');
 
@@ -10,11 +10,13 @@ if (prof) app.setPath('userData', path.join(app.getPath('appData'), 'Kinozal-' +
 // только одно окно: повторный запуск (двойной клик, ярлык после установщика) показывает уже открытое
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
-app.on('second-instance', () => {
+app.on('second-instance', () => showWin());
+function showWin() {
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
-  win.show(); win.focus();
-});
+  win.show(); win.focus(); win.flashFrame(false);
+}
+if (process.platform === 'win32') app.setAppUserModelId('local.kinozal.app'); // без этого Windows не показывает уведомления
 
 // фильм и показ экрана не должны тормозить, когда окно свёрнуто или закрыто игрой
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
@@ -27,6 +29,21 @@ app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const TITLE = 'Кинозал';
 let win = null;
 let picked = null; // что выбрали в окне «Что показать?»: {id, audio}
+// мессенджер работает в фоне: крестик прячет окно в трей, выход — через меню значка
+let tray = null, quitting = false, trayHinted = false;
+const startHidden = process.argv.includes('--hidden'); // автозапуск с Windows — сразу в трей
+app.on('before-quit', () => { quitting = true; });
+function setupTray() {
+  const img = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')).resize({ width: 16, height: 16 });
+  tray = new Tray(img);
+  tray.setToolTip(TITLE);
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Открыть Кинозал', click: showWin },
+    { type: 'separator' },
+    { label: 'Выйти', click: () => { quitting = true; app.quit(); } }
+  ]));
+  tray.on('click', showWin);
+}
 
 // ---------- автообновление из релизов GitHub ----------
 // Проверяем при запуске и раз в 4 часа, качаем в фоне, ставим по кнопке или при выходе из программы.
@@ -62,8 +79,17 @@ function createWindow() {
     }
   });
   win.setMenuBarVisibility(false);
+  win.on('close', e => {
+    if (quitting || !tray) return;
+    e.preventDefault(); win.hide();
+    if (!trayHinted && Notification.isSupported()) {
+      trayHinted = true;
+      new Notification({ title: TITLE, body: 'Кинозал работает в фоне — сообщения и звонки будут приходить. Выйти: правый клик по значку у часов.', silent: true }).show();
+    }
+  });
   win.on('page-title-updated', e => e.preventDefault());
   win.loadFile(path.join(__dirname, 'index.html'));
+  if (startHidden) win.once('ready-to-show', () => win.hide());
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -101,9 +127,27 @@ app.whenReady().then(() => {
   // сборка Windows: «звук компьютера без звука Кинозала» Windows умеет только с 11-й (сборка 20348+)
   ipcMain.handle('kz:os', () => ({ platform: process.platform, release: os.release() }));
   ipcMain.handle('kz:updState', () => updState);
-  ipcMain.handle('kz:install', () => { if (updState?.type === 'downloaded') setImmediate(() => autoUpdater.quitAndInstall(true, true)); });
+  ipcMain.handle('kz:install', () => { if (updState?.type === 'downloaded') { quitting = true; setImmediate(() => autoUpdater.quitAndInstall(true, true)); } });
+  // мессенджер: показать окно, мигнуть в панели задач, уведомление Windows, счётчик в трее, автозапуск
+  ipcMain.handle('kz:show', () => showWin());
+  ipcMain.handle('kz:focused', () => !!(win && win.isVisible() && win.isFocused()));
+  ipcMain.handle('kz:flash', (e, on) => { if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(!!on); });
+  ipcMain.handle('kz:unread', (e, n) => { n = Math.max(0, n | 0); tray?.setToolTip(n ? TITLE + ' — непрочитанных: ' + n : TITLE); });
+  ipcMain.handle('kz:notify', (e, o) => {
+    if (!Notification.isSupported() || !o) return;
+    const n = new Notification({ title: String(o.title || TITLE).slice(0, 80), body: String(o.body || '').slice(0, 200), silent: true,
+      icon: path.join(__dirname, 'build', 'icon.png') });
+    n.on('click', () => { showWin(); if (o.chat) win?.webContents.send('kz:openChat', String(o.chat)); });
+    n.show();
+  });
+  ipcMain.handle('kz:autostart', (e, on) => {
+    if (!app.isPackaged) return false;
+    if (typeof on === 'boolean') app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'] });
+    return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
+  });
 
   createWindow();
+  setupTray();
   setupUpdates();
 });
 
