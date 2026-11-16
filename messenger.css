@@ -24,6 +24,7 @@
 
 /* левая колонка */
 .mx-side{position:relative;background:var(--side);border-right:1px solid var(--line2);display:grid;grid-template-rows:auto auto auto minmax(0,1fr);min-height:0}
+.mx-side>.mx-top{grid-row:1}.mx-side>.mx-search{grid-row:2}.mx-side>.mx-callbar{grid-row:3}.mx-side>.mx-list{grid-row:4}
 .mx-top{display:flex;align-items:center;gap:10px;padding:14px 14px 8px}
 .mx-top .me{background:none;border:0;padding:0;border-radius:50%;cursor:pointer}
 .mx-top h1{flex:1;font:700 21px/1 var(--hfont),Unbounded,sans-serif;letter-spacing:.01em}
@@ -80,6 +81,9 @@
 .btn:disabled{opacity:.45;cursor:default;filter:none}
 
 .mx-chat{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;min-height:0;position:relative}
+/* у каждого блока своя строка: скрытая плашка не должна сдвигать переписку в строку «по содержимому»,
+   иначе длинная переписка вылезает за окно и её низ не долистать */
+.mx-chat>.mx-chead{grid-row:1}.mx-chat>.mx-banner{grid-row:2}.mx-chat>.mx-msgs{grid-row:3}.mx-chat>.mx-input{grid-row:4}
 .mx-chead{display:flex;align-items:center;gap:12px;padding:10px 14px;background:color-mix(in srgb,var(--side) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line2);z-index:2}
 .mx-chead .who{flex:1;min-width:0;cursor:pointer}
 .mx-chead .who b{display:block;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
