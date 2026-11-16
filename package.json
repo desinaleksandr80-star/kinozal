@@ -1,7 +1,7 @@
 {
   "name": "kinozal",
   "productName": "Кинозал",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Кинозал — смотрим фильмы и показываем экран вместе",
   "main": "main.js",
   "author": "Kinozal",
@@ -33,6 +33,8 @@
       "index.html",
       "messenger.js",
       "messenger.css",
+      "theme.js",
+      "theme.css",
       "build/icon.png",
       "package.json",
       "node_modules/peerjs/dist/peerjs.min.js"

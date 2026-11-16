@@ -7,6 +7,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="messenger.css">
+<link rel="stylesheet" href="theme.css">
+<script src="theme.js"></script>
 <script src="node_modules/peerjs/dist/peerjs.min.js"></script>
 <script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <style>
@@ -119,6 +121,9 @@ code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px
 .tile{transition:box-shadow .12s}
 .tile.talk{box-shadow:0 0 0 3px var(--acc2) inset}
 .tile.muted::after{content:'🔇';position:absolute;top:6px;right:6px;font-size:14px;background:rgba(0,0,0,.6);border-radius:8px;padding:2px 6px}
+.tile .lat{position:absolute;right:6px;bottom:6px;font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:rgba(0,0,0,.55);color:#7ee2a8;font-variant-numeric:tabular-nums}
+.tile .lat.mid{color:#ffd166}.tile .lat.bad{color:#ff8a7a}
+.tile .lat:empty{display:none}
 /* громкость каждого — появляется при наведении на плитку */
 .tvol{position:absolute;left:6px;right:6px;top:6px;display:flex;align-items:center;gap:6px;margin:0;padding:3px 8px;border-radius:9px;background:rgba(0,0,0,.66);color:var(--ink);font-size:12px;font-weight:700;opacity:0;transition:opacity .15s;z-index:3;cursor:default}
 .tvol input{flex:1;min-width:40px;height:16px}
@@ -330,6 +335,8 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
           <label for="micSel">Микрофон</label>
           <select id="micSel"></select>
           <div class="meter" title="Скажи что-нибудь — полоска должна прыгать"><i id="micMeter"></i></div>
+          <label for="ecSel">Эхоподавление</label>
+          <select id="ecSel"><option value="all">Весь звук компьютера — эха нет даже с колонками</option><option value="voices">Только голоса собеседников</option></select>
           <label for="camSel">Камера</label>
           <select id="camSel"></select>
           <p class="devnote" id="devNote"></p>
@@ -511,8 +518,20 @@ $('#chatInput').addEventListener('paste',onPaste);
 // чтобы потом можно было подменить её на настоящую прямо в идущих звонках, без перезвона.
 let micId=store.get('mic',''),camId=store.get('cam','');
 let micReal=false,camReal=false,micErr='',camErr='',actx=null;
-const gum=c=>navigator.mediaDevices.getUserMedia(c);
-const audioC=id=>({...(id?{deviceId:{exact:id}}:{}),echoCancellation:true,noiseSuppression:true,autoGainControl:true});
+// Эхоподавление микрофона. 'all' — вычитается ВЕСЬ звук, который играет компьютер: голоса (как бы они ни игрались),
+// фильм, показ экрана. Тогда собеседник с колонками вместо наушников не возвращает тебе твой же голос.
+// true — по-старому, только голоса звонка. Старый движок не знает 'all' — тогда тоже по-старому.
+let ecAll=store.get('ec','all')!=='voices';
+const ecVal=()=>ecAll?'all':true;
+const jlog=(...a)=>{try{window.kinozalApp?.log?.(...a);}catch(e){}};
+const gum=async c=>{
+  try{return await navigator.mediaDevices.getUserMedia(c);}
+  catch(e){
+    if(e?.name==='TypeError'&&typeof c.audio?.echoCancellation==='string'){ecAll=false;jlog('[микрофон] режим all не поддерживается');return navigator.mediaDevices.getUserMedia({...c,audio:{...c.audio,echoCancellation:true}});}
+    throw e;
+  }
+};
+const audioC=id=>({...(id?{deviceId:{exact:id}}:{}),echoCancellation:ecVal(),noiseSuppression:true,autoGainControl:true});
 const videoC=id=>({...(id?{deviceId:{exact:id}}:{}),width:{ideal:640},height:{ideal:480}});
 function ctx(){if(!actx||actx.state==='closed'){try{actx=new AudioContext();}catch(e){}}if(actx?.state==='suspended')actx.resume().catch(()=>{});return actx;}
 function silentTrack(){const t=ctx()?.createMediaStreamDestination().stream.getAudioTracks()[0];if(t)t.fake=true;return t;}
@@ -549,6 +568,7 @@ async function initMedia(){
   if(!a)a=await openMic();
   if(!v)v=await openCam();
   micReal=!!a;camReal=!!v;
+  jlog('[микрофон]',a?JSON.stringify({ec:a.getSettings?.().echoCancellation,label:a.label}):'нет: '+micErr,'| камера:',v?v.label:'нет '+camErr);
   local.addTrack(a||silentTrack()||blackTrack());local.addTrack(v||blackTrack());
   watchTrack(a);watchTrack(v);
   if(!micReal)toast(micErr);else if(!camReal&&camErr)toast(camErr+' — подключаюсь без камеры');
@@ -617,6 +637,8 @@ async function fillDevices(){
   $('#devNote').textContent=notes.join(' · ');
 }
 $('#micSel').onchange=e=>switchMic(e.target.value);
+$('#ecSel').value=ecAll?'all':'voices';
+$('#ecSel').onchange=e=>{ecAll=e.target.value==='all';store.set('ec',e.target.value);switchMic(micId);osd(ecAll?'Эхоподавление: весь звук компьютера':'Эхоподавление: только голоса');};
 $('#camSel').onchange=e=>switchCam(e.target.value);
 $('#devBtn').onclick=()=>{$('#devs').hidden=!$('#devs').hidden;if(!$('#devs').hidden)fillDevices();};
 // подключили/отключили наушники: если стоит «как в Windows» и Windows сменила микрофон — переходим на новый
@@ -883,7 +905,7 @@ function stereo(sdp){
   });
 }
 // + видео стартует сразу с ~10 Мбит, а не разгоняется с 0,3 Мбит секунд 15
-const VCODEC=/a=rtpmap:(\d+) (VP8|VP9|H264|AV1)\/90000/gi,START='x-google-start-bitrate=10000;x-google-max-bitrate=40000';
+const VCODEC=/a=rtpmap:(\d+) (VP8|VP9|H264|AV1)\/90000/gi,START='x-google-start-bitrate=6000;x-google-max-bitrate=40000';
 // H.264 вперёд: High-профиль Chromium предлагает, когда видеокарта кодирует сама (NVENC/AMF/QuickSync) —
 // это 1080p60 без нагрузки на процессор. Нет такого — дальше по списку.
 function preferH264(sdp){
@@ -936,9 +958,37 @@ function callCam(id){
   if(camCalls.has(id))return;
   wireCam(peer.call(id,local,{metadata:{kind:'cam',name:myName,ver:myVer}}));
 }
+// ---------- задержка ----------
+// Просим приёмники держать минимальный буфер: в живом разговоре и показе экрана важнее быстро, чем гладко.
+function lowLatency(c){
+  const pc=c?.peerConnection;if(!pc)return;
+  for(const r of pc.getReceivers()){try{r.jitterBufferTarget=0;}catch(e){}try{r.playoutDelayHint=0;}catch(e){}}
+}
+// индикатор на камере: сколько примерно идёт звук от собеседника (половина пинга + буфер приёма)
+async function latencyOf(c){
+  const pc=c?.peerConnection;if(!pc||pc.connectionState!=='connected')return null;
+  let rtt=null,jb=null;
+  try{(await pc.getStats()).forEach(r=>{
+    if(r.type==='candidate-pair'&&r.nominated&&r.state==='succeeded'&&r.currentRoundTripTime!=null)rtt=r.currentRoundTripTime;
+    if(r.type==='inbound-rtp'&&r.kind==='audio'&&r.jitterBufferEmittedCount>0)jb=r.jitterBufferDelay/r.jitterBufferEmittedCount;
+  });}catch(e){return null;}
+  if(rtt==null)return null;
+  return {rtt:Math.round(rtt*1000),total:Math.round(rtt*500+(jb||0)*1000+40)};
+}
+setInterval(async()=>{
+  for(const[id,c]of camCalls){
+    const t=document.getElementById('tile-'+id);if(!t)continue;
+    let b=t.querySelector('.lat');if(!b){b=document.createElement('span');b.className='lat';t.append(b);}
+    const l=await latencyOf(c);
+    if(!l){b.textContent='';continue;}
+    b.textContent=l.total+' мс';b.className='lat'+(l.total>350?' bad':l.total>180?' mid':'');
+    b.title='Задержка звука ~'+l.total+' мс (пинг '+l.rtt+' мс)';
+    if(l.total>500&&!(latencyOf.warn>Date.now()-6e4)){latencyOf.warn=Date.now();jlog('[задержка] большая:',names.get(id)||id,JSON.stringify(l));}
+  }
+},3000);
 function wireCam(c){
   camCalls.set(c.peer,c);
-  c.on('stream',s=>{if(camCalls.get(c.peer)===c){addTile(c.peer,names.get(c.peer)||'Гость',s);monitor(c.peer,s);}});
+  c.on('stream',s=>{if(camCalls.get(c.peer)===c){lowLatency(c);addTile(c.peer,names.get(c.peer)||'Гость',s);monitor(c.peer,s);}});
   const end=()=>{if(camCalls.get(c.peer)===c){camCalls.delete(c.peer);dropTile(c.peer);}};
   c.on('close',end);c.on('error',end);
 }
@@ -1106,7 +1156,7 @@ async function echoGuard(raw){
     if(g.delay>=0&&Math.abs(d-g.delay)<=8){cand=null;return;}   // задержка та же — фильтр уже работает
     if(cand!==null&&Math.abs(cand-d)<=8||f.score>40&&g.delay<0){
       g.delay=d;cand=null;node.port.postMessage({delay:d});store.set('aecDelay',d);
-      console.log('[эхо-защита] задержка '+ms(d)+' мс (уверенность '+f.score.toFixed(0)+')');
+      jlog('[эхо-защита] задержка '+ms(d)+' мс (уверенность '+f.score.toFixed(0)+')');
     }else cand=d;
   };
   g.stop=()=>{try{src.disconnect();b.disconnect(node);node.disconnect();node.port.onmessage=null;}catch(e){}g.track.stop();};
@@ -1221,6 +1271,7 @@ async function doShare(){
     }
     try{at.contentHint='music';}catch(e){}
   }
+  jlog('[показ] звук компьютера:',aec||'выкл',JSON.stringify(at?.getSettings?.()||{}),'| Windows',osInfo?.release||'?');
   if(!inRoom){guard?.stop();s.getTracks().forEach(t=>t.stop());return;}
   if(shareIn){const c=shareIn.call;shareIn=null;c.close();}
   if(movie&&isPlaying())userCtl('pause');
@@ -1265,7 +1316,7 @@ function onShareCall(c,m){
   shareIn={call:c,from:c.peer,name:clean(m.name)||names.get(c.peer)||'Кто-то',frames:0};
   old?.call.close();
   c.answer(undefined,{sdpTransform:hq});
-  c.on('stream',s=>{if(shareIn?.call===c)showShare(s);});
+  c.on('stream',s=>{if(shareIn?.call===c){lowLatency(c);showShare(s);}});
   const end=()=>{if(shareIn?.call===c){shareIn=null;hideShare();}};
   c.on('close',end);c.on('error',end);
 }

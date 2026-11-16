@@ -38,6 +38,7 @@ const IC = {
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12.5-7.5z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  palette: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.9-.6-1.3-.6-2.1 0-.9.7-1.5 1.6-1.5H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.2" fill="currentColor"/><circle cx="10" cy="7" r="1.2" fill="currentColor"/><circle cx="15" cy="7" r="1.2" fill="currentColor"/></svg>',
   logo: '<svg class="logo" viewBox="0 0 480 300" role="img" aria-label="Кинозал"><defs><linearGradient id="mxbeam" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".55"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient><linearGradient id="mxscr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd2c4"/><stop offset=".6" stop-color="#ff8a6c"/><stop offset="1" stop-color="#e2553a"/></linearGradient></defs><polygon points="440,262 40,26 300,26" fill="url(#mxbeam)"/><rect x="40" y="26" width="260" height="150" rx="10" fill="url(#mxscr)"/><circle cx="440" cy="262" r="12" fill="#ff6b4a"/><g fill="#1c282b" stroke="#2a3639"><rect x="30" y="226" width="64" height="58" rx="18"/><rect x="110" y="226" width="64" height="58" rx="18"/><rect x="190" y="226" width="64" height="58" rx="18"/></g><g fill="#5fd4c4"><circle cx="62" cy="214" r="14"/><circle cx="142" cy="210" r="15"/><circle cx="222" cy="214" r="14"/></g></svg>'
 };
 
@@ -138,6 +139,7 @@ function avEl(c, size = 48) {
   d.style.setProperty('--h', hash(seed) % 360);
   if (img && /^data:image\/(webp|jpeg|png);base64,/.test(img)) { const i = el('img'); i.src = img; i.alt = ''; d.append(i); }
   else d.textContent = (String(letter).trim()[0] || '?').toUpperCase();
+  if (!d.classList.contains('grp')) { const u = c.includes(':') ? dmPeer(c) : c; window.kzTheme?.frameAv(d, u === myId ? S.me?.frame : S.contacts[u]?.frame); }
   return d;
 }
 const cleanAvatar = a => (typeof a === 'string' && a.length < 60000 && /^data:image\/(webp|jpeg|png);base64,[A-Za-z0-9+/=]+$/.test(a)) ? a : '';
@@ -211,7 +213,7 @@ setInterval(dialAll, 40000);
 window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
 function wire(c, outgoing, u) {
   const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, their: null, q: Promise.resolve() };
-  c.on('open', () => { c.send({ t: 'hello', v: 1, id: myId, pub: keys.pub, name: S.me?.name || '', avatar: S.me?.avatar || '', nonce: L.nonce, ver: appVer }); });
+  c.on('open', () => { c.send({ t: 'hello', v: 1, id: myId, pub: keys.pub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, nonce: L.nonce, ver: appVer }); });
   c.on('data', d => { L.q = L.q.then(() => onData(L, d)).catch(e => console.error('[сообщение] ' + (e?.stack || e))); });
   const end = () => {
     if (outgoing) dialing.delete(u);
@@ -230,7 +232,7 @@ async function onData(L, d) {
     if (L.their || !d.pub || normId(d.id) !== L.uid) return;
     const pub = { kty: 'EC', crv: 'P-256', x: String(d.pub.x || ''), y: String(d.pub.y || '') };
     if (await idFromPub(pub) !== L.uid) { console.warn('чужой ключ', L.uid); L.c.close(); return; }
-    L.their = { pub, name: clean(d.name, 40), avatar: cleanAvatar(d.avatar), ver: clean(d.ver, 20) };
+    L.their = { pub, name: clean(d.name, 40), avatar: cleanAvatar(d.avatar), ver: clean(d.ver, 20), frame: window.kzTheme?.cleanFrame(d.frame) || null };
     L.c.send({ t: 'proof', sig: await sign(String(d.nonce || '') + '|' + myId) });
     return;
   }
@@ -247,7 +249,7 @@ async function onData(L, d) {
     case 'read': { const c = String(d.chat || ''); if (!shares(c, u)) return; const ch = ensureChat(c); const ts = +d.ts || 0; if (ts > (ch.seen[u] || 0)) { ch.seen[u] = ts; save(); ticksAll(c); renderList(); } return; }
     case 'sync': return onSync(u, d);
     case 'groups': for (const g of [].concat(d.list || []).slice(0, 100)) mergeGroup(g, u); return;
-    case 'profile': { const ct = S.contacts[u]; const n = clean(d.name, 40); if (ct) { if (n) ct.name = n; ct.avatar = cleanAvatar(d.avatar); } for (const g of groupsWith(u)) if (n) g.names[u] = n; save(); renderList(); renderHead(); return; }
+    case 'profile': { const ct = S.contacts[u]; const n = clean(d.name, 40); if (ct) { if (n) ct.name = n; ct.avatar = cleanAvatar(d.avatar); ct.frame = window.kzTheme?.cleanFrame(d.frame) || null; } for (const g of groupsWith(u)) if (n) g.names[u] = n; save(); renderList(); renderHead(); return; }
     case 'typing': { const c = String(d.chat || ''); if (!shares(c, u)) return; typing.set(c + '|' + u, Date.now() + 4500); renderHead(); renderList(); setTimeout(() => { renderHead(); renderList(); }, 4700); return; }
     case 'decline': if (myCall && d.code === myCall.code) toast(nameOf(u) + ' сейчас не может ответить'); return;
     case 'callend': { const code = clean(d.code, 8); if (!code) return; S.ended[code] = Date.now(); save(); if (ringing?.code === code) stopRing(); refreshCallCards(); return; }
@@ -263,8 +265,8 @@ function linkUp(L) {
   }
   links.set(u, L); dialing.delete(u); jlog('[связь] есть с', u, L.their?.ver || '');
   const t = L.their; let ct = S.contacts[u];
-  if (ct) { if (t.name) ct.name = t.name; ct.avatar = t.avatar; ct.ver = t.ver; if (ct.state === 'pending') ct.state = 'ok'; }
-  else S.contacts[u] = ct = { id: u, name: t.name, avatar: t.avatar, ver: t.ver, state: groupsWith(u).length ? 'member' : 'req', added: Date.now() };
+  if (ct) { if (t.name) ct.name = t.name; ct.avatar = t.avatar; ct.ver = t.ver; ct.frame = t.frame; if (ct.state === 'pending') ct.state = 'ok'; }
+  else S.contacts[u] = ct = { id: u, name: t.name, avatar: t.avatar, ver: t.ver, frame: t.frame, state: groupsWith(u).length ? 'member' : 'req', added: Date.now() };
   for (const g of groupsWith(u)) if (t.name) g.names[u] = t.name;
   save(); presence(u);
   const gl = groupsWith(u).map(gWire); if (gl.length) send(u, { t: 'groups', list: gl });
@@ -389,7 +391,7 @@ async function createGroup(name, list) {
 const root = el('div'); root.id = 'mx'; root.hidden = true;
 root.innerHTML = `
 <aside class="mx-side">
-  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1>Чаты<small id="mxNet"></small></h1><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
+  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1>Чаты<small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
   <div class="mx-list" id="mxList"></div>
@@ -402,6 +404,7 @@ document.body.append(root);
 setNet(net);
 $('#mxQ').oninput = () => renderList();
 $('#mxAdd').onclick = () => addContactDlg();
+$('#mxTheme').onclick = () => openTheme();
 $('#mxMe').onclick = () => settingsDlg();
 $('#mxCallbar').onclick = () => window.kzRoom?.show();
 $('#mxFab').onclick = e => { e.stopPropagation(); $('#mxFabMenu').hidden = !$('#mxFabMenu').hidden; };
@@ -793,12 +796,13 @@ async function startRec(c, kind) {
   if (rec) return;
   const r = rec = { c, kind, chunks: [], levels: [], start: 0, locked: false, cancelled: false };
   const micId = store.get('mic', ''), camId = store.get('cam', '');
-  const audio = { echoCancellation: true, noiseSuppression: true, autoGainControl: true, ...(micId ? { deviceId: { ideal: micId } } : {}) };
+  const audio = { echoCancellation: store.get('ec', 'all') === 'voices' ? true : 'all', noiseSuppression: true, autoGainControl: true, ...(micId ? { deviceId: { ideal: micId } } : {}) };
   try {
     r.stream = await navigator.mediaDevices.getUserMedia(kind === 'circle'
       ? { audio, video: { width: { ideal: 480 }, height: { ideal: 480 }, aspectRatio: { ideal: 1 }, frameRate: { ideal: 30 }, ...(camId && camId !== 'off' ? { deviceId: { ideal: camId } } : {}) } }
       : { audio });
   } catch (e) {
+    if (e?.name === 'TypeError' && audio.echoCancellation === 'all') { audio.echoCancellation = true; rec = null; store.set('ec', 'voices'); return startRec(c, kind); }
     rec = null; toast(kind === 'circle' ? 'Нет доступа к камере или микрофону' + (window.kzRoom?.inRoom ? ' — камера занята звонком' : '') : 'Нет доступа к микрофону'); return;
   }
   if (r.cancelled || rec !== r) { r.stream.getTracks().forEach(t => t.stop()); if (rec === r) rec = null; return; }
@@ -1035,7 +1039,7 @@ function settingsDlg() {
     const [ap, inp] = avatarPicker(() => avatar, v => { avatar = v; });
     const name = el('input'); name.type = 'text'; name.maxLength = 40; name.value = S.me.name;
     const snd = el('label', 'switch'), sc = el('input'); sc.type = 'checkbox'; sc.checked = store.get('mxSound', '1') === '1'; snd.append(document.createTextNode('Звук уведомлений'), sc);
-    card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), el('div', 'sep'), snd);
+    card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), el('div', 'sep'), snd);
     let auto = null;
     if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode('Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
     if (APP?.readLog) card.append(btnEl('🧾 Отправить журнал ошибок в чат…', '', () => { close(); sendLogDlg(); }));
@@ -1047,10 +1051,22 @@ function settingsDlg() {
       if (auto) APP.autostart(auto.checked);
       for (const g of Object.values(S.groups)) if (g.names) g.names[myId] = n;
       save(); renderMe(); renderList(); renderHead();
-      for (const u of links.keys()) send(u, { t: 'profile', name: n, avatar });
+      for (const u of links.keys()) send(u, { t: 'profile', name: n, avatar, frame: S.me.frame || null });
       close();
     }));
     card.append(row);
+  });
+}
+// оформление (theme.js): темы, цвета, обои, неон, шрифты; рамка аватарки уходит собеседникам
+function openTheme() {
+  if (!window.kzTheme) { toast('Оформление не загрузилось'); return; }
+  window.kzTheme.open({
+    frame: S.me?.frame, avatar: S.me?.avatar, name: S.me?.name,
+    onFrame: f => {
+      const was = JSON.stringify(S.me.frame || null); S.me.frame = f; save();
+      renderMe(); renderList(); if (open) renderChat();
+      if (was !== JSON.stringify(f || null)) for (const u of links.keys()) send(u, { t: 'profile', name: S.me.name, avatar: S.me.avatar || '', frame: f || null });
+    }
   });
 }
 // журнал ошибок — файлом в выбранный чат (например, тому, кто чинит программу)
