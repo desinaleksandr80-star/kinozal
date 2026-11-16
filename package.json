@@ -28,6 +28,7 @@
     "appId": "local.kinozal.app",
     "productName": "Кинозал",
     "directories": {
+      "app": ".",
       "output": "dist",
       "buildResources": "build"
     },
