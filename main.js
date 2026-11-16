@@ -1,6 +1,7 @@
 // Кинозал — настольное приложение (Electron)
 const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell } = require('electron');
 const path = require('path');
+const os = require('os');
 
 // отдельный профиль: Kinozal.exe --profile=2 (удобно запустить две копии на одном компе)
 const prof = process.argv.find(a => a.startsWith('--profile='));
@@ -97,6 +98,8 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('kz:pick', (e, id, audio) => { picked = { id: String(id), audio: !!audio }; return true; });
   ipcMain.handle('kz:version', () => app.getVersion());
+  // сборка Windows: «звук компьютера без звука Кинозала» Windows умеет только с 11-й (сборка 20348+)
+  ipcMain.handle('kz:os', () => ({ platform: process.platform, release: os.release() }));
   ipcMain.handle('kz:updState', () => updState);
   ipcMain.handle('kz:install', () => { if (updState?.type === 'downloaded') setImmediate(() => autoUpdater.quitAndInstall(true, true)); });
 
