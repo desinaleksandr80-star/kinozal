@@ -1,7 +1,7 @@
 {
   "name": "kinozal",
   "productName": "Кинозал",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Кинозал — мессенджер, видеозвонки и кино вместе",
   "main": "main.js",
   "author": "Kinozal",
