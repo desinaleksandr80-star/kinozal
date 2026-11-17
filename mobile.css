@@ -56,10 +56,12 @@ html.touch #room .keys{display:none}
   #room .barl{gap:0}
   #room .bar .back{font-size:0;width:40px;min-height:40px;padding:0;border-radius:50%;flex:none}
   #room .bar .back::before{content:'←';font-size:20px}
-  #room .viewsw{flex:none}
-  #room .viewsw button{font-size:13px;padding:5px 9px;min-height:32px;white-space:nowrap}
-  #room .codebox{flex-wrap:nowrap;font-size:0;gap:6px;margin-left:auto}
-  #room .codebox strong{font-size:13px;letter-spacing:.08em}
+  /* переключатель сжимается сам, а код зала и кнопка «поделиться» — никогда (иначе кнопка ложится на код) */
+  #room .viewsw{flex:0 1 auto;min-width:0;overflow:hidden}
+  #room .viewsw button{font-size:13px;padding:5px 9px;min-height:32px;white-space:nowrap;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  #room .viewsw i{font-style:normal}
+  #room .codebox{flex:none;flex-wrap:nowrap;font-size:0;gap:6px;margin-left:auto}
+  #room .codebox strong{font-size:13px;letter-spacing:.08em;white-space:nowrap}
   #room #copyBtn{font-size:0;width:38px;min-height:38px;padding:0;border-radius:50%;flex:none;background:var(--panel2) center/20px no-repeat url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round'><path d='M12 15V3M7 8l5-5 5 5M5 14v6h14v-6'/></svg>")}
   #room .hall{display:flex;flex-direction:column;gap:8px;padding:8px 8px calc(80px + env(safe-area-inset-bottom));min-height:0;overflow:hidden}
   #room:not(.hallview) .left{display:flex;flex-direction:column;gap:8px;flex:none}
@@ -108,6 +110,11 @@ html.touch #room .keys{display:none}
   #room.hallview.sheet .side{display:flex;position:fixed;left:0;right:0;top:auto;bottom:calc(78px + env(safe-area-inset-bottom));height:min(64%,520px);z-index:8;background:var(--bg);border-radius:18px 18px 0 0;border-top:1px solid var(--line);padding:10px;box-shadow:0 -14px 40px rgba(0,0,0,.6)}
   .toast{bottom:calc(92px + env(safe-area-inset-bottom))}
   .upd{bottom:calc(86px + env(safe-area-inset-bottom))}
+}
+/* узкий телефон: без значков в переключателе — так шапка влезает целиком */
+@media(max-width:430px){
+  #room .viewsw i{display:none}
+  #room .viewsw button{padding:5px 8px}
 }
 @media(max-width:760px) and (orientation:portrait){
   #room.hallview #tiles.solo .tile.port:not(.float) video{object-fit:cover}

@@ -134,7 +134,7 @@ code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px
 .tile{transition:box-shadow .12s}
 .tile.talk{box-shadow:0 0 0 3px var(--acc2) inset}
 .tile.muted::after{content:'🔇';position:absolute;top:6px;right:6px;font-size:14px;background:rgba(0,0,0,.6);border-radius:8px;padding:2px 6px}
-.tile .lat{position:absolute;right:6px;bottom:6px;font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:rgba(0,0,0,.55);color:#7ee2a8;font-variant-numeric:tabular-nums}
+.tile .lat{position:absolute;right:6px;top:6px;font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:rgba(0,0,0,.55);color:#7ee2a8;font-variant-numeric:tabular-nums}
 .tile .lat.mid{color:#ffd166}.tile .lat.bad{color:#ff8a7a}
 .tile .lat:empty{display:none}
 /* громкость каждого — появляется при наведении на плитку */
@@ -256,7 +256,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 <section class="room" id="room" hidden>
   <header class="bar">
     <div class="barl"><button class="back" id="backBtn" title="К чатам — звонок продолжится">← Чаты</button><h1>Кинозал</h1></div>
-    <div class="viewsw" role="group" aria-label="Что на экране"><button id="viewCine" class="on">🎬 Кинозал</button><button id="viewHall">👥 Только зал</button></div>
+    <div class="viewsw" role="group" aria-label="Что на экране"><button id="viewCine" class="on"><i>🎬 </i>Кинозал</button><button id="viewHall"><i>👥 </i>Только зал</button></div>
     <div class="codebox">Код зала <strong id="codeOut">—</strong><button id="copyBtn">Скопировать приглашение</button></div>
   </header>
   <div class="hall">
@@ -542,7 +542,9 @@ let micReal=false,camReal=false,micErr='',camErr='',actx=null;
 // Эхоподавление микрофона. 'all' — вычитается ВЕСЬ звук, который играет компьютер: голоса (как бы они ни игрались),
 // фильм, показ экрана. Тогда собеседник с колонками вместо наушников не возвращает тебе твой же голос.
 // true — по-старому, только голоса звонка. Старый движок не знает 'all' — тогда тоже по-старому.
-let ecAll=store.get('ec','all')!=='voices';
+// На телефоне — только обычное эхоподавление: «звука компьютера» у телефона нет, а режим 'all' может увести
+// WebView со встроенной эхо-защиты телефона — тогда собеседник слышит себя повтором из динамика.
+let ecAll=!TOUCHDEV&&store.get('ec','all')!=='voices';
 const ecVal=()=>ecAll?'all':true;
 const jlog=(...a)=>{try{(window.kinozalApp||window.kzAndroid)?.log?.(...a);}catch(e){}};
 const gum=async c=>{
@@ -659,6 +661,7 @@ async function fillDevices(){
 }
 $('#micSel').onchange=e=>switchMic(e.target.value);
 $('#ecSel').value=ecAll?'all':'voices';
+if(TOUCHDEV){$('#ecSel').hidden=true;$('label[for=ecSel]').hidden=true;}
 $('#ecSel').onchange=e=>{ecAll=e.target.value==='all';store.set('ec',e.target.value);switchMic(micId);osd(ecAll?'Эхоподавление: весь звук компьютера':'Эхоподавление: только голоса');};
 $('#camSel').onchange=e=>switchCam(e.target.value);
 $('#devBtn').onclick=()=>{$('#devs').hidden=!$('#devs').hidden;if(!$('#devs').hidden)fillDevices();};
