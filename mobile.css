@@ -22,6 +22,7 @@ html.touch *{-webkit-tap-highlight-color:transparent}
 html.touch #mx{height:var(--kzh,100dvh);bottom:auto}
 html.touch #mx textarea,html.touch #mx input,html.touch .mx-card input,html.touch .mx-card textarea,html.touch #room input[type=text],html.touch #room select{font-size:16px}
 html.touch .m{touch-action:pan-y;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+html.touch .ci{-webkit-touch-callout:none}
 html.touch .rec-btn{touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 html.touch .mx-top{padding-top:calc(14px + env(safe-area-inset-top))}
 html.touch .mx-chead{padding-top:calc(10px + env(safe-area-inset-top))}

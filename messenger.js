@@ -258,7 +258,7 @@ async function onData(L, d) {
   switch (d.t) {
     case 'msg': return onMsg(u, d);
     case 'ack': for (const id of [].concat(d.ids || []).slice(0, 500)) { const m = await msgGet(String(id)); if (m && m.from === myId && !m.ack) { m.ack = 1; await msgPut(m); const l = S.chats[m.chat]?.last; if (l?.id === m.id) { l.ack = 1; save(); } tick(m); } } return;
-    case 'read': { const c = String(d.chat || ''); if (!shares(c, u)) return; const ch = ensureChat(c); const ts = +d.ts || 0; if (ts > (ch.seen[u] || 0)) { ch.seen[u] = ts; save(); ticksAll(c); renderList(); } return; }
+    case 'read': { const c = String(d.chat || ''); if (!shares(c, u)) return; const ch = S.chats[c]; if (!ch) return; /* отметка о прочтении не воскрешает удалённый чат */ const ts = +d.ts || 0; if (ts > (ch.seen[u] || 0)) { ch.seen[u] = ts; save(); ticksAll(c); renderList(); } return; }
     case 'sync': return onSync(u, d);
     case 'groups': for (const g of [].concat(d.list || []).slice(0, 100)) mergeGroup(g, u); return;
     case 'profile': { const ct = S.contacts[u]; const n = clean(d.name, 40); if (ct) { if (n) ct.name = n; ct.avatar = cleanAvatar(d.avatar); ct.frame = window.kzTheme?.cleanFrame(d.frame) || null; } for (const g of groupsWith(u)) if (n) g.names[u] = n; save(); renderList(); renderHead(); return; }
@@ -347,7 +347,7 @@ async function onMsg(u, d) {
   const m = cleanMsg(d.m); if (!m) return;
   if (isDm(m.chat)) { if (m.chat !== dmId(u) || (m.from !== u && m.from !== myId)) return; }
   else if (!shares(m.chat, u) || !members(m.chat).includes(m.from)) return;
-  if (S.gone?.[m.id] || await msgGet(m.id)) { send(u, { t: 'ack', ids: [m.id] }); return; }
+  if (S.gone?.[m.id] || m.ts <= (S.cleared?.[m.chat] || 0) || await msgGet(m.id)) { send(u, { t: 'ack', ids: [m.id] }); return; }
   if (m.blob) {
     const b = d.b instanceof ArrayBuffer ? d.b : ArrayBuffer.isView(d.b) ? d.b.buffer.slice(d.b.byteOffset, d.b.byteOffset + d.b.byteLength) : null;
     if (!b || !b.byteLength || b.byteLength > LIMIT) return;
@@ -494,7 +494,15 @@ function renderList() {
     else { const [who, t] = lastText(ch.id, l); if (who) ls.append(el('b', '', who)); ls.append(document.createTextNode(t)); }
     r2.append(ls); if (ch.unread) r2.append(el('span', 'badge', ch.unread > 99 ? '99+' : String(ch.unread)));
     tx.append(r1, r2); it.append(w, tx);
-    it.onclick = () => openChat(ch.id);
+    it.onclick = () => { if (Date.now() - (it._lp || 0) < 700) return; openChat(ch.id); };
+    it.addEventListener('contextmenu', e => { e.preventDefault(); it._lp = Date.now(); listMenu(ch.id, e.clientX, e.clientY); });
+    let lp = 0, p0 = null;
+    it.addEventListener('pointerdown', e => {
+      if (e.pointerType !== 'touch') return; p0 = { x: e.clientX, y: e.clientY };
+      lp = setTimeout(() => { lp = 0; it._lp = Date.now(); try { navigator.vibrate?.(12); } catch (er) {} listMenu(ch.id, p0.x, p0.y); }, 480);
+    });
+    it.addEventListener('pointermove', e => { if (lp && p0 && Math.hypot(e.clientX - p0.x, e.clientY - p0.y) > 10) { clearTimeout(lp); lp = 0; } });
+    for (const t of ['pointerup', 'pointercancel', 'pointerleave']) it.addEventListener(t, () => { clearTimeout(lp); lp = 0; });
     box.append(it);
   }
 }
@@ -1548,12 +1556,51 @@ async function leaveGroup(c) {
   delete S.groups[c]; delete S.chats[c]; save(); await wipeChat(c);
   if (open === c) closeChat(); renderList();
 }
+// удалённое у себя не должно вернуться сверкой при следующей встрече: запоминаем время последнего сообщения
+// и всё, что не новее его, дальше молча отбрасываем (время берём из переписки, а не из часов — часы у всех разные)
+async function markCleared(c) {
+  const top = (await chatMsgs(c, 1))[0];
+  const ts = Math.max(top?.ts || 0, S.chats[c]?.last?.ts || 0, S.cleared?.[c] || 0);
+  if (ts) { (S.cleared ||= {})[c] = ts; save(); }
+}
 async function deleteChat(c) {
   if (!confirm('Удалить переписку у себя? У собеседника она останется.')) return;
-  await wipeChat(c); const ch = S.chats[c]; if (ch) { ch.last = null; ch.unread = 0; }
+  await markCleared(c); await wipeChat(c); const ch = S.chats[c]; if (ch) { ch.last = null; ch.unread = 0; }
   if (!isDm(c) && S.groups[c]?.gone) { delete S.groups[c]; delete S.chats[c]; }
   else if (isDm(c) && S.contacts[dmPeer(c)]?.state === 'req') delete S.chats[c];
   save(); if (open === c) closeChat(); renderList();
+}
+// удалить чат целиком — пропадает из списка; если собеседник напишет снова, чат появится заново
+function removeChat(c) {
+  if (!isDm(c) && S.groups[c] && !S.groups[c].gone) return leaveGroup(c);
+  const u = isDm(c) ? dmPeer(c) : null;
+  modal((card, close) => {
+    const cb = el('input'); cb.type = 'checkbox';
+    const sw = el('label', 'switch'); sw.append(document.createTextNode('Убрать из собеседников'), cb);
+    const row = el('div', 'row');
+    row.append(btnEl('Отмена', '', close), btnEl('Удалить', 'pri', async () => { close(); await dropChat(c, !!u && cb.checked); }));
+    card.append(el('h2', '', 'Удалить чат?'),
+      el('p', '', u ? 'Чат «' + chatTitle(c) + '» и вся переписка удалятся только у тебя — у собеседника останутся. Если он напишет снова, чат появится.' : 'Чат и переписка удалятся у тебя.'),
+      ...(u ? [sw] : []), row);
+  });
+}
+async function dropChat(c, forgetContact) {
+  await markCleared(c); await wipeChat(c);
+  delete S.chats[c]; if (!isDm(c)) delete S.groups[c];
+  if (forgetContact) { const u = dmPeer(c); delete S.contacts[u]; links.get(u)?.c.close(); }
+  save(); if (open === c) closeChat(); renderList(); toast('Чат удалён');
+}
+// меню чата в списке: долгое нажатие на телефоне или правый клик на компьютере
+function listMenu(c, x, y) {
+  closeMenus(); menuAt = Date.now();
+  const mn = el('div', 'menu fabmenu mx-pop');
+  Object.assign(mn.style, { position: 'fixed', left: Math.max(8, Math.min(x, innerWidth - 250)) + 'px', top: Math.max(8, Math.min(y, innerHeight - 160)) + 'px', bottom: 'auto', zIndex: 50 });
+  const add = (ic, t, f, cls) => { const b = el('button', cls || ''); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
+  add('💬', 'Открыть', () => openChat(c));
+  add('🧹', 'Очистить переписку', () => deleteChat(c), 'danger');
+  if (!isDm(c) && S.groups[c] && !S.groups[c].gone) add('🚪', 'Выйти из группы', () => leaveGroup(c), 'danger');
+  else add('🗑', 'Удалить чат', () => removeChat(c), 'danger');
+  document.body.append(mn); mn.addEventListener('click', e => e.stopPropagation());
 }
 function block(u) { const ct = S.contacts[u] ||= { id: u, name: '', added: Date.now() }; ct.state = 'blocked'; save(); links.get(u)?.c.close(); renderList(); renderHead(); toast('Заблокировано'); }
 function unblock(u) { const ct = S.contacts[u]; if (ct) ct.state = 'ok'; save(); dial(u); renderList(); renderHead(); }
@@ -1565,7 +1612,8 @@ function chatMenu(c, anchor) {
   add(isDm(c) ? '👤' : '👥', isDm(c) ? 'О собеседнике' : 'Участники и название', () => infoDlg(c));
   if (!isDm(c) && !S.groups[c]?.gone) add('➕', 'Добавить участников', () => addMembersDlg(c));
   add('📎', 'Отправить фото или файл', () => $('.mx-input input[type=file]')?.click());
-  add('🧹', 'Удалить переписку у себя', () => deleteChat(c), 'danger');
+  add('🧹', 'Очистить переписку у себя', () => deleteChat(c), 'danger');
+  if (isDm(c) || S.groups[c]?.gone) add('🗑', 'Удалить чат', () => removeChat(c), 'danger');
   if (isDm(c)) { const u = dmPeer(c); add('⛔', S.contacts[u]?.state === 'blocked' ? 'Разблокировать' : 'Заблокировать', () => S.contacts[u]?.state === 'blocked' ? unblock(u) : block(u), 'danger'); }
   else if (!S.groups[c]?.gone) add('🚪', 'Выйти из группы', () => leaveGroup(c), 'danger');
   document.body.append(mn); mn.addEventListener('click', e => e.stopPropagation());
