@@ -242,7 +242,19 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 
 @media(max-width:900px){.hall,.room.hallview .hall{grid-template-columns:minmax(0,1fr)}.side{position:static;height:auto}#msgs{max-height:50vh}.room.hallview .callarea{height:auto}.callstage{flex:none;height:60vh}.side{grid-template-rows:auto auto}#tiles{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}}
 @media(max-width:600px){.ctrls button{flex:1 1 auto}}
-@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+/* анимации зала: вход, камеры, показ экрана, сообщения */
+#room:not([hidden]),#lobby:not([hidden]){animation:kzIn .3s cubic-bezier(.2,.8,.2,1)}
+#tiles>.tile{animation:kzTileIn .38s cubic-bezier(.2,1.25,.4,1) backwards}
+.tile{transition:box-shadow .2s}
+.share:not([hidden]){animation:kzTileIn .32s cubic-bezier(.2,.8,.2,1)}
+.fcam{animation:kzTileIn .3s cubic-bezier(.2,.8,.2,1) backwards}
+#msgs>.msg{animation:kzMsg .26s cubic-bezier(.2,.8,.2,1) backwards}
+#unmute:not([hidden]),#shareUnmute:not([hidden]){animation:kzNudge 1.8s ease-in-out infinite}
+@keyframes kzIn{from{opacity:0}}
+@keyframes kzTileIn{from{opacity:0;transform:scale(.88)}}
+@keyframes kzMsg{from{opacity:0;transform:translateY(8px)}}
+@keyframes kzNudge{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.06)}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
 <body>

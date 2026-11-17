@@ -88,6 +88,7 @@ html.neon-text .kzt-lh b{text-shadow:0 0 2px var(--neon),0 0 calc(var(--ng) * .7
 .kzt-tab{min-height:38px!important;padding:6px 14px;border-radius:19px;border:1px solid var(--line2);background:var(--btn);color:var(--mute);font:700 13.5px var(--font),Manrope,sans-serif;cursor:pointer}
 .kzt-tab:hover{background:var(--btnh);color:var(--ink)}
 .kzt-tab.on{background:linear-gradient(135deg,var(--mine1),var(--mine2));color:var(--mineInk);border-color:transparent}
+.kzt-body.sw{animation:mxin .22s ease-out}
 .kzt-body{overflow:auto;display:grid;gap:18px;align-content:start;padding-right:4px;min-height:300px}
 .kzt-sec{display:grid;gap:10px}
 .kzt-sec h3{margin:4px 0 0;font:800 12px var(--font),Manrope,sans-serif;letter-spacing:.07em;text-transform:uppercase;color:var(--mute)}

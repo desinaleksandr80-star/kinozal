@@ -333,3 +333,44 @@
 .idcard{flex-wrap:wrap}.idcard>div{flex:1 1 150px}
 html.kz-shake body{animation:kzshake .6s}
 @keyframes kzshake{10%,50%,90%{transform:translateX(-9px)}30%,70%{transform:translateX(9px)}}
+
+/* ---------- анимации: только transform и opacity — плавно и на слабом телефоне ---------- */
+:root{--ease-out:cubic-bezier(.2,.8,.2,1);--ease-spring:cubic-bezier(.2,1.25,.4,1)}
+/* нажатие: кнопка чуть проседает */
+button,.ci{transition:background .15s,border-color .15s,color .15s,transform .14s var(--ease-out),filter .15s}
+:is(.btn,.ib,.fab,.cz,.mini,.kzt-tab,.kzt-wall,.kzt-pv,.menu button,.ring .rb,#room .ctrls>button,.viewsw button,.mx-chead .back):active:not(:disabled){transform:scale(.95)}
+.ci:active{transform:scale(.985)}
+/* новое сообщение влетает: своё — справа, чужое — слева, с лёгкой пружиной */
+.m.pop{animation:mxinThem .34s var(--ease-spring) backwards;transform-origin:left bottom}
+.m.mine.pop{animation-name:mxinMine;transform-origin:right bottom}
+@keyframes mxinThem{from{opacity:0;transform:translate(-14px,8px) scale(.94)}}
+@keyframes mxinMine{from{opacity:0;transform:translate(14px,8px) scale(.94)}}
+/* меню (долгое нажатие, «⋯», карандаш) раскрываются из точки */
+.mx-pop{animation:mxmenu .17s var(--ease-out);transform-origin:top left}
+.fabmenu:not(.mx-pop){animation:mxmenu .17s var(--ease-out);transform-origin:bottom right}
+.mx-pop .rxrow button{animation:mxrx .3s var(--ease-spring) backwards}
+.mx-pop .rxrow button:nth-child(2){animation-delay:.03s}.mx-pop .rxrow button:nth-child(3){animation-delay:.06s}
+.mx-pop .rxrow button:nth-child(4){animation-delay:.09s}.mx-pop .rxrow button:nth-child(5){animation-delay:.12s}.mx-pop .rxrow button:nth-child(n+6){animation-delay:.15s}
+@keyframes mxmenu{from{opacity:0;transform:scale(.9) translateY(-4px)}}
+@keyframes mxrx{from{opacity:0;transform:scale(.4)}}
+/* окна: открываются с пружинкой, закрываются коротким затуханием */
+.mx-card{animation-timing-function:var(--ease-spring);animation-duration:.24s}
+.mx-modal.out{animation:mxfadeOut .17s forwards;pointer-events:none}
+.mx-modal.out .mx-card{animation:mxpopOut .17s var(--ease-out) forwards}
+@keyframes mxfadeOut{to{opacity:0}}
+@keyframes mxpopOut{to{opacity:0;transform:scale(.96) translateY(6px)}}
+/* «печатает» — бегущие точки */
+.ci .ls .ty::after,.mx-chead .typing::after{content:'';display:inline-block;width:1.1em;text-align:left;animation:mxdots 1.2s steps(1,end) infinite}
+@keyframes mxdots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+/* телефон: чат выезжает справа, список возвращается слева */
+@media(max-width:760px){
+  #mx.chat-open .mx-main{animation:mxslideIn .28s var(--ease-out)}
+  #mx:not(.chat-open) .mx-side{animation:mxslideBack .28s var(--ease-out)}
+}
+@keyframes mxslideIn{from{opacity:.4;transform:translateX(42px)}}
+@keyframes mxslideBack{from{opacity:.4;transform:translateX(-30px)}}
+/* фото на весь экран */
+#lb:not([hidden]){animation:mxfade .18s}
+#lb:not([hidden]) img{animation:mxzoom .26s var(--ease-spring)}
+@keyframes mxzoom{from{opacity:0;transform:scale(.9)}}
+@media(prefers-reduced-motion:reduce){button,.ci{transition:none}button:active,.ci:active{transform:none!important}}

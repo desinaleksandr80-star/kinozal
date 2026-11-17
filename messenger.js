@@ -490,7 +490,7 @@ function renderList() {
     if (l?.from === myId && l.kind !== 'sys') r1.append(el('span', 'tick', readBy(ch.id, l.ts) || l.ack ? '✓✓' : '✓'));
     r1.append(el('span', 'tm', listTime(l?.ts || ch.created)));
     const ls = el('span', 'ls'), ty = typingIn(ch.id);
-    if (ty) ls.append(el('span', 'ty', (isDm(ch.id) ? '' : nameOf(ty) + ' ') + 'печатает…'));
+    if (ty) ls.append(el('span', 'ty', (isDm(ch.id) ? '' : nameOf(ty) + ' ') + 'печатает'));
     else { const [who, t] = lastText(ch.id, l); if (who) ls.append(el('b', '', who)); ls.append(document.createTextNode(t)); }
     r2.append(ls); if (ch.unread) r2.append(el('span', 'badge', ch.unread > 99 ? '99+' : String(ch.unread)));
     tx.append(r1, r2); it.append(w, tx);
@@ -587,12 +587,12 @@ function renderHead() {
   const ty = typingIn(c);
   if (isDm(c)) {
     const u = dmPeer(c), on = isOn(u); w.classList.toggle('on', on);
-    if (ty) { st.textContent = 'печатает…'; st.className = 'live'; }
+    if (ty) { st.textContent = 'печатает'; st.className = 'live typing'; }
     else if (on) { st.textContent = 'в сети'; st.className = 'live'; }
     else st.textContent = S.contacts[u]?.state === 'pending' && !S.contacts[u]?.name ? 'пока не в сети' : seenText(S.contacts[u]?.seen);
   } else {
     const g = S.groups[c], mem = g?.members || [], on = mem.filter(u => u !== myId && isOn(u)).length;
-    if (ty) { st.textContent = nameOf(ty) + ' печатает…'; st.className = 'live'; }
+    if (ty) { st.textContent = nameOf(ty) + ' печатает'; st.className = 'live typing'; }
     else st.textContent = g?.gone ? 'тебя нет в этой группе' : mem.length + ' ' + plural(mem.length, 'участник', 'участника', 'участников') + (on ? ', ' + on + ' в сети' : '');
   }
   // плашка над перепиской
@@ -667,7 +667,8 @@ async function appendMsg(m) {
     if (pe) { pe.classList.remove('tail'); const a = pe.querySelector(':scope > .av'); if (a) a.replaceWith(el('div', 'ghost')); }
   }
   shown.push(m);
-  box.append(...mEls(m, last, null));
+  const els = mEls(m, last, null); for (const e of els) if (e.classList?.contains('m')) e.classList.add('pop');   // новое — влетает
+  box.append(...els);
   if (stick) requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
   else { downCount++; $('.mx-down').hidden = false; updDown(); }
 }
@@ -1219,7 +1220,7 @@ const narrow = () => innerWidth <= 760;
 function backable() {
   if (document.querySelector('.mx-pop')) return 'menu';
   if (document.querySelector('#lb:not([hidden])')) return 'photo';
-  if (document.querySelector('.mx-modal:not(.ring)')) return 'modal';
+  if (document.querySelector('.mx-modal:not(.ring):not(.out)')) return 'modal';
   if (S.me && !document.getElementById('room')?.hidden) return 'room';
   if (open && narrow()) return 'chat';
   return '';
@@ -1228,7 +1229,7 @@ function goBack() {
   const b = backable();
   if (b === 'menu') closeMenus();
   else if (b === 'photo') document.getElementById('lb').hidden = true;
-  else if (b === 'modal') [...document.querySelectorAll('.mx-modal:not(.ring)')].pop()?.remove();
+  else if (b === 'modal') [...document.querySelectorAll('.mx-modal:not(.ring):not(.out)')].pop()?.remove();
   else if (b === 'room') window.kzRoom?.hide();
   else if (b === 'chat') closeChat();
   return !!b;
@@ -1321,7 +1322,8 @@ setInterval(() => { if (open) renderHead(); }, 30000);
 function modal(build, cls = '') {
   const ov = el('div', 'mx-modal ' + cls), card = el('div', 'mx-card');
   ov.append(card); document.body.append(ov);
-  const close = () => ov.remove();
+  // закрывается не мгновенно, а с коротким затуханием
+  const close = () => { if (ov.classList.contains('out')) return; ov.classList.add('out'); setTimeout(() => ov.remove(), 170); };
   ov.addEventListener('mousedown', e => { if (e.target === ov) close(); });
   ov.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } });
   build(card, close);

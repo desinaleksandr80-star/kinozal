@@ -150,7 +150,8 @@ function open(opts = {}) {
     '<div class="kzt-lm them">Привет! Что смотрим?</div><div class="kzt-lm me">Давай кино 🍿</div><div class="kzt-li">Сообщение…</div></div>';
   card.append(head, lv, body, foot); ov.append(card); document.body.append(ov);
   const TABS = [['themes', '✨ Темы'], ['colors', '🎨 Цвета'], ['wall', '🖼 Обои'], ['neon', '💡 Неон'], ['shape', '🔤 Шрифт и форма'], ...(opts.onFrame ? [['frame', '👤 Моя рамка']] : [])];
-  for (const [k, t] of TABS) { const b = h('button', 'kzt-tab', t); b.dataset.k = k; b.onclick = () => { tab = k; render(); }; tabs.append(b); }
+  // смена вкладки — содержимое мягко проявляется (перезапуск анимации через reflow)
+  for (const [k, t] of TABS) { const b = h('button', 'kzt-tab', t); b.dataset.k = k; b.onclick = () => { tab = k; render(); body.classList.remove('sw'); void body.offsetWidth; body.classList.add('sw'); }; tabs.append(b); }
   let raf = 0; const live = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => apply(D).then(() => body.querySelector('.kzt-walls')?.paint?.())); };
   const get = p => p.split('.').reduce((o, k) => o?.[k], D);
   const put = (p, v) => { const ks = p.split('.'), last = ks.pop(); ks.reduce((o, k) => o[k], D)[last] = v; live(); };
@@ -286,7 +287,7 @@ function open(opts = {}) {
     }
   }
   let nt = 0; const note = t => { const n = card.querySelector('.kzt-note') || h('div', 'kzt-note'); n.textContent = t; foot.prepend(n); clearTimeout(nt); nt = setTimeout(() => n.remove(), 3500); };
-  const close = () => { cancelAnimationFrame(raf); ov.remove(); };
+  const close = () => { cancelAnimationFrame(raf); ov.classList.add('out'); setTimeout(() => ov.remove(), 170); };
   const reset = h('button', 'btn', 'Как было в Кинозале'); reset.onclick = () => { D = normalize(clone(PRESETS[0])); live(); render(); };
   const cancel = h('button', 'btn', 'Отмена'); cancel.onclick = () => { apply(saved); close(); };
   const ok = h('button', 'btn pri', 'Сохранить'); ok.onclick = () => { save(D); if (opts.onFrame) opts.onFrame(frame.type === 'none' ? null : cleanFrame(frame)); close(); };
