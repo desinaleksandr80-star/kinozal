@@ -192,6 +192,8 @@ app.whenReady().then(() => {
   let gpuCrashes = 0;
   app.on('child-process-gone', (e, d) => {
     log('[процесс] упал:', d.type, d.reason, d.exitCode, d.name || '');
+    // служба звука: поднимется сама, но уже игравший звук останется немым — страница переподключит его
+    if (/audio/i.test(d.name || d.serviceName || '') && d.reason !== 'clean-exit' && win && !win.isDestroyed()) win.webContents.send('kz:audioCrash');
     if (d.type === 'GPU' && d.reason !== 'clean-exit' && ++gpuCrashes >= 3 && !noGpu) {
       log('[gpu] видеокарта падает — включаю режим совместимости');
       if (Notification.isSupported()) new Notification({ title: TITLE, body: 'Видеокарта сбоит — перезапускаю Кинозал в режиме совместимости.' }).show();

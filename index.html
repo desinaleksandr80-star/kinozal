@@ -568,7 +568,7 @@ const gum=async c=>{
 };
 const audioC=id=>({...(id?{deviceId:{exact:id}}:{}),echoCancellation:ecVal(),noiseSuppression:true,autoGainControl:true});
 const videoC=id=>({...(id?{deviceId:{exact:id}}:TOUCHDEV?{facingMode:facing}:{}),width:{ideal:640},height:{ideal:480}});
-function ctx(){if(!actx||actx.state==='closed'){try{actx=new AudioContext();}catch(e){}}if(actx?.state==='suspended')actx.resume().catch(()=>{});return actx;}
+function ctx(){if(!actx||actx.state==='closed'){try{actx=new AudioContext();actx.addEventListener('error',()=>audioCrashed('AudioContext'));}catch(e){}}if(actx?.state==='suspended')actx.resume().catch(()=>{});return actx;}
 function silentTrack(){const t=ctx()?.createMediaStreamDestination().stream.getAudioTracks()[0];if(t)t.fake=true;return t;}
 function blackTrack(){const c=document.createElement('canvas');c.width=c.height=16;c.getContext('2d').fillRect(0,0,16,16);const t=c.captureStream(1).getVideoTracks()[0];t.fake=true;return t;}
 function why(e,what){
@@ -798,6 +798,96 @@ $('#callVol').oninput=e=>{
   if(voiceBus)voiceBus.gain.setTargetAtTime(callVol,voiceBus.context.currentTime,.03);
   document.querySelectorAll('.tile:not(.mine)').forEach(t=>{const id=t.id.slice(5);t.querySelector('video').volume=Math.min(1,callVol*peerVol(id));});
 };
+
+// ---------- служба звука упала ----------
+// Весь звук Chromium живёт в отдельном процессе. Если тот падает (17.11 так было дважды за вечер), процесс
+// поднимается заново, но то, что уже играло, остаётся немым: голоса на плитках, показ экрана, трансляция,
+// а свой файл фильма встаёт с ошибкой. Раньше помогал только перезаход в зал — теперь переподключаем сами.
+// Микрофон и AudioContext при этом обычно живы: их трогаем, только если они правда замолчали.
+let audioFixT=0;
+function audioCrashed(why){
+  if(audioFixT)return;
+  jlog('[звук] упала служба звука ('+why+') — переподключаю');
+  audioFixT=setTimeout(()=>{audioFixT=0;reviveAudio(0);},1000);   // даём процессу звука подняться
+}
+// сколько отсчётов голоса проиграно: растёт, только если звук правда уходит в динамики
+async function heardSamples(c){
+  const pc=c?.peerConnection;if(!pc||pc.connectionState!=='connected')return null;
+  let n=null;try{(await pc.getStats()).forEach(r=>{if(r.type==='inbound-rtp'&&r.kind==='audio')n=(n||0)+(r.totalSamplesReceived||0);});}catch(e){return null;}
+  return n;
+}
+function replay(v){const s=v?.srcObject;if(!s)return false;v.srcObject=null;v.srcObject=s;v.play().catch(()=>{});return true;}
+function reviveFile(){
+  if(!fileMode()||!screen.getAttribute('src'))return false;
+  const t=screen.currentTime||0,go=mode==='host'&&performance.now()-(screen._tick||0)<4000;
+  // трансляция гостям шла из захвата этого же плеера — после перезагрузки файла захват создастся заново
+  if(mode==='host'){for(const c of movieCalls.values())c.close();movieCalls.clear();movieStream?.getTracks().forEach(x=>x.stop());movieStream=null;}
+  screen._revive=true;
+  screen.addEventListener('loadedmetadata',()=>{screen._revive=false;screen.currentTime=t;if(go)screen.play().catch(()=>{});},{once:true});
+  screen.load();
+  return true;
+}
+// показываю экран со звуком: захват «звука компьютера» при сбое завершается — берём звук того же экрана заново
+async function reviveShareAudio(){
+  const o=shareOut,old=o?.raw.getAudioTracks()[0];if(!old)return false;
+  if(!isApp||!pickSel){sys('Звук показа пропал — останови показ и начни заново');return false;}
+  let s;
+  try{
+    await window.kinozalApp.pick(pickSel,true);
+    s=await navigator.mediaDevices.getDisplayMedia({video:true,audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false,channelCount:2,sampleRate:48000,suppressLocalAudioPlayback:false,restrictOwnAudio:store.get('aec','auto')!=='soft'},systemAudio:'include'});
+  }catch(e){jlog('[звук] звук показа не перезахватился:',e?.name||e);sys('Звук показа пропал — останови показ и начни заново');return false;}
+  s.getVideoTracks().forEach(t=>t.stop());
+  const at=s.getAudioTracks()[0];
+  if(shareOut!==o||!at){s.getTracks().forEach(t=>t.stop());return false;}
+  try{at.contentHint='music';}catch(e){}
+  let send=at,guard=null;
+  if(o.aec==='soft'){try{guard=await echoGuard(at);}catch(e){}if(guard)send=guard.track;}
+  if(shareOut!==o){guard?.stop();at.stop();return false;}
+  const prev=o.stream.getAudioTracks()[0];
+  o.raw.removeTrack(old);old.stop();o.raw.addTrack(at);
+  if(o.stream!==o.raw&&prev){o.stream.removeTrack(prev);o.stream.addTrack(send);}
+  o.guard?.stop();o.guard=guard;
+  for(const c of o.calls.values()){
+    const tr=c.peerConnection?.getTransceivers().find(t=>t.receiver.track?.kind==='audio');
+    tr?.sender.replaceTrack(send).catch(()=>{});
+  }
+  return true;
+}
+async function reviveAudio(n){
+  if(!local)return;   // не в зале — играть нечему
+  const before=new Map();for(const[id,c]of camCalls)before.set(id,await heardSamples(c));
+  const fixed=[];
+  if(n===0){
+    if(await reviveShareAudio())fixed.push('звук показа');
+    for(const v of document.querySelectorAll('.tile:not(.mine) video'))replay(v);
+    if(document.querySelector('.tile:not(.mine)'))fixed.push('голоса');
+    if(shareIn&&replay(shareVid))fixed.push('показ экрана');
+    if(mode==='stream'&&replay(screen))fixed.push('трансляция');
+    if(reviveFile())fixed.push('фильм');
+    jlog('[звук] переподключил:',fixed.join(', ')||'нечего');
+  }
+  await new Promise(r=>setTimeout(r,3000));
+  // проверка: голос каждого собеседника снова проигрывается? кто молчит — переподключаем ещё раз
+  const mute=[];
+  for(const[id,c]of camCalls){
+    const a=before.get(id),b=await heardSamples(c);
+    if(a!=null&&b!=null&&b<=a)mute.push(id);
+  }
+  if(mute.length&&n<3){
+    for(const id of mute)replay(document.querySelector('#tile-'+CSS.escape(id)+' video'));
+    jlog('[звук] голос всё ещё не играет ('+mute.length+') — пробую снова');
+    return reviveAudio(n+1);
+  }
+  // свой микрофон: живой, но шлёт ровно ноль — значит, захват тоже умер, открываем заново
+  const m=meters.get('me'),a=local?.getAudioTracks()[0];
+  if(m&&micReal&&a?.readyState==='live'&&a.enabled){
+    let peak=0;for(let i=0;i<8;i++){m.an.getFloatTimeDomainData(m.buf);for(const x of m.buf)peak=Math.max(peak,Math.abs(x));await new Promise(r=>setTimeout(r,150));}
+    if(peak===0){jlog('[звук] микрофон замолчал — открываю заново');switchMic(micId);}
+  }
+  jlog('[звук] итог:',mute.length?'голос не вернулся у '+mute.length:'звук идёт');
+  if(camCalls.size||fileMode()||mode==='stream'||shareIn)sys(mute.length?'Сбой звука в Windows — перезайди в зал, если не слышно собеседника':'Был сбой звука — переподключил, всё снова слышно');
+}
+window.kinozalApp?.onAudioCrash?.(()=>audioCrashed('процесс'));
 
 // ---------- окошки, которые можно таскать и растягивать ----------
 // Позиция и ширина хранятся в долях от контейнера — при смене размера окна окошко остаётся на своём месте.
@@ -1244,7 +1334,7 @@ $('#pvBtn').onclick=()=>{
   $('#pvOff').hidden=shareOut.pv;$('#pvBtn').textContent=shareOut.pv?'Скрыть превью':'Показать превью';
 };
 
-window.__kz={get shareOut(){return shareOut;},get shareIn(){return shareIn;},get voiceBus(){return voiceBus;},get voices(){return voices;},get actx(){return actx;}}; // для диагностики
+window.__kz={get shareOut(){return shareOut;},get shareIn(){return shareIn;},get voiceBus(){return voiceBus;},get voices(){return voices;},get actx(){return actx;},get camCalls(){return camCalls;}}; // для диагностики
 function roomPeers(){return isHost?[...guests.keys()]:[...roster];}
 function shareMsg(on){
   if(isHost)broadcast({t:'share',on,name:myName,from:peer?.id});
@@ -1553,7 +1643,11 @@ function showHelp(kind){
 function hideHelp(){$('#help').hidden=true;}
 $('#helpX').onclick=hideHelp;
 $('#helpCopy').onclick=async()=>{try{await navigator.clipboard.writeText($('#helpCmd').textContent);toast('Команда скопирована');}catch(e){toast('Выдели команду и скопируй вручную');}};
-screen.addEventListener('error',()=>{if(fileMode()&&screen.getAttribute('src')){showHelp('video');if(isHost)toast('Этот файл не открылся — смотри подсказку под экраном');}});
+screen.addEventListener('timeupdate',()=>{if(!screen.paused)screen._tick=performance.now();});
+screen.addEventListener('error',()=>{
+  if(/AUDIO_RENDERER/i.test(screen.error?.message||'')){audioCrashed('фильм');return;}   // файл цел — упал звук Windows/Chromium
+  if(fileMode()&&screen.getAttribute('src')){showHelp('video');if(isHost)toast('Этот файл не открылся — смотри подсказку под экраном');}
+});
 screen.addEventListener('playing',()=>{
   if(!fileMode()||playFile.checked)return;playFile.checked=true;const url=fileUrl;
   setTimeout(()=>{
@@ -1584,7 +1678,7 @@ screen.addEventListener('loadedmetadata',()=>{
   if(mode==='host'){
     movie.dur=screen.duration||0;
     broadcast({t:'movie',title:movie.title,dur:movie.dur});sendState();
-    if(guests.size)sys('Включаем «'+movie.title+'». Если у кого-то этот файл уже есть — пусть нажмёт «У меня есть этот файл».');
+    if(guests.size&&!screen._revive)sys('Включаем «'+movie.title+'». Если у кого-то этот файл уже есть — пусть нажмёт «У меня есть этот файл».');
   }else if(mode==='local'){
     if(movie?.dur&&Math.abs(screen.duration-movie.dur)>5)toast('Длительность не совпадает с фильмом ведущего — похоже, другая версия файла. Синхронизация может сбиваться.');
     syncLocal();
