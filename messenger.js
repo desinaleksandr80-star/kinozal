@@ -429,9 +429,8 @@ async function createGroup(name, list) {
 const root = el('div'); root.id = 'mx'; root.hidden = true;
 root.innerHTML = `
 <aside class="mx-side">
-  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
+  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
-  <button class="mx-cine" id="mxCine" type="button"><i>🎬</i><span><b>Кинозал</b><small>Без добавления в друзья</small></span><em>›</em></button>
   <div class="mx-sec">Чаты</div>
   <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
   <div class="mx-list" id="mxList"></div>
