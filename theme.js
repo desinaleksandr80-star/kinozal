@@ -144,10 +144,14 @@ function open(opts = {}) {
   const ov = h('div', 'mx-modal kzt'), card = h('div', 'mx-card kzt-card');
   const head = h('div', 'kzt-head'), tabs = h('div', 'kzt-tabs'), body = h('div', 'kzt-body'), foot = h('div', 'row kzt-foot');
   head.append(h('h2', '', 'Оформление'), tabs);
-  card.append(head, body, foot); ov.append(card); document.body.append(ov);
+  // живой образец переписки: рисуется теми же переменными, что и настоящий чат, — сразу видно, что ставишь
+  const lv = h('div', 'kzt-live'); lv.setAttribute('aria-hidden', 'true');
+  lv.innerHTML = '<div class="kzt-lw"></div><div class="kzt-lg"></div><div class="kzt-lc"><div class="kzt-lh"><span class="kzt-la">А</span><b>Собеседник</b><small>в сети</small></div>' +
+    '<div class="kzt-lm them">Привет! Что смотрим?</div><div class="kzt-lm me">Давай кино 🍿</div><div class="kzt-li">Сообщение…</div></div>';
+  card.append(head, lv, body, foot); ov.append(card); document.body.append(ov);
   const TABS = [['themes', '✨ Темы'], ['colors', '🎨 Цвета'], ['wall', '🖼 Обои'], ['neon', '💡 Неон'], ['shape', '🔤 Шрифт и форма'], ...(opts.onFrame ? [['frame', '👤 Моя рамка']] : [])];
   for (const [k, t] of TABS) { const b = h('button', 'kzt-tab', t); b.dataset.k = k; b.onclick = () => { tab = k; render(); }; tabs.append(b); }
-  let raf = 0; const live = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => apply(D)); };
+  let raf = 0; const live = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(() => apply(D).then(() => body.querySelector('.kzt-walls')?.paint?.())); };
   const get = p => p.split('.').reduce((o, k) => o?.[k], D);
   const put = (p, v) => { const ks = p.split('.'), last = ks.pop(); ks.reduce((o, k) => o[k], D)[last] = v; live(); };
   // элементы управления
@@ -230,7 +234,24 @@ function open(opts = {}) {
         }
         if (w.type !== 'none') more.append(range('Размытие', 'wall.blur', 0, 40, 1, v => v + ' px'), range('Затемнение', 'wall.dim', 0, .9, .05, v => Math.round(v * 100) + '%'), range('Яркость узора/картинки', 'wall.op', .1, 1, .05, v => Math.round(v * 100) + '%'));
       };
-      body.append(sec('Фон переписки', chips('wall.type', [['none', 'Без обоев'], ['dots', 'Точки'], ['grid', 'Сетка'], ['diag', 'Полосы'], ['stars', 'Звёзды'], ['scan', 'Сканлайны'], ['hearts', 'Горошек'], ['gradient', 'Градиент'], ['image', '📷 Своё фото']], fill), more),
+      // обои — плитками с образцом узора, а не просто словами
+      const WALLS = [['none', 'Без обоев'], ['dots', 'Точки'], ['grid', 'Сетка'], ['diag', 'Полосы'], ['stars', 'Звёзды'], ['scan', 'Сканлайны'], ['hearts', 'Горошек'], ['gradient', 'Градиент'], ['image', 'Своё фото']];
+      const wg = h('div', 'kzt-walls');
+      const paintWalls = () => wg.querySelectorAll('.kzt-wall').forEach(b => {
+        const k = b.dataset.k, sw = b.firstChild;
+        b.classList.toggle('on', D.wall.type === k);
+        const url = k === 'image' && wallUrl.key && wallUrl.key === D.wall.img ? wallUrl.url : '';
+        sw.textContent = k === 'image' && !url ? '📷' : '';
+        sw.style.background = k === 'none' || (k === 'image' && !url) ? 'var(--main)' : wallCss({ ...D.wall, type: k }, url) + ',var(--main)';
+      });
+      for (const [k, t] of WALLS) {
+        const b = h('button', 'kzt-wall'); b.type = 'button'; b.dataset.k = k;
+        b.append(h('i'), h('span', '', t));
+        b.onclick = () => { put('wall.type', k); paintWalls(); fill(); };
+        wg.append(b);
+      }
+      paintWalls(); wg.paint = paintWalls;
+      body.append(sec('Фон переписки', wg, more),
         sec('', check('Свечение акцентом по углам', 'wall.glow'), check('Обои под всем окном (и под списком чатов)', 'wall.all')));
       fill();
     }

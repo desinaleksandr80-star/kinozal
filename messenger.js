@@ -429,9 +429,11 @@ async function createGroup(name, list) {
 const root = el('div'); root.id = 'mx'; root.hidden = true;
 root.innerHTML = `
 <aside class="mx-side">
-  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1>Чаты<small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
-  <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
+  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
+  <button class="mx-cine" id="mxCine" type="button"><i>🎬</i><span><b>Кинозал</b><small>Без добавления в друзья</small></span><em>›</em></button>
+  <div class="mx-sec">Чаты</div>
+  <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
   <div class="mx-list" id="mxList"></div>
   <div class="mx-fab"><div class="fabmenu menu" id="mxFabMenu" hidden>
     <button data-a="contact"><i>👤</i>Новый собеседник</button><button data-a="group"><i>👥</i>Новая группа</button><button data-a="call"><i>📞</i>Созвон по коду</button>
@@ -443,13 +445,14 @@ setNet(net);
 $('#mxQ').oninput = () => renderList();
 $('#mxAdd').onclick = () => addContactDlg();
 $('#mxTheme').onclick = () => openTheme();
-$('#mxMe').onclick = () => settingsDlg();
+$('#mxMe').onclick = $('#mxProf').onclick = () => settingsDlg();
+$('#mxCine').onclick = () => codeDlg('cinema');
 $('#mxCallbar').onclick = () => window.kzRoom?.show();
 $('#mxFab').onclick = e => { e.stopPropagation(); $('#mxFabMenu').hidden = !$('#mxFabMenu').hidden; };
 $('#mxFabMenu').onclick = e => { const a = e.target.closest('button')?.dataset.a; $('#mxFabMenu').hidden = true; if (a === 'contact') addContactDlg(); else if (a === 'group') groupDlg(); else if (a === 'call') codeDlg(); };
 document.addEventListener('click', () => { if (Date.now() - menuAt < 450) return; $('#mxFabMenu').hidden = true; closeMenus(); });
 function closeMenus() { document.querySelectorAll('.mx-pop').forEach(x => x.remove()); }
-function renderMe() { const b = $('#mxMe'); b.textContent = ''; if (S.me) b.append(avEl(myId, 40)); }
+function renderMe() { const b = $('#mxMe'); b.textContent = ''; if (S.me) b.append(avEl(myId, 40)); $('#mxName').textContent = S.me?.name || 'Профиль'; }
 
 // ---------- список чатов ----------
 function lastText(c, l) {
@@ -1361,12 +1364,18 @@ function addContactDlg() {
     card.append(el('h2', '', 'Новый собеседник'), el('p', '', 'Отправь человеку своё приглашение (кнопка «Скопировать») или покажи QR-код — он откроет ссылку, и чат появится у обоих. Или впиши его ID сам:'), idCard(), el('div', 'sep'), el('label', '', 'ID или ссылка-приглашение собеседника'), inp, alias, err, row);
   });
 }
-function codeDlg() {
+// cine — кнопка «Кинозал» в списке: зал для кого угодно, без добавления в друзья
+function codeDlg(cine) {
   modal((card, close) => {
     const inp = el('input'); inp.type = 'text'; inp.placeholder = 'ABCDE'; inp.maxLength = 5; inp.style.cssText = 'text-align:center;letter-spacing:.3em;font-weight:700;text-transform:uppercase';
     const go = btnEl('Войти', 'pri', async () => { const c = inp.value.trim().toUpperCase(); if (!/^[A-Z0-9]{5}$/.test(c)) { toast('Код зала — 5 букв и цифр'); return; } close(); toast('Подключаюсь…'); if (!await window.kzRoom.join(c, S.me.name)) toast('Зал с таким кодом не найден'); });
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
-    const mk = (t, k) => btnEl(t, '', async () => { close(); const code = await window.kzRoom.create(k, S.me.name); if (!code) toast('Не получилось создать зал'); });
+    const mk = (t, k, cls = '') => btnEl(t, cls, async () => { close(); const code = await window.kzRoom.create(k, S.me.name); if (!code) toast('Не получилось создать зал'); });
+    if (cine) {
+      const big = mk('🎬 Создать кинозал', 'cinema', 'pri'); big.style.width = '100%';
+      card.append(el('h2', '', 'Кинозал'), el('p', '', 'Смотрите кино вместе с кем угодно — дружить в Кинозале не нужно. Создай зал и отправь ссылку или код, или войди по коду друга.'), big, el('div', 'sep'), el('label', '', 'Код зала друга'), inp, go);
+      return;
+    }
     const row = el('div', 'row'); row.style.justifyContent = 'stretch'; row.append(mk('📞 Новый созвон', 'call'), mk('🎬 Новый кинозал', 'cinema'));
     card.append(el('h2', '', 'Созвон по коду'), el('p', '', 'Для тех, кого нет в контактах: создай зал и продиктуй код, или войди в чужой.'), row, el('div', 'sep'), el('label', '', 'Код зала'), inp, go);
   });
