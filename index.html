@@ -445,7 +445,7 @@ const store={get(k,d){try{const v=localStorage.getItem('kinozal-'+k);return v===
 // Сервер, через который собеседники находят друг друга (звук и видео через него не идут).
 // Обычный — общий 0.peerjs.com, но он закрыт для России. Свой — на Cloudflare (папка kinozal-vpn\signal).
 // У собеседников должен быть выбран один и тот же: серверы друг о друге не знают.
-const SIGNAL_OWN={host:'kinozal-signal.CHANGE-ME.workers.dev',port:443,secure:true,path:'/',key:'peerjs'};
+const SIGNAL_OWN={host:'kinozal-signal.kinozal-signal.workers.dev',port:443,secure:true,path:'/',key:'peerjs'};
 const signalOpts=()=>store.get('signal','peerjs')==='own'?{...SIGNAL_OWN}:{};
 window.kzSignal={opts:signalOpts,get:()=>store.get('signal','peerjs')==='own'?'own':'peerjs',set:v=>store.set('signal',v==='own'?'own':'peerjs')};
 let vol=+store.get('vol',1),callVol=+store.get('callVol',1);
