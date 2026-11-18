@@ -66,11 +66,8 @@ if (process.platform === 'win32') app.setAppUserModelId('local.kinozal.app'); //
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-background-timer-throttling');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-// окно, перекрытое игрой, Windows считает «невидимым» и режет ему кадры — нам это не нужно.
-// UseDnsHttpsSvcb: не спрашивать у DNS записи HTTPS. Из них Chromium берёт настройки «скрытого имени сайта» (ECH)
-// для сайтов на Cloudflare и вместо настоящего имени шлёт cloudflare-ech.com — а его в России блокируют.
-// Из-за этого у брата (Воронеж) Кинозал не мог подключиться к своему серверу связи на Cloudflare, а Firefox мог.
-app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion,UseDnsHttpsSvcb');
+// окно, перекрытое игрой, Windows считает «невидимым» и режет ему кадры — нам это не нужно
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
 const TITLE = 'Кинозал';
@@ -189,8 +186,6 @@ function createWindow() {
 
 app.whenReady().then(() => {
   if (!gotLock) return;
-  // то же про ECH, второй замок: без записей HTTPS имя сервера идёт открыто, и российские блокировки его пропускают
-  try { app.configureHostResolver({ enableAdditionalDnsQueryTypes: false }); } catch (e) {}
   log('==== запуск Кинозал', app.getVersion(), '| Windows', os.release(), process.arch, '| Electron', process.versions.electron,
     '| без видеокарты:', noGpu, '| скрыто:', startHidden, '| GPU:', app.getGPUFeatureStatus?.());
   // видеокарта: процесс GPU падает раз за разом — включаем режим совместимости сами

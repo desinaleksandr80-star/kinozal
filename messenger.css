@@ -232,7 +232,6 @@
 .mx-card p{margin:0;color:var(--mute);font-size:14px}
 .mx-card label{margin:0 0 6px;font-size:13px}
 .mx-card input[type=text]{min-height:48px;border-radius:14px;background:var(--field)}
-.mx-card select{width:100%;min-height:48px;border-radius:14px;background:var(--field)}
 .mx-card .row{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
 .mx-card .err{color:#ff9c88;font-size:13px;min-height:1em}
 .picklist{display:grid;gap:4px;max-height:300px;overflow:auto;margin:0 -8px;padding:0 8px}

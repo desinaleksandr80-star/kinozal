@@ -411,9 +411,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 const $=s=>document.querySelector(s);
 const PREFIX='kinozal-v2-';
 // свой TURN-сервер из профиля — на случай строгого NAT (мобильная сеть)
-// STUN: из России Google не отвечает, а после STUN Cloudflare у брата рвалась связь с сервером на Cloudflare — первыми идут
-// российские Sipnet и Zadarma и Sipgate (проверено у брата страницей /test3 сервера связи), Google — для остальных.
-const ICE={get iceServers(){const l=[{urls:['stun:stun.sipnet.ru:3478','stun:stun.zadarma.com:3478','stun:stun.sipgate.net:3478','stun:stun.l.google.com:19302']}];try{const t=JSON.parse(localStorage.getItem('kinozal-turn')||'null');if(t?.url&&/^turns?:/i.test(t.url))l.push({urls:t.url,username:t.user||'',credential:t.pass||''});}catch(e){}return l;}};
+const ICE={get iceServers(){const l=[{urls:['stun:stun.l.google.com:19302','stun:stun1.l.google.com:19302','stun:stun.cloudflare.com:3478']}];try{const t=JSON.parse(localStorage.getItem('kinozal-turn')||'null');if(t?.url&&/^turns?:/i.test(t.url))l.push({urls:t.url,username:t.user||'',credential:t.pass||''});}catch(e){}return l;}};
 const TOUCHDEV=matchMedia('(pointer:coarse)').matches;let facing='user';
 
 let peer=null,isHost=false,inRoom=false,leaving=false,hostGone=false,code='',myName='',local=null;
@@ -444,12 +442,6 @@ const movieCalls=new Map(); // у ведущего: id -> трансляция; 
 const screen=$('#screen'),stage=$('#stage');
 
 const store={get(k,d){try{const v=localStorage.getItem('kinozal-'+k);return v===null?d:v;}catch(e){return d;}},set(k,v){try{localStorage.setItem('kinozal-'+k,v);}catch(e){}}};
-// Сервер, через который собеседники находят друг друга (звук и видео через него не идут).
-// Обычный — общий 0.peerjs.com, но он закрыт для России. Свой — на Cloudflare (папка kinozal-vpn\signal).
-// У собеседников должен быть выбран один и тот же: серверы друг о друге не знают.
-const SIGNAL_OWN={host:'kinozal-signal.kinozal-signal.workers.dev',port:443,secure:true,path:'/',key:'peerjs'};
-const signalOpts=()=>store.get('signal','peerjs')==='own'?{...SIGNAL_OWN}:{};
-window.kzSignal={opts:signalOpts,get:()=>store.get('signal','peerjs')==='own'?'own':'peerjs',set:v=>store.set('signal',v==='own'?'own':'peerjs')};
 let vol=+store.get('vol',1),callVol=+store.get('callVol',1);
 $('#vol').value=vol;$('#callVol').value=callVol;
 
@@ -1811,7 +1803,7 @@ function onGuestConn(c){
   c.on('close',bye);c.on('error',bye);
 }
 function makePeer(id){
-  const p=new Peer(id,{...signalOpts(),config:ICE,debug:1});
+  const p=new Peer(id,{config:ICE,debug:1});
   p.on('disconnected',()=>setTimeout(()=>{if(!p._bye&&!p.destroyed&&p.disconnected)p.reconnect();},1500));
   return p;
 }
