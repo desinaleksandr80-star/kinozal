@@ -190,7 +190,9 @@ function startPeer() {
   if (typeof Peer === 'undefined') { setNet('off'); setTimeout(startPeer, 5000); return; }
   try { peer?.destroy(); } catch (e) {}
   setNet('wait');
-  const p = peer = new Peer(pid(myId), { config: iceCfg(), debug: 0 });
+  const sig = window.kzSignal?.get() || 'peerjs';
+  if (sig !== startPeer.sig) { startPeer.sig = sig; jlog('[сеть] сервер связи:', sig === 'own' ? 'свой (Cloudflare)' : 'обычный (peerjs.com)'); }
+  const p = peer = new Peer(pid(myId), { ...(window.kzSignal?.opts() || {}), config: iceCfg(), debug: 0 });
   p.on('open', () => { if (peer !== p) return; idTaken = 0; setNet('on'); dialAll(); });
   p.on('connection', c => {
     const u = c.peer.startsWith('kzm-') ? normId(c.peer.slice(4)) : '';
@@ -206,7 +208,7 @@ function startPeer() {
     console.warn('peer', e.type, e.message);
   });
 }
-function setNet(s) { if (s !== net) jlog('[сеть]', s); net = s; const e = $('#mxNet'); if (!e) return; e.textContent = { on: 'в сети · ID ' + fmtId(myId), wait: 'подключаюсь…', off: 'нет связи — переподключаюсь', dup: 'этот профиль уже открыт в другом окне' }[s]; e.className = s === 'on' ? '' : 'off'; }
+function setNet(s) { if (s !== net) jlog('[сеть]', s); net = s; const e = $('#mxNet'); if (!e) return; e.textContent = { on: 'в сети · ID ' + fmtId(myId) + (window.kzSignal?.get() === 'own' ? ' · свой сервер' : ''), wait: 'подключаюсь…', off: 'нет связи — переподключаюсь', dup: 'этот профиль уже открыт в другом окне' }[s]; e.className = s === 'on' ? '' : 'off'; }
 function dialList() {
   const set = new Set();
   for (const [u, ct] of Object.entries(S.contacts)) if (ct.state !== 'blocked' && (ct.state !== 'req' || S.chats[dmId(u)])) set.add(u);
@@ -1414,6 +1416,16 @@ function settingsDlg() {
     const name = el('input'); name.type = 'text'; name.maxLength = 40; name.value = S.me.name;
     const snd = el('label', 'switch'), sc = el('input'); sc.type = 'checkbox'; sc.checked = store.get('mxSound', '1') === '1'; snd.append(document.createTextNode('Звук уведомлений'), sc);
     card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), el('div', 'sep'), snd);
+    // сервер, через который собеседники находят друг друга
+    let sigSel = null;
+    if (window.kzSignal) {
+      sigSel = el('select');
+      for (const [v, t] of [['peerjs', 'Обычный (peerjs.com)'], ['own', 'Свой (Cloudflare)']]) { const o = el('option', '', t); o.value = v; sigSel.append(o); }
+      sigSel.value = window.kzSignal.get();
+      const inRoom = !!window.kzRoom?.inRoom;
+      sigSel.disabled = inRoom;
+      card.append(el('label', '', 'Сервер связи'), sigSel, el('p', '', inRoom ? 'Сменить можно, когда выйдешь из зала.' : 'Через него собеседники находят друг друга, звук и видео через него не идут. Обычный из России работает только через VPN, свой — и без VPN. У собеседника должен быть выбран такой же, иначе вы друг друга не увидите.'));
+    }
     let auto = null;
     if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode(ANDROID ? 'Работать в фоне — сообщения и звонки приходят, даже когда Кинозал свёрнут' : 'Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
     if (ANDROID) APP.info().then(i => {
@@ -1441,7 +1453,12 @@ function settingsDlg() {
       S.me.name = n; S.me.avatar = avatar; store.set('name', n); store.set('mxSound', sc.checked ? '1' : '0');
       if (auto) APP.autostart(auto.checked);
       const tj = tu.value.trim() ? JSON.stringify({ url: tu.value.trim(), user: tn.value.trim(), pass: tp.value }) : '';
-      if (tj !== (localStorage.getItem('kinozal-turn') || '')) { try { tj ? localStorage.setItem('kinozal-turn', tj) : localStorage.removeItem('kinozal-turn'); } catch (e) {} if (!window.kzRoom?.inRoom) startPeer(); }
+      const sigNew = sigSel && !sigSel.disabled && sigSel.value !== window.kzSignal.get();
+      if (sigNew) window.kzSignal.set(sigSel.value);
+      const turnNew = tj !== (localStorage.getItem('kinozal-turn') || '');
+      if (turnNew) { try { tj ? localStorage.setItem('kinozal-turn', tj) : localStorage.removeItem('kinozal-turn'); } catch (e) {} }
+      if ((turnNew || sigNew) && !window.kzRoom?.inRoom) startPeer();
+      if (sigNew) toast(sigSel.value === 'own' ? 'Теперь свой сервер. У собеседника должен быть такой же' : 'Теперь обычный сервер (peerjs.com)');
       for (const g of Object.values(S.groups)) if (g.names) g.names[myId] = n;
       save(); renderMe(); renderList(); renderHead();
       for (const u of links.keys()) send(u, { t: 'profile', name: n, avatar, frame: S.me.frame || null });

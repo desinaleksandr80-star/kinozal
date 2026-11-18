@@ -442,6 +442,12 @@ const movieCalls=new Map(); // у ведущего: id -> трансляция; 
 const screen=$('#screen'),stage=$('#stage');
 
 const store={get(k,d){try{const v=localStorage.getItem('kinozal-'+k);return v===null?d:v;}catch(e){return d;}},set(k,v){try{localStorage.setItem('kinozal-'+k,v);}catch(e){}}};
+// Сервер, через который собеседники находят друг друга (звук и видео через него не идут).
+// Обычный — общий 0.peerjs.com, но он закрыт для России. Свой — на Cloudflare (папка kinozal-vpn\signal).
+// У собеседников должен быть выбран один и тот же: серверы друг о друге не знают.
+const SIGNAL_OWN={host:'kinozal-signal.CHANGE-ME.workers.dev',port:443,secure:true,path:'/',key:'peerjs'};
+const signalOpts=()=>store.get('signal','peerjs')==='own'?{...SIGNAL_OWN}:{};
+window.kzSignal={opts:signalOpts,get:()=>store.get('signal','peerjs')==='own'?'own':'peerjs',set:v=>store.set('signal',v==='own'?'own':'peerjs')};
 let vol=+store.get('vol',1),callVol=+store.get('callVol',1);
 $('#vol').value=vol;$('#callVol').value=callVol;
 
@@ -1803,7 +1809,7 @@ function onGuestConn(c){
   c.on('close',bye);c.on('error',bye);
 }
 function makePeer(id){
-  const p=new Peer(id,{config:ICE,debug:1});
+  const p=new Peer(id,{...signalOpts(),config:ICE,debug:1});
   p.on('disconnected',()=>setTimeout(()=>{if(!p._bye&&!p.destroyed&&p.disconnected)p.reconnect();},1500));
   return p;
 }
