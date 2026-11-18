@@ -1115,6 +1115,56 @@ setInterval(async()=>{
     if(l.total>500&&!(latencyOf.warn>Date.now()-6e4)){latencyOf.warn=Date.now();jlog('[задержка] большая:',names.get(id)||id,JSON.stringify(l));}
   }
 },3000);
+// ---------- замер связи в журнал ----------
+// Раз в 20 с, пока идёт звонок, показ или фильм, пишем по каждому соединению, что с ним происходит,
+// чтобы по журналам обоих собеседников понять, где копится задержка.
+// rtt — пинг, мс; buf — запас звука у меня за эти 20 с, мс; est — как индикатор на плитке (rtt/2+buf+40);
+// jit — скачки прихода звука, мс; lossA — потери звука, %; gaps — доля звука, «додуманного» из-за потерь и опозданий, %;
+// up/down — сколько это соединение отдаёт/получает, Мбит/с; avail — сколько, по оценке WebRTC, можно отдавать, Мбит/с;
+// path — тип пути (host/srflx/prflx — напрямую, relay — через TURN); hIn/fpsIn, hOut/fpsOut — видео; lim — что режет качество отдачи.
+const netPrev=new WeakMap();
+async function netStats(c){
+  const pc=c?.peerConnection;if(!pc||pc.connectionState!=='connected')return null;
+  let st;try{st=await pc.getStats();}catch(e){return null;}
+  const now=performance.now(),p=netPrev.get(pc)||{},n={t:now},o={};
+  let pair=null;
+  st.forEach(r=>{if(r.type==='candidate-pair'&&r.nominated&&r.state==='succeeded')pair=r;});
+  if(pair){
+    if(pair.currentRoundTripTime!=null)o.rtt=Math.round(pair.currentRoundTripTime*1000);
+    if(pair.availableOutgoingBitrate)o.avail=+(pair.availableOutgoingBitrate/1e6).toFixed(1);
+    const lc=st.get(pair.localCandidateId),rc=st.get(pair.remoteCandidateId);
+    o.path=(lc?.candidateType||'?')+'-'+(rc?.candidateType||'?')+(lc?.protocol==='tcp'?'/tcp':'');
+    if(lc?.networkType&&lc.networkType!=='unknown')o.net=lc.networkType;
+    n.bs=pair.bytesSent;n.br=pair.bytesReceived;
+    if(p.t&&p.bs!=null){const dt=(now-p.t)/1000;o.up=+((pair.bytesSent-p.bs)*8/dt/1e6).toFixed(2);o.down=+((pair.bytesReceived-p.br)*8/dt/1e6).toFixed(2);}
+  }
+  st.forEach(r=>{
+    if(r.type==='inbound-rtp'&&r.kind==='audio'&&n.je==null){
+      n.jd=r.jitterBufferDelay||0;n.je=r.jitterBufferEmittedCount||0;n.cs=r.concealedSamples||0;n.ts=r.totalSamplesReceived||0;n.pl=r.packetsLost||0;n.pr=r.packetsReceived||0;
+      if(r.jitter!=null)o.jit=Math.round(r.jitter*1000);
+      if(p.je!=null&&n.je>p.je)o.buf=Math.round((n.jd-p.jd)/(n.je-p.je)*1000);
+      else if(p.je==null&&n.je>0)o.buf=Math.round(n.jd/n.je*1000);
+      if(p.ts!=null&&n.ts>p.ts)o.gaps=+((n.cs-p.cs)/(n.ts-p.ts)*100).toFixed(1);
+      if(p.pr!=null){const got=n.pr-p.pr,lost=n.pl-p.pl;if(got+lost>0)o.lossA=+(Math.max(0,lost)/(got+lost)*100).toFixed(1);}
+    }
+    if(r.type==='inbound-rtp'&&r.kind==='video'){if(r.frameHeight)o.hIn=r.frameHeight;if(r.framesPerSecond!=null)o.fpsIn=Math.round(r.framesPerSecond);}
+    if(r.type==='outbound-rtp'&&r.kind==='video'){if(r.frameHeight)o.hOut=r.frameHeight;if(r.framesPerSecond!=null)o.fpsOut=Math.round(r.framesPerSecond);if(r.qualityLimitationReason&&r.qualityLimitationReason!=='none')o.lim=r.qualityLimitationReason;}
+  });
+  if(o.rtt!=null&&o.buf!=null)o.est=Math.round(o.rtt/2+o.buf+40);
+  netPrev.set(pc,n);
+  return o;
+}
+setInterval(async()=>{
+  const list=[];
+  for(const[id,c]of camCalls)list.push(['камера',id,c]);
+  if(shareOut)for(const[id,c]of shareOut.calls)list.push(['показ→',id,c]);
+  if(shareIn)list.push(['показ←',shareIn.from,shareIn.call]);
+  for(const[id,c]of movieCalls)list.push(id==='host'?['фильм←',c.peer,c]:['фильм→',id,c]);
+  if(!list.length)return;
+  const parts=[];
+  for(const[k,id,c]of list){try{const o=await netStats(c);if(o)parts.push(k+' '+(names.get(id)||id)+' '+JSON.stringify(o));}catch(e){}}
+  if(parts.length)jlog('[замер]',parts.join(' | '));
+},20000);
 function wireCam(c){
   camCalls.set(c.peer,c);
   c.on('stream',s=>{if(camCalls.get(c.peer)===c){lowLatency(c);addTile(c.peer,names.get(c.peer)||'Гость',s);monitor(c.peer,s);}});
