@@ -9,7 +9,7 @@ const APP = window.kinozalApp || window.kzAndroid || null;   // программ
 const ANDROID = !!APP?.android;
 // свой TURN-сервер (профиль → «Связь через свой сервер») выручает, когда оба за строгим NAT — например, в мобильной сети
 function iceCfg() {
-  const list = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+  const list = [{ urls: ['stun:stun.sipnet.ru:3478', 'stun:stun.zadarma.com:3478', 'stun:stun.sipgate.net:3478', 'stun:stun.l.google.com:19302'] }];
   try { const t = JSON.parse(localStorage.getItem('kinozal-turn') || 'null'); if (t?.url && /^turns?:/i.test(t.url)) list.push({ urls: t.url, username: t.user || '', credential: t.pass || '' }); } catch (e) {}
   return { iceServers: list };
 }
