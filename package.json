@@ -45,6 +45,7 @@
       "web.js",
       "android.js",
       "mobile.css",
+      "craft.css",
       "vendor/**",
       "icons/**",
       "manifest.webmanifest"

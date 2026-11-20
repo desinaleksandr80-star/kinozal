@@ -298,3 +298,26 @@ function open(opts = {}) {
 }
 window.kzTheme = { open, apply: () => apply(T), get: () => clone(T), frameAv, cleanFrame, presets: PRESETS.map(p => p.name) };
 })();
+
+// ---------- отделка: круги от нажатия и заливка ползунков (вид — в craft.css) ----------
+(() => {
+  'use strict';
+  const calm = () => { try { return matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; } };
+  // круг расходится от точки нажатия — у главных и объёмных кнопок
+  const RIP = '.btn,.fab,.cz,button.main,.ctrls>button,.ring .rb,.kzt-tab,.viewsw button';
+  document.addEventListener('pointerdown', e => {
+    const b = e.target.closest?.(RIP); if (!b || b.disabled || calm() || e.button > 0) return;
+    const r = b.getBoundingClientRect(), d = Math.max(r.width, r.height) * 2.2, s = document.createElement('span');
+    s.className = 'kz-rip'; s.style.cssText = `width:${d}px;height:${d}px;left:${e.clientX - r.left - d / 2}px;top:${e.clientY - r.top - d / 2}px`;
+    b.append(s); setTimeout(() => s.remove(), 650);
+  }, { passive: true, capture: true });
+  // ползунок закрашен до бегунка: --p обновляется и при перетаскивании, и когда значение ставит код (перемотка фильма)
+  const fill = i => { const lo = +i.min || 0, hi = i.max === '' ? 100 : +i.max, v = +i.value; i.style.setProperty('--p', (hi > lo ? (v - lo) / (hi - lo) * 100 : 0) + '%'); };
+  try {
+    const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+    Object.defineProperty(HTMLInputElement.prototype, 'value', { ...d, set(v) { d.set.call(this, v); if (this.type === 'range') fill(this); } });
+  } catch (e) {}
+  document.addEventListener('input', e => { if (e.target?.type === 'range') fill(e.target); }, true);
+  const all = () => document.querySelectorAll('input[type=range]').forEach(fill);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', all); else all();
+})();

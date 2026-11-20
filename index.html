@@ -31,13 +31,13 @@ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Manrope,system
 h1,h2{font-family:Unbounded,Manrope,sans-serif;font-weight:700;line-height:1.05;margin:0;text-wrap:balance}
 button,input{font:inherit}
 button{cursor:pointer;border-radius:12px;min-height:44px;padding:10px 18px;font-weight:700;color:var(--ink);background:var(--panel2);border:1px solid var(--line);transition:background .15s}
-button:hover{background:#243235}
+button:hover{background:color-mix(in srgb,var(--panel2),var(--ink) 8%)}
 button:disabled{opacity:.45;cursor:default}
 button:focus-visible,input:focus-visible{outline:3px solid var(--acc2);outline-offset:2px}
 button.main{background:var(--acc);border-color:var(--acc);color:#1b0b06}
-button.main:hover{background:#ff8466}
+button.main:hover{background:color-mix(in srgb,var(--acc),#fff 15%)}
 button.off{background:#3a1d18;border-color:#6b2d22;color:#ffb3a3}
-input[type=text]{width:100%;min-height:48px;padding:10px 14px;font-size:16px;border-radius:12px;border:1px solid var(--line);background:#0b1012;color:var(--ink)}
+input[type=text]{width:100%;min-height:48px;padding:10px 14px;font-size:16px;border-radius:12px;border:1px solid var(--line);background:var(--field,#0b1012);color:var(--ink)}
 input[type=range]{accent-color:var(--acc);cursor:pointer}
 label{display:block;font-size:14px;color:var(--mute);margin:0 0 6px}
 code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:block;overflow-wrap:anywhere;color:#cfe9e4}
@@ -291,6 +291,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 .pickhint{margin:0;font-size:13px;color:var(--mute)}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
+<link rel="stylesheet" href="craft.css">
 </head>
 <body>
 
@@ -903,9 +904,26 @@ function setName(t,name){
 }
 function rename(id){const t=document.getElementById('tile-'+id);if(t&&names.get(id)){setName(t,names.get(id));if(!t.classList.contains('mine')){setPeerVol(id,peerVol(id));}}}
 function dropTile(id){
-  document.getElementById('tile-'+id)?.remove();dropVoice(id);meters.get(id)?.src?.disconnect();meters.delete(id);avState.delete(id);
+  const old=document.getElementById('tile-'+id);if(old)tileGhost(old);
+  old?.remove();dropVoice(id);meters.get(id)?.src?.disconnect();meters.delete(id);avState.delete(id);
   if(pinned===id){pinned=null;applyPin();}
   count();refreshPip();
+}
+// снимок уходящей плитки поверх всего: последний кадр (или буква) плавно тает — сама плитка убирается сразу
+function tileGhost(t){
+  try{
+    if(matchMedia('(prefers-reduced-motion: reduce)').matches)return;
+    const r=t.getBoundingClientRect();if(r.width<40||r.height<30||r.bottom<0||r.right<0||r.top>innerHeight)return;
+    const g=document.createElement('div');g.className='tileghost';
+    g.style.cssText='left:'+r.left+'px;top:'+r.top+'px;width:'+r.width+'px;height:'+r.height+'px;border-radius:'+getComputedStyle(t).borderRadius;
+    const v=t.querySelector('video');
+    if(v&&v.videoWidth&&!t.classList.contains('novideo')){
+      const c=document.createElement('canvas');c.width=Math.round(r.width);c.height=Math.round(r.height);
+      const k=Math.max(c.width/v.videoWidth,c.height/v.videoHeight),w=v.videoWidth*k,h=v.videoHeight*k;
+      c.getContext('2d').drawImage(v,(c.width-w)/2,(c.height-h)/2,w,h);g.append(c);
+    }else g.textContent=t.querySelector('.ava')?.textContent||'';
+    document.body.append(g);setTimeout(()=>g.remove(),450);
+  }catch(e){}
 }
 const people=()=>document.querySelectorAll('#tiles .tile:not(.scr),#spot .tile:not(.scr)').length;
 function count(){
@@ -1107,7 +1125,7 @@ let pinned=null;
 function pin(id){
   pinned=pinned===id?null:id;
   if(pinned?.startsWith('scr-')){const e=shares.get(pinned.slice(4));if(e&&e!==shareIn){shareIn=e;renderShare();}}
-  applyPin();
+  flipTiles(applyPin);
   const n=pinned&&(names.get(pinned)||(pinned==='me'?'Ты':document.querySelector('#tile-'+CSS.escape(pinned)+' figcaption')?.textContent));
   osd(pinned?'Крупно: '+n+' · ещё клик — вернуть сетку':'Все камеры одинаково');
 }
@@ -1122,6 +1140,19 @@ function applyPin(){
   t?.classList.add('pinned');
   box.hidden=!t;$('#callStage').classList.toggle('spotting',!!t);
   syncMineFloat();
+}
+// плитки запоминают, где стояли, и после перестановки плавно доезжают с прежнего места
+function flipTiles(fn){
+  let els=[],r0=null;
+  try{if(!matchMedia('(prefers-reduced-motion: reduce)').matches){els=[...document.querySelectorAll('#callStage .tile:not(.float)')];r0=els.map(e=>e.getBoundingClientRect());}}catch(e){}
+  fn();
+  if(!r0)return;
+  els.forEach((e,i)=>{
+    const a=r0[i],b=e.getBoundingClientRect();if(!a.width||!b.width||!e.animate)return;
+    const dx=a.left-b.left,dy=a.top-b.top,sx=a.width/b.width,sy=a.height/b.height;
+    if(Math.abs(dx)+Math.abs(dy)<2&&Math.abs(sx-1)<.02&&Math.abs(sy-1)<.02)return;
+    e.animate([{transformOrigin:'0 0',transform:'translate('+dx+'px,'+dy+'px) scale('+sx+','+sy+')'},{transformOrigin:'0 0',transform:'none'}],{duration:380,easing:'cubic-bezier(.2,.9,.25,1)'});
+  });
 }
 $('#viewCine').onclick=()=>setView('cinema');
 $('#viewHall').onclick=()=>setView('hall');
@@ -1556,10 +1587,10 @@ function shareMsg(on){
 let pickSel=null;
 function startShare(){if(!inRoom)return;if(isApp)openPicker();else doShare();}
 async function openPicker(){
-  const box=$('#srcs');box.textContent='Ищу экраны и окна…';
+  const box=$('#srcs');box.textContent='Ищу экраны и окна…';box.classList.add('loading');
   $('#picker').hidden=false;$('#pickGo').disabled=true;pickSel=null;
   let list=[];try{list=await window.kinozalApp.getSources();}catch(e){}
-  box.textContent='';
+  box.textContent='';box.classList.remove('loading');
   const screens=list.filter(s=>s.screen),wins=list.filter(s=>!s.screen);
   for(const[title,items]of[['Экраны',screens],['Окна',wins]]){
     if(!items.length)continue;

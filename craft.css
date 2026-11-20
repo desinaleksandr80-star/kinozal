@@ -1,0 +1,515 @@
+/* Кинозал — отделка: объём, стекло, свет и движение поверх всех тем.
+   Подключается последним (после встроенных стилей index.html). Все цвета — из переменных темы
+   (--bg, --side, --main, --card, --field, --line, --ink, --mute, --acc, --acc2, --mine1, --mine2, --bub…),
+   поэтому любая тема и свои цвета продолжают работать. Неоновые правила theme.css сильнее по весу — их не перебиваем.
+   Анимации — только transform и opacity; поверх идущего видео размытие лишь у небольших панелей. */
+
+:root{
+  --ease-out:cubic-bezier(.2,.8,.2,1);--ease-spring:cubic-bezier(.2,1.25,.4,1);--ease-soft:cubic-bezier(.25,.9,.3,1);
+  /* блик сверху и мягкие многослойные тени: белый блик и чёрная тень одинаково годятся и тёмным, и светлым темам */
+  --hi:inset 0 1px 0 rgba(255,255,255,.07);
+  --hi2:inset 0 1px 0 rgba(255,255,255,.22);
+  --sh1:0 1px 2px rgba(0,0,0,.22),0 3px 10px -2px rgba(0,0,0,.22);
+  --sh2:0 2px 6px rgba(0,0,0,.22),0 14px 34px -8px rgba(0,0,0,.42);
+  --sh3:0 4px 12px rgba(0,0,0,.25),0 24px 60px -12px rgba(0,0,0,.55),0 50px 120px -30px rgba(0,0,0,.5);
+  /* поверхности: чуть светлее сверху — как настоящий материал под верхним светом */
+  --surf:linear-gradient(180deg,color-mix(in srgb,var(--card),var(--ink) 5%),var(--card));
+  --surf2:linear-gradient(180deg,color-mix(in srgb,var(--card),var(--ink) 9%),color-mix(in srgb,var(--card),var(--ink) 4%));
+  --edge:color-mix(in srgb,var(--line2,var(--line)),var(--ink) 6%);
+  --glass:color-mix(in srgb,var(--card) 78%,transparent);
+  --pri:linear-gradient(135deg,var(--mine1),var(--mine2));
+  /* зерно плёнки — очень тихое, чтобы поверхности не казались пластиковыми */
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 .07 0 0 0 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+/* ================= общее ================= */
+::selection{background:color-mix(in srgb,var(--acc) 38%,transparent);color:inherit}
+/* тонкие полосы прокрутки, проявляются при наведении */
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track,::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-thumb{border:3px solid transparent;border-radius:10px;background:color-mix(in srgb,var(--ink) 14%,transparent) padding-box}
+::-webkit-scrollbar-thumb:hover{background-color:color-mix(in srgb,var(--ink) 30%,transparent)}
+::-webkit-scrollbar-thumb:active{background-color:color-mix(in srgb,var(--acc) 60%,transparent)}
+:focus-visible{outline:2px solid var(--acc2);outline-offset:2px}
+
+/* кнопки: объёмная поверхность, блик, нажатие — проседает */
+button{transition:background-color .18s,border-color .18s,color .18s,box-shadow .2s,transform .16s var(--ease-out),filter .18s,opacity .18s}
+:is(.room,.modal,.upd) button{background-image:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,0) 60%);box-shadow:var(--hi),var(--sh1)}
+/* нажатие только у обычных кнопок зала; у кнопок, стоящих по центру через transform (#unmute), оно бы сбило положение */
+:is(.bar,.panel,.modal-box,.offer,.shareMe,.submenu,.callnote,.upd,.ctrls) button:active:not(:disabled){transform:scale(.96)}
+button.main{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 10%),var(--acc));border-color:transparent;color:#1b0b06;
+  box-shadow:var(--hi2),0 6px 18px -6px color-mix(in srgb,var(--acc) 70%,transparent)}
+button.main:hover{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 18%),color-mix(in srgb,var(--acc),#fff 6%));filter:none}
+button.off{background-color:color-mix(in srgb,#e5484d 16%,var(--panel2));border-color:color-mix(in srgb,#e5484d 40%,var(--line));color:#ffb3a3}
+
+/* блик, пробегающий по главной кнопке при наведении */
+.btn,.fab,.cz,button.main,.ctrls>button,.ring .rb,.kzt-tab,.viewsw button,.mx-card .btn{position:relative;overflow:hidden;isolation:isolate}
+:is(.btn.pri,button.main,.fab):not(.ctrls>button)::before{content:'';position:absolute;inset:0;z-index:-1;pointer-events:none;border-radius:inherit;
+  background:linear-gradient(105deg,transparent 30%,rgba(255,255,255,.32) 48%,transparent 66%);transform:translateX(-130%)}
+:is(.btn.pri,button.main,.fab):not(.ctrls>button):hover:not(:disabled)::before{transform:translateX(130%);transition:transform .8s var(--ease-soft)}
+/* круги от нажатия (их добавляет theme.js) */
+.kz-rip{position:absolute;border-radius:50%;pointer-events:none;background:currentColor;opacity:.22;transform:scale(0);animation:kzRip .6s var(--ease-out) forwards;z-index:-1}
+@keyframes kzRip{to{transform:scale(1);opacity:0}}
+
+/* поля: «утоплены» в поверхность, при фокусе — мягкое кольцо цветом акцента */
+input[type=text],input[type=search],input[type=datetime-local],textarea,select{transition:border-color .18s,box-shadow .2s,background-color .18s}
+input[type=text]{border-color:var(--edge);box-shadow:inset 0 1px 3px rgba(0,0,0,.35),0 1px 0 rgba(255,255,255,.03)}
+input[type=text]:focus{outline:none;border-color:color-mix(in srgb,var(--acc2) 70%,transparent);box-shadow:inset 0 1px 3px rgba(0,0,0,.3),0 0 0 4px color-mix(in srgb,var(--acc2) 16%,transparent)}
+input[type=text]::placeholder,textarea::placeholder{color:color-mix(in srgb,var(--mute) 80%,transparent)}
+
+/* выпадающие списки: своя стрелка, объём */
+select,.kzt-sel select{appearance:none;-webkit-appearance:none;padding-right:36px;border-color:var(--edge);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%238f9a9e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m1 1.5 5 5 5-5'/%3E%3C/svg%3E"),linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,0));
+  background-repeat:no-repeat;background-position:right 13px center,0 0;background-size:12px 8px,100% 100%;box-shadow:var(--hi),var(--sh1)}
+select{background-color:var(--panel2)}
+select:hover{border-color:color-mix(in srgb,var(--edge),var(--ink) 14%)}
+select:focus{outline:none;border-color:color-mix(in srgb,var(--acc2) 70%,transparent);box-shadow:0 0 0 4px color-mix(in srgb,var(--acc2) 16%,transparent)}
+select option{background:var(--card);color:var(--ink)}
+
+/* ползунки: тонкая дорожка с заливкой до бегунка (--p ставит theme.js), бегунок с бликом */
+input[type=range]{-webkit-appearance:none;appearance:none;height:22px;background:transparent;--p:50%}
+input[type=range]::-webkit-slider-runnable-track{height:5px;border-radius:5px;box-shadow:inset 0 1px 2px rgba(0,0,0,.4);
+  background:linear-gradient(90deg,var(--acc2),var(--acc)) 0 0/var(--p) 100% no-repeat,color-mix(in srgb,var(--ink) 16%,transparent)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;margin-top:-5.5px;border-radius:50%;border:0;
+  background:radial-gradient(circle at 50% 35%,#fff,color-mix(in srgb,#fff,var(--acc) 22%));box-shadow:0 0 0 3px color-mix(in srgb,var(--acc) 35%,transparent),0 2px 6px rgba(0,0,0,.5);transition:transform .15s var(--ease-spring),box-shadow .15s}
+input[type=range]:hover::-webkit-slider-thumb{transform:scale(1.15)}
+input[type=range]:active::-webkit-slider-thumb{transform:scale(1.25);box-shadow:0 0 0 6px color-mix(in srgb,var(--acc) 28%,transparent),0 2px 6px rgba(0,0,0,.5)}
+input[type=range]:disabled{opacity:.45}
+input[type=range]:focus-visible{outline:none}
+input[type=range]:focus-visible::-webkit-slider-thumb{box-shadow:0 0 0 4px var(--acc2),0 2px 6px rgba(0,0,0,.5)}
+
+/* галочки: свой квадратик с прорисованной галкой; в настройках — переключатели-тумблеры */
+:is(.chk,.pick) input[type=checkbox]{-webkit-appearance:none;appearance:none;flex:none;width:22px;height:22px;margin:0;border-radius:7px;cursor:pointer;display:grid;place-items:center;
+  border:1.5px solid color-mix(in srgb,var(--ink) 30%,transparent);background:var(--field);box-shadow:inset 0 1px 2px rgba(0,0,0,.35);transition:background-color .18s,border-color .18s}
+:is(.chk,.pick) input[type=checkbox]::before{content:'';width:11px;height:6px;border:solid var(--mineInk);border-width:0 0 2.5px 2.5px;transform:translateY(-1px) rotate(-45deg) scale(0);transition:transform .22s var(--ease-spring)}
+:is(.chk,.pick) input[type=checkbox]:checked{background:var(--pri);border-color:transparent;box-shadow:0 3px 10px -3px color-mix(in srgb,var(--mine2) 70%,transparent)}
+:is(.chk,.pick) input[type=checkbox]:checked::before{transform:translateY(-1px) rotate(-45deg) scale(1)}
+.pick input[type=checkbox]{margin-left:auto}
+.switch input[type=checkbox]{-webkit-appearance:none;appearance:none;flex:none;position:relative;width:44px!important;height:26px!important;margin:0;border-radius:13px;cursor:pointer;
+  background:color-mix(in srgb,var(--ink) 24%,var(--field));box-shadow:inset 0 1px 3px rgba(0,0,0,.4);transition:background-color .22s}
+.switch input[type=checkbox]::before{content:'';position:absolute;left:3px;top:3px;width:20px;height:20px;border-radius:50%;background:linear-gradient(180deg,#fff,#e6e9ea);
+  box-shadow:0 2px 5px rgba(0,0,0,.4);transition:transform .28s var(--ease-spring)}
+.switch input[type=checkbox]:checked{background:linear-gradient(135deg,var(--acc2),color-mix(in srgb,var(--acc2),var(--acc) 45%))}
+.switch input[type=checkbox]:checked::before{transform:translateX(18px)}
+.switch input[type=checkbox]:active::before{width:24px}
+.switch input[type=checkbox]:checked:active::before{transform:translateX(14px)}
+
+/* всплывающая подсказка снизу — стеклянная капсула, выезжает с пружинкой */
+.toast{background:color-mix(in srgb,var(--card) 82%,transparent);color:var(--ink);border:1px solid var(--edge);border-radius:16px;
+  backdrop-filter:blur(18px) saturate(1.5);-webkit-backdrop-filter:blur(18px) saturate(1.5);box-shadow:var(--hi),var(--sh3);
+  transform:translate(-50%,24px) scale(.94);transition:opacity .22s,transform .38s var(--ease-spring)}
+.toast::before{content:'';display:inline-block;width:8px;height:8px;margin:0 10px 1px 0;border-radius:50%;background:var(--acc2);box-shadow:0 0 10px var(--acc2);vertical-align:middle}
+.toast.on{transform:translate(-50%,0) scale(1)}
+
+/* ================= мессенджер ================= */
+.mx-side{background:var(--grain),linear-gradient(180deg,color-mix(in srgb,var(--side),var(--ink) 3%),var(--side) 40%);z-index:2;
+  box-shadow:1px 0 0 rgba(255,255,255,.025),10px 0 30px -14px rgba(0,0,0,.55)}
+.side-right>.mx-side{box-shadow:-1px 0 0 rgba(255,255,255,.025),-10px 0 30px -14px rgba(0,0,0,.55)}
+html.wall-all .mx-side{background-image:var(--grain)}
+/* шапка списка: как заголовок окна программы */
+.mx-top{position:relative}
+.mx-top .me :where(.av:not([class*=fr-])){box-shadow:0 0 0 2px var(--side),0 0 0 3.5px color-mix(in srgb,var(--acc) 70%,transparent),0 6px 16px -4px rgba(0,0,0,.5);transition:transform .25s var(--ease-spring)}
+.mx-top .me:hover .av{transform:scale(1.06) rotate(-3deg)}
+.mx-top h1#mxProf{transition:transform .2s var(--ease-out)}
+.mx-top #mxName::after{content:'›';display:inline-block;margin-left:.3em;transition:transform .2s var(--ease-out)}
+.mx-top h1#mxProf:hover #mxName::after{transform:translateX(3px)}
+#mx .mx-top .ib{transition:background-color .18s,color .18s,transform .25s var(--ease-spring)}
+#mx .mx-top .ib:hover{transform:translateY(-1px) scale(1.06)}
+.mx-sec{text-transform:uppercase;font-size:11.5px;letter-spacing:.12em;opacity:.85}
+/* поиск над списком: утопленное поле, при фокусе — подсветка */
+.mx-search{position:relative}
+.mx-search::after{content:'';position:absolute;left:18px;right:18px;bottom:0;height:1px;background:linear-gradient(90deg,transparent,var(--edge),transparent)}
+.mx-search input{border-color:color-mix(in srgb,var(--edge) 60%,transparent);box-shadow:inset 0 1px 3px rgba(0,0,0,.35),0 1px 0 rgba(255,255,255,.03);transition:border-color .18s,box-shadow .22s,background-color .18s}
+.mx-search input:focus{border-color:color-mix(in srgb,var(--acc2) 70%,transparent);box-shadow:inset 0 1px 3px rgba(0,0,0,.3),0 0 0 4px color-mix(in srgb,var(--acc2) 15%,transparent)}
+.mx-list{padding-top:8px}
+/* полоса «идёт звонок» — светится и дышит */
+.mx-callbar{position:relative;overflow:hidden;box-shadow:var(--hi),0 8px 22px -10px color-mix(in srgb,var(--acc2) 70%,transparent);transition:transform .2s var(--ease-out)}
+.mx-callbar::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.14) 50%,transparent 70%);animation:kzSheen 3.2s ease-in-out infinite}
+.mx-callbar:hover{transform:translateY(-1px)}
+@keyframes kzSheen{0%,40%{transform:translateX(-110%)}100%{transform:translateX(110%)}}
+
+/* строки чатов: мягкая подсветка, выбранный — приподнятая карточка */
+.ci{transition:background-color .18s,box-shadow .2s,transform .18s var(--ease-out)}
+.ci:hover{background:linear-gradient(90deg,var(--hover),color-mix(in srgb,var(--hover) 40%,transparent))}
+.ci .avwrap{transition:transform .25s var(--ease-spring)}
+.ci:hover .avwrap{transform:scale(1.05)}
+.ci.act{background:linear-gradient(180deg,color-mix(in srgb,var(--active),var(--ink) 3%),var(--active));box-shadow:var(--hi),0 6px 18px -10px rgba(0,0,0,.6)}
+.ci.act::before{background:linear-gradient(180deg,var(--acc),var(--acc2));box-shadow:0 0 12px color-mix(in srgb,var(--acc) 70%,transparent);animation:kzBarIn .35s var(--ease-spring)}
+@keyframes kzBarIn{from{transform:scaleY(0)}}
+.ci .nm{letter-spacing:.005em}
+.ci .tm{font-variant-numeric:tabular-nums}
+.ci .badge,#mx.rail .ci[data-unread]::after{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 12%),var(--acc));box-shadow:var(--hi2),0 3px 10px -2px color-mix(in srgb,var(--acc) 70%,transparent)}
+.ci .badge.bump{animation:kzBump .5s var(--ease-spring)}
+@keyframes kzBump{0%{transform:scale(.3);opacity:0}60%{transform:scale(1.18)}}
+/* при запуске строки въезжают по очереди (порядок — --i из messenger.js) */
+.mx-list.enter>.ci{animation:kzRowIn .46s var(--ease-out) backwards;animation-delay:calc(min(var(--i,0),12) * 38ms)}
+@keyframes kzRowIn{from{opacity:0;transform:translateX(-16px)}}
+#mx.side-right .mx-list.enter>.ci{animation-name:kzRowInR}
+@keyframes kzRowInR{from{opacity:0;transform:translateX(16px)}}
+.dot{background:radial-gradient(circle at 40% 35%,#7dffc0,#2fd07f);box-shadow:0 0 8px rgba(62,224,143,.6)}
+/* «печатает» — три прыгающие точки */
+.ci .ls .ty::after,.mx-chead .typing::after{content:'';display:inline-block;width:18px;height:9px;margin-left:5px;vertical-align:-1px;
+  background:radial-gradient(circle,currentColor 1.7px,transparent 2.2px) 0 100%/6px 6px no-repeat,radial-gradient(circle,currentColor 1.7px,transparent 2.2px) 50% 100%/6px 6px no-repeat,radial-gradient(circle,currentColor 1.7px,transparent 2.2px) 100% 100%/6px 6px no-repeat;
+  animation:kzType 1.15s ease-in-out infinite}
+@keyframes kzType{0%,80%,100%{background-position:0 100%,50% 100%,100% 100%}20%{background-position:0 0,50% 100%,100% 100%}40%{background-position:0 100%,50% 0,100% 100%}60%{background-position:0 100%,50% 100%,100% 0}}
+
+/* плавающая кнопка «новый чат» */
+.fab{box-shadow:var(--hi2),0 10px 26px -6px color-mix(in srgb,var(--mine2) 65%,transparent),0 2px 6px rgba(0,0,0,.3);transition:transform .3s var(--ease-spring),filter .18s,box-shadow .25s}
+.fab:hover{transform:translateY(-2px) scale(1.06);filter:brightness(1.06)}
+.fab svg{transition:transform .35s var(--ease-spring)}
+.fab:hover svg{transform:rotate(-14deg) scale(1.08)}
+.mx-fab:has(.fabmenu:not([hidden])) .fab svg{transform:rotate(-30deg)}
+
+/* меню (⋯, долгое нажатие, карандаш): матовое стекло */
+:is(.mx-pop,.fabmenu,.menu){background:var(--glass)!important;border:1px solid var(--edge)!important;backdrop-filter:blur(22px) saturate(1.6);-webkit-backdrop-filter:blur(22px) saturate(1.6);box-shadow:var(--hi),var(--sh3)!important}
+.menu button{box-shadow:none;background-image:none;transition:background-color .15s,color .15s,transform .15s}
+.menu button i{transition:transform .25s var(--ease-spring)}
+.menu button:hover i{transform:scale(1.2)}
+.menu button:hover{background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.menu button.danger:hover{background:color-mix(in srgb,#ff6b5a 14%,transparent)}
+.menu .rxrow button:hover{transform:scale(1.22)}
+
+/* правая часть: пустой экран — логотип покачивается, заголовок с глубиной */
+.mx-empty{animation:kzFadeUp .5s var(--ease-out)}
+.mx-empty>svg{animation:kzFloat 6s ease-in-out infinite;filter:drop-shadow(0 18px 30px rgba(0,0,0,.45))}
+@keyframes kzFloat{50%{transform:translateY(-8px)}}
+@keyframes kzFadeUp{from{opacity:0;transform:translateY(10px)}}
+html:not(.neon-text) .mx-empty h2{background:linear-gradient(180deg,var(--ink) 30%,color-mix(in srgb,var(--ink),var(--mute) 70%));-webkit-background-clip:text;background-clip:text;color:transparent}
+.idcard{background:var(--surf);border-color:var(--edge);box-shadow:var(--hi),var(--sh2)}
+.idcard code{text-shadow:0 0 18px color-mix(in srgb,var(--acc) 40%,transparent)}
+
+/* кнопки сообщений, окон и т.п. */
+.btn{background:var(--surf2);border-color:var(--edge);box-shadow:var(--hi),var(--sh1)}
+.btn:hover{background:linear-gradient(180deg,color-mix(in srgb,var(--card),var(--ink) 14%),color-mix(in srgb,var(--card),var(--ink) 8%));border-color:color-mix(in srgb,var(--edge),var(--ink) 10%)}
+.btn.pri{background:var(--pri);box-shadow:var(--hi2),0 6px 18px -6px color-mix(in srgb,var(--mine2) 70%,transparent)}
+.btn.pri:hover{background:var(--pri);filter:brightness(1.07);box-shadow:var(--hi2),0 10px 24px -6px color-mix(in srgb,var(--mine2) 80%,transparent)}
+.btn:disabled{box-shadow:none}
+
+/* шапка чата: стеклянная панель с тенью на переписку */
+.mx-chead{background:linear-gradient(180deg,color-mix(in srgb,var(--side),var(--ink) 3%),color-mix(in srgb,var(--side) 90%,transparent));
+  backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4);border-bottom-color:var(--edge);box-shadow:0 10px 24px -14px rgba(0,0,0,.6)}
+.mx-chead .avwrap{cursor:pointer;transition:transform .25s var(--ease-spring)}
+.mx-chead .avwrap:hover{transform:scale(1.06)}
+.mx-chead .who b{letter-spacing:.005em}
+.mx-chead .who span{transition:color .2s}
+.mx-chead::after{content:'';position:absolute;left:0;right:0;top:100%;height:14px;pointer-events:none;background:linear-gradient(rgba(0,0,0,.14),transparent)}
+#mx .mx-chead .ib{transition:background-color .18s,color .18s,transform .25s var(--ease-spring)}
+#mx .mx-chead .ib:hover{transform:scale(1.08)}
+/* кнопки звонка: объёмные капсулы, при наведении приподнимаются и светятся своим цветом */
+.cz{background:var(--surf2);border-color:var(--edge);box-shadow:var(--hi),var(--sh1);transition:transform .22s var(--ease-spring),box-shadow .22s,color .18s,border-color .18s,background-color .18s}
+.cz:hover:not(:disabled){transform:translateY(-1px)}
+.cz.call:hover:not(:disabled){box-shadow:var(--hi),0 8px 20px -8px rgba(62,224,143,.6)}
+.cz.cine:hover:not(:disabled){box-shadow:var(--hi),0 8px 20px -8px color-mix(in srgb,var(--acc) 70%,transparent)}
+.cz svg{transition:transform .3s var(--ease-spring)}
+.cz.call:hover svg{animation:kzWiggle .5s ease-in-out}
+.cz.cine:hover svg{transform:scale(1.12) rotate(-6deg)}
+@keyframes kzWiggle{25%{transform:rotate(-12deg)}50%{transform:rotate(10deg)}75%{transform:rotate(-5deg)}}
+.cz.live{box-shadow:var(--hi2),0 6px 20px -4px rgba(30,170,100,.55)}
+.cz.live::after{content:'';position:absolute;inset:0;pointer-events:none;background:linear-gradient(100deg,transparent 30%,rgba(255,255,255,.22) 50%,transparent 70%);animation:kzSheen 2.6s ease-in-out infinite}
+.mx-banner{background:var(--surf);border-bottom-color:var(--edge);box-shadow:0 8px 18px -12px rgba(0,0,0,.5);animation:kzDrop .3s var(--ease-out)}
+@keyframes kzDrop{from{opacity:0;transform:translateY(-8px)}}
+/* открытие чата: шапка опускается, переписка всплывает, поле ввода поднимается */
+.mx-chat.enter .mx-chead{animation:kzDrop .34s var(--ease-out)}
+.mx-chat.enter .mx-msgs{animation:kzFadeUp .38s var(--ease-out)}
+.mx-chat.enter .mx-input{animation:kzRise .4s var(--ease-out)}
+@keyframes kzRise{from{opacity:0;transform:translateY(14px)}}
+/* пока переписка читается из памяти — силуэты сообщений (появляются, только если загрузка затянулась) */
+.mx-msgs.loading::before{content:'';flex:1;min-height:260px;opacity:0;animation:kzSkelIn .3s .18s forwards,kzShimmer 1.4s linear infinite;
+  background:linear-gradient(100deg,transparent 40%,color-mix(in srgb,var(--ink) 7%,transparent) 50%,transparent 60%) 0 0/200% 100%,var(--bub);
+  -webkit-mask:linear-gradient(#000 0 0) left 0 bottom 150px/46% 38px no-repeat,linear-gradient(#000 0 0) right 0 bottom 100px/38% 38px no-repeat,linear-gradient(#000 0 0) right 0 bottom 50px/52% 38px no-repeat,linear-gradient(#000 0 0) left 0 bottom 0/30% 38px no-repeat;
+  border-radius:18px}
+@keyframes kzSkelIn{to{opacity:1}}
+@keyframes kzShimmer{from{background-position:100% 0,0 0}to{background-position:-100% 0,0 0}}
+
+/* дата над сообщениями: стеклянная таблетка, прилипает к верху при прокрутке */
+.day{background:color-mix(in srgb,var(--card) 70%,transparent);border:1px solid color-mix(in srgb,var(--edge) 70%,transparent);
+  backdrop-filter:blur(12px) saturate(1.4);-webkit-backdrop-filter:blur(12px) saturate(1.4);box-shadow:var(--sh1);letter-spacing:.02em}
+.sysm{background:color-mix(in srgb,var(--card) 60%,transparent);border:1px solid color-mix(in srgb,var(--edge) 50%,transparent);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+
+/* пузыри: чужие — матовые с бликом, свои — светятся своим цветом */
+.b{background:linear-gradient(180deg,color-mix(in srgb,var(--bub),#fff 4%),var(--bub));box-shadow:var(--hi),0 1px 1px rgba(0,0,0,.18),0 6px 16px -8px rgba(0,0,0,.45)}
+.m.mine:not(.circ) .b{background:linear-gradient(160deg,color-mix(in srgb,var(--mine1),#fff 8%),var(--mine1) 35%,var(--mine2));
+  box-shadow:var(--hi2),0 1px 1px rgba(0,0,0,.15),0 8px 20px -10px color-mix(in srgb,var(--mine2) 80%,transparent)}
+.m.mine:not(.circ) .b.media{background:var(--bub2)}
+.m.circ .b{background:none}
+.b.media img{transition:transform .35s var(--ease-out),filter .2s}
+.b.media:hover img{filter:brightness(1.05)}
+.m :where(.av:not([class*=fr-])){box-shadow:0 3px 10px -3px rgba(0,0,0,.5)}
+.circle{box-shadow:0 0 0 1px rgba(255,255,255,.06),0 10px 30px -6px rgba(0,0,0,.55);transition:transform .3s var(--ease-spring)}
+.circle:hover{transform:scale(1.02)}
+.voice .pl{box-shadow:var(--hi2),0 4px 12px -4px rgba(0,0,0,.45);transition:transform .25s var(--ease-spring),filter .18s}
+.voice .pl:hover{transform:scale(1.08)}
+.voice .wv i{transition:opacity .2s,transform .2s}
+.voice .wv i.p{transform:scaleY(1.08)}
+.rx button{box-shadow:none;background-image:none;transition:transform .2s var(--ease-spring),background-color .15s}
+.rx button:hover{transform:scale(1.08)}
+.rx button.mine{animation:kzBump .4s var(--ease-spring)}
+.quote{transition:background-color .15s}
+.quote:hover{background:color-mix(in srgb,currentColor 15%,transparent)}
+/* «вниз» — стеклянная кнопка, счётчик пульсирует */
+.mx-down{background:var(--glass);border-color:var(--edge);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:var(--hi),var(--sh2);animation:kzPopIn .3s var(--ease-spring);transition:transform .22s var(--ease-spring),background-color .18s}
+.mx-down:hover{transform:translateY(-2px)}
+.mx-down b{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 12%),var(--acc));box-shadow:0 2px 8px -2px color-mix(in srgb,var(--acc) 80%,transparent);animation:kzBump .45s var(--ease-spring)}
+@keyframes kzPopIn{from{opacity:0;transform:scale(.6)}}
+
+/* поле ввода: утопленная капсула, при фокусе — свечение */
+.mx-input .field{background:linear-gradient(180deg,color-mix(in srgb,var(--field),var(--ink) 3%),var(--field));border-color:var(--edge);
+  box-shadow:inset 0 1px 3px rgba(0,0,0,.3),var(--sh1);transition:border-color .2s,box-shadow .25s}
+.mx-input .field:focus-within{border-color:color-mix(in srgb,var(--acc2) 55%,transparent);box-shadow:inset 0 1px 3px rgba(0,0,0,.25),0 0 0 4px color-mix(in srgb,var(--acc2) 12%,transparent),var(--sh1)}
+#mx .mx-input .clip{transition:transform .3s var(--ease-spring),color .15s,background-color .15s}
+#mx .mx-input .clip:hover{transform:rotate(-20deg)}
+.rec-btn{box-shadow:var(--hi2),0 8px 20px -6px color-mix(in srgb,var(--mine2) 70%,transparent),0 2px 5px rgba(0,0,0,.3)}
+.rec-btn:not(.hold):hover{transform:translateY(-1px) scale(1.05)}
+.rec-btn svg{transition:transform .3s var(--ease-spring)}
+.rec-btn:not(.hold):hover svg{transform:scale(1.1)}
+/* при записи под пальцем расходится пульс */
+.rec-btn.hold::after{content:'';position:absolute;inset:-6px;border-radius:50%;border:2px solid var(--mine1);animation:kzRing 1.2s ease-out infinite;pointer-events:none}
+@keyframes kzRing{from{transform:scale(.85);opacity:.9}to{transform:scale(1.6);opacity:0}}
+.recbar{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--hi),var(--sh2);animation:kzRise .25s var(--ease-out)}
+.recbar .send{box-shadow:var(--hi2),0 6px 16px -6px color-mix(in srgb,var(--mine2) 70%,transparent)}
+.recbar .lv i{background:linear-gradient(180deg,var(--acc),var(--acc2))}
+.rec-gest>div{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);box-shadow:var(--hi),var(--sh2)}
+.rec-hint{background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);box-shadow:var(--sh2);transform:translateY(6px);transition:opacity .2s,transform .3s var(--ease-spring)}
+.rec-hint.on{transform:none}
+.mx-pre .pl{background:var(--glass);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-color:var(--edge);box-shadow:var(--hi),var(--sh2);animation:kzRise .25s var(--ease-out)}
+.mx-find{background:color-mix(in srgb,var(--side) 82%,transparent);backdrop-filter:blur(16px) saturate(1.4);-webkit-backdrop-filter:blur(16px) saturate(1.4)}
+.mx-find .fi{box-shadow:inset 0 1px 3px rgba(0,0,0,.3);transition:border-color .18s,box-shadow .2s}
+.mx-find .fi:focus-within{box-shadow:inset 0 1px 3px rgba(0,0,0,.3),0 0 0 4px color-mix(in srgb,var(--acc2) 14%,transparent)}
+.m.found .b{outline:none;box-shadow:0 0 0 2px var(--acc2),0 0 22px -2px color-mix(in srgb,var(--acc2) 60%,transparent)}
+.mx-split::after{background:linear-gradient(180deg,transparent,var(--acc2) 20%,var(--acc) 80%,transparent);box-shadow:0 0 12px var(--acc2)}
+
+/* окна: стекло под окном, само окно — материал с бликом и глубокой тенью */
+.mx-modal{background:radial-gradient(1200px 700px at 50% 40%,rgba(0,0,0,.45),rgba(0,0,0,.72));backdrop-filter:blur(10px) saturate(1.2);-webkit-backdrop-filter:blur(10px) saturate(1.2)}
+.mx-card{background:var(--grain),var(--surf);border-color:var(--edge);box-shadow:var(--hi),var(--sh3)}
+.mx-card h2{letter-spacing:.005em}
+.mx-card>*{animation:kzFadeUp .4s var(--ease-out) backwards}
+.mx-card>:nth-child(2){animation-delay:.03s}.mx-card>:nth-child(3){animation-delay:.06s}.mx-card>:nth-child(4){animation-delay:.09s}
+.mx-card>:nth-child(5){animation-delay:.12s}.mx-card>:nth-child(n+6){animation-delay:.15s}
+.mx-card input[type=text]{border-color:var(--edge)}
+.mx-modal.out .mx-card>*{animation:none}
+.pick{transition:background-color .15s,transform .2s var(--ease-out)}
+.pick:hover{transform:translateX(2px)}
+.avpick .av{box-shadow:0 0 0 4px var(--card),0 0 0 6px color-mix(in srgb,var(--acc) 50%,transparent),0 14px 30px -10px rgba(0,0,0,.6);transition:transform .3s var(--ease-spring)}
+.avpick:hover .av{transform:scale(1.04)}
+.avpick em{box-shadow:0 4px 10px rgba(0,0,0,.4);transition:transform .3s var(--ease-spring)}
+.avpick:hover em{transform:rotate(90deg) scale(1.1)}
+.sep{background:linear-gradient(90deg,transparent,var(--edge),transparent)}
+.adv{background:color-mix(in srgb,var(--field) 50%,transparent);border-color:var(--edge)}
+.adv summary{transition:color .15s}
+.kzt-tab{box-shadow:none}
+.kzt-tab.on{box-shadow:var(--hi2),0 6px 16px -6px color-mix(in srgb,var(--mine2) 70%,transparent)}
+.kzt-pv,.kzt-wall{box-shadow:var(--sh1);transition:transform .25s var(--ease-spring),border-color .18s,box-shadow .2s}
+.kzt-pv:hover,.kzt-wall:hover{transform:translateY(-3px);box-shadow:var(--sh2)}
+.kzt-pv.on,.kzt-wall.on{box-shadow:0 0 0 1px var(--acc),0 10px 24px -10px color-mix(in srgb,var(--acc) 70%,transparent)}
+.kzt-chip{box-shadow:none;transition:border-color .15s,background-color .15s,transform .2s var(--ease-spring)}
+.kzt-chip:hover{transform:translateY(-1px)}
+.kzt-color{transition:background-color .15s}
+.kzt-color:hover{background:color-mix(in srgb,var(--field),var(--ink) 5%)}
+.kzt-live{box-shadow:inset 0 0 0 1px rgba(255,255,255,.03),var(--sh2)}
+/* приветствие: свет от проектора, карточка всплывает */
+.mx-hello{background:radial-gradient(1000px 600px at 80% 0%,color-mix(in srgb,var(--acc) 16%,transparent),transparent 60%),radial-gradient(800px 600px at 0% 100%,color-mix(in srgb,var(--acc2) 12%,transparent),transparent 60%),var(--grain),var(--bg)}
+.mx-hello svg.logo{animation:kzFloat 6s ease-in-out infinite;filter:drop-shadow(0 16px 26px rgba(0,0,0,.5))}
+/* входящий звонок: кнопки покачиваются, зовут ответить */
+.ring .rb{box-shadow:var(--hi2),0 10px 24px -8px rgba(0,0,0,.6)}
+.ring .rb.yes{background:linear-gradient(135deg,#3bd082,#24a862);box-shadow:var(--hi2),0 10px 26px -6px rgba(47,191,113,.7);animation:kzCall 1.4s ease-in-out infinite}
+.ring .rb.no{background:linear-gradient(135deg,#f05a5f,#d23b40);box-shadow:var(--hi2),0 10px 26px -6px rgba(229,72,77,.6)}
+@keyframes kzCall{0%,60%,100%{transform:rotate(0)}10%,30%{transform:rotate(-12deg)}20%,40%{transform:rotate(12deg)}}
+.ring .rb:hover{transform:scale(1.08)}
+
+/* ================= зал ================= */
+.room{background:radial-gradient(1100px 520px at 85% -10%,color-mix(in srgb,var(--acc) 9%,transparent),transparent 60%),radial-gradient(900px 600px at -10% 110%,color-mix(in srgb,var(--acc2) 7%,transparent),transparent 60%),var(--grain),var(--bg)}
+/* верхняя панель — как заголовок окна программы */
+.bar{position:relative;z-index:3;background:linear-gradient(180deg,color-mix(in srgb,var(--panel),var(--ink) 4%),var(--panel));border-bottom-color:var(--edge);box-shadow:var(--hi),0 10px 30px -18px rgba(0,0,0,.8)}
+.bar h1{display:flex;align-items:center;gap:10px}
+.bar h1::before{content:'';width:14px;height:14px;border-radius:4px;flex:none;background:linear-gradient(135deg,var(--acc),var(--acc2));box-shadow:0 0 14px color-mix(in srgb,var(--acc) 60%,transparent);animation:kzMark 4s ease-in-out infinite}
+@keyframes kzMark{50%{transform:rotate(45deg) scale(.86)}}
+.codebox strong{text-shadow:0 0 22px color-mix(in srgb,var(--acc) 45%,transparent)}
+.bar .back{transition:transform .2s var(--ease-out),background-color .18s}
+.bar .back:hover{transform:translateX(-2px)}
+/* переключатель вида: подложка переезжает под выбранную кнопку */
+.viewsw{position:relative;display:grid;grid-template-columns:1fr 1fr;background:var(--field,#0b1012);border-color:var(--edge);box-shadow:inset 0 1px 3px rgba(0,0,0,.35)}
+.viewsw::before{content:'';position:absolute;top:4px;bottom:4px;left:4px;width:calc(50% - 4px);border-radius:10px;background:linear-gradient(180deg,color-mix(in srgb,var(--panel2),var(--ink) 8%),var(--panel2));
+  box-shadow:var(--hi),var(--sh1);transition:transform .38s var(--ease-spring)}
+.viewsw:has(#viewHall.on)::before{transform:translateX(100%)}
+.viewsw button{z-index:1;box-shadow:none;background:transparent!important;transition:color .2s}
+.viewsw button:hover{color:var(--ink)}
+.viewsw button.on{color:var(--ink)}
+.viewsw button i{display:inline-block;margin-right:.35em;transition:transform .3s var(--ease-spring)}
+.viewsw button.on i{transform:scale(1.15)}
+
+/* экран: тёмное стекло, тонкая светлая кромка, свет проектора вокруг */
+.stage{border-radius:18px;box-shadow:0 0 0 1px rgba(255,255,255,.06),0 14px 40px -10px rgba(0,0,0,.7),0 0 90px -24px color-mix(in srgb,var(--acc) 45%,transparent)}
+.stage:not(.live)::before{content:'';position:absolute;inset:0;pointer-events:none;background:radial-gradient(60% 55% at 50% 42%,color-mix(in srgb,var(--acc) 10%,transparent),transparent 70%);animation:kzBreath 5s ease-in-out infinite}
+@keyframes kzBreath{50%{opacity:.45}}
+.stage .empty{animation:kzFadeUp .5s var(--ease-out)}
+.stage .empty b{font-size:20px;letter-spacing:.01em}
+/* полоса управления фильмом — плавающая стеклянная панель */
+.vbar{left:10px;right:10px;bottom:10px;padding:8px 10px;border-radius:16px;background:rgba(10,13,15,.55);border:1px solid rgba(255,255,255,.09);
+  backdrop-filter:blur(12px) saturate(1.3);-webkit-backdrop-filter:blur(12px) saturate(1.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 10px 30px -10px rgba(0,0,0,.7);transition:opacity .3s,transform .35s var(--ease-out)}
+.stage.idle .vbar{transform:translateY(10px)}
+.vbar button{background:transparent;border-color:transparent;box-shadow:none;border-radius:11px}
+.vbar button:hover{background:rgba(255,255,255,.12)}
+.vbar #pp{background:rgba(255,255,255,.12);min-width:48px}
+.vbar #pp:hover{background:rgba(255,255,255,.2)}
+.subs{bottom:max(12%,84px)}
+.stage.sharing .vbar{left:auto}
+@container (max-width:620px){.vbar{padding:6px 8px;gap:6px}}
+.osd{background:rgba(10,13,15,.6);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 10px 30px -10px rgba(0,0,0,.7);
+  transform:translateX(-50%) translateY(-8px) scale(.94);transition:opacity .25s,transform .35s var(--ease-spring)}
+.osd.on{transform:translateX(-50%)}
+.submenu,.offer,.shareMe{background:rgba(12,16,18,.72);border-color:rgba(255,255,255,.1);backdrop-filter:blur(14px) saturate(1.3);-webkit-backdrop-filter:blur(14px) saturate(1.3);box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 14px 40px -12px rgba(0,0,0,.75)}
+.submenu:not([hidden]){animation:kzPop .22s var(--ease-spring);transform-origin:bottom right}
+.offer:not([hidden]){animation:kzDrop .3s var(--ease-out)}
+@keyframes kzPop{from{opacity:0;transform:scale(.92)}}
+.shareMe .live{animation:kzBlink 1.6s ease-in-out infinite}
+@keyframes kzBlink{50%{opacity:.4}}
+.sharesw{box-shadow:inset 0 1px 0 rgba(255,255,255,.07),0 8px 24px -8px rgba(0,0,0,.7)}
+.sharesw button{box-shadow:none;background-image:none}
+.sharesw button.on{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 10%),var(--acc));box-shadow:0 4px 12px -4px color-mix(in srgb,var(--acc) 80%,transparent)}
+.float{box-shadow:0 0 0 1px rgba(255,255,255,.08),0 12px 30px -6px rgba(0,0,0,.7);transition:box-shadow .2s,opacity .2s}
+.float.drag{box-shadow:0 0 0 1px rgba(255,255,255,.14),0 24px 50px -10px rgba(0,0,0,.8)}
+.fcam span,.tile figcaption{background:rgba(8,11,13,.55);border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.fslog div{background:rgba(8,11,13,.6);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:kzFadeUp .3s var(--ease-out)}
+
+/* кнопки под экраном — «док»: одна стеклянная полка с объёмными клавишами */
+@media(min-width:761px){
+  .ctrls{padding:8px;border-radius:20px;background:linear-gradient(180deg,color-mix(in srgb,var(--panel),var(--ink) 3%),var(--panel));border:1px solid var(--edge);box-shadow:var(--hi),var(--sh2)}
+  .ctrls>button{display:inline-flex;align-items:center;gap:9px;border-radius:14px;background-color:var(--panel2);border-color:var(--edge)}
+  .ctrls>button:hover:not(:disabled){transform:translateY(-1px);box-shadow:var(--hi),var(--sh2)}
+  .ctrls>button.off{background-color:color-mix(in srgb,#e5484d 18%,var(--panel2));border-color:color-mix(in srgb,#e5484d 42%,var(--line))}
+  .ctrls>button:active:not(:disabled){transform:scale(.96)}
+  /* значки на кнопках: рисуются маской, цвет — как у текста */
+  :is(#micBtn,#camBtn,#shareBtn,#leaveBtn,#fileBtn,#ownBtn,#hallFs,#flipBtn,#spkBtn,#chatBtn)::before{content:'';width:18px;height:18px;flex:none;background:currentColor;
+    -webkit-mask:var(--ico) center/contain no-repeat;mask:var(--ico) center/contain no-repeat}
+  #micBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'%3E%3Crect x='9' y='2' width='6' height='12' rx='3'/%3E%3Cpath d='M5 11a7 7 0 0 0 14 0M12 18v4'/%3E%3C/svg%3E")}
+  #camBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 10l5-3v10l-5-3z'/%3E%3Crect x='2' y='6' width='13' height='12' rx='3'/%3E%3C/svg%3E")}
+  #shareBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='4' width='18' height='12' rx='2'/%3E%3Cpath d='M8 20h8M12 16v4'/%3E%3C/svg%3E")}
+  #leaveBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23000'%3E%3Cpath d='M2.5 14.2c5.3-5.2 13.7-5.2 19 0l-2.6 2.6-3.6-2v-2.6a10 10 0 0 0-6.6 0v2.6l-3.6 2z'/%3E%3C/svg%3E")}
+  #fileBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'%3E%3Crect x='3' y='4' width='18' height='16' rx='3'/%3E%3Cpath d='M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4'/%3E%3C/svg%3E")}
+  #ownBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M3 6h6l2 2h10v11H3z'/%3E%3C/svg%3E")}
+  #hallFs{font-size:0;gap:0;--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5'/%3E%3C/svg%3E")}
+  #hallFs::after{content:'Весь экран';font-size:16px;margin-left:9px}
+  #flipBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 10a8 8 0 0 1 14-4l2 2M20 4v4h-4M20 14a8 8 0 0 1-14 4l-2-2M4 20v-4h4'/%3E%3C/svg%3E")}
+  #spkBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 9v6h4l5 4V5L8 9z'/%3E%3Cpath d='M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12'/%3E%3C/svg%3E")}
+  #chatBtn{--ico:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 5h16v11H9l-5 4z'/%3E%3C/svg%3E")}
+  /* микрофон и камера: при выключении значок вздрагивает и его перечёркивает линия */
+  #micBtn::after,#camBtn::after{content:'';position:absolute;left:16px;top:50%;width:23px;height:2px;margin-top:-1px;border-radius:2px;background:currentColor;
+    box-shadow:0 0 0 1.5px color-mix(in srgb,#e5484d 16%,var(--panel2));transform:rotate(45deg) scaleX(0);transition:transform .3s var(--ease-spring)}
+  #micBtn.off::after,#camBtn.off::after{transform:rotate(45deg) scaleX(1)}
+  #micBtn::before,#camBtn::before{animation:kzIcoOn .45s var(--ease-spring)}
+  #micBtn.off::before,#camBtn.off::before{animation:kzIcoOff .45s var(--ease-spring)}
+  #fileBtn:hover::before{animation:kzWiggle .5s ease-in-out}
+  #shareBtn:hover::before{transform:translateY(-2px);transition:transform .25s var(--ease-spring)}
+  #leaveBtn{background:linear-gradient(135deg,#f05a5f,#d23b40);border-color:transparent;color:#fff;box-shadow:var(--hi2),0 6px 18px -6px rgba(229,72,77,.65)}
+  #leaveBtn:hover{background:linear-gradient(135deg,#f46a6f,#dc4449)}
+  #leaveBtn:hover::before{transform:rotate(-12deg);transition:transform .3s var(--ease-spring)}
+  #fxBtn{border-radius:14px}
+  #fxBtn:hover{transform:translateY(-1px) rotate(-6deg) scale(1.05)}
+}
+@keyframes kzIcoOn{0%{transform:scale(.6)}60%{transform:scale(1.2)}}
+@keyframes kzIcoOff{0%{transform:rotate(0)}25%{transform:rotate(-14deg) scale(.9)}55%{transform:rotate(10deg)}}
+/* на телефоне — те же круглые кнопки, но с бликом и «вздрагиванием» при переключении */
+@media(max-width:760px){
+  #room .ctrls>button{background-image:none;box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 8px 20px -6px rgba(0,0,0,.6)}
+  #room #micBtn.off,#room #camBtn.off{animation:kzIcoOff .45s var(--ease-spring)}
+  #room #micBtn:not(.off),#room #camBtn:not(.off){animation:kzIcoOn .45s var(--ease-spring)}
+}
+
+/* панели справа */
+.panel{background:var(--grain),linear-gradient(180deg,color-mix(in srgb,var(--panel),var(--ink) 3%),var(--panel));border-color:var(--edge);border-radius:18px;box-shadow:var(--hi),var(--sh2)}
+.panel:not(.help) h2{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;font-weight:800}
+button.mini{box-shadow:var(--hi);background-color:color-mix(in srgb,var(--panel2),var(--ink) 3%)}
+.devs{background:color-mix(in srgb,var(--field,#0b1012) 70%,var(--panel));border-color:var(--edge);box-shadow:inset 0 1px 3px rgba(0,0,0,.3);animation:kzDrop .25s var(--ease-out)}
+.meter{background:color-mix(in srgb,var(--ink) 10%,transparent);box-shadow:inset 0 1px 2px rgba(0,0,0,.4)}
+.meter i{background:linear-gradient(90deg,var(--acc2),var(--acc));box-shadow:0 0 10px color-mix(in srgb,var(--acc2) 70%,transparent)}
+#msgs>.msg{padding:3px 7px;border-radius:10px;transition:background-color .15s}
+#msgs>.msg:hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
+.msg.sys{font-style:normal;opacity:.9}
+#chatForm button{border-radius:12px}
+#chatForm>button:last-child{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 10%),var(--acc));border-color:transparent;color:#1b0b06;box-shadow:var(--hi2),0 6px 16px -6px color-mix(in srgb,var(--acc) 70%,transparent)}
+#chatForm>button:last-child:hover{filter:brightness(1.08)}
+.chatimg{box-shadow:var(--sh1)}
+
+/* плитки участников: стеклянная кромка, говорящий светится пульсирующим кольцом */
+.tile{box-shadow:0 0 0 1px rgba(255,255,255,.06),0 8px 22px -10px rgba(0,0,0,.7)}
+.tile.talk{box-shadow:0 0 0 1px rgba(255,255,255,.06),0 8px 22px -10px rgba(0,0,0,.7)}
+.tile::before{content:'';position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .25s;
+  box-shadow:inset 0 0 0 3px var(--acc2),inset 0 0 28px -4px color-mix(in srgb,var(--acc2) 55%,transparent)}
+.tile.talk::before{opacity:1;animation:kzTalk 1s ease-in-out infinite alternate}
+@keyframes kzTalk{from{opacity:.55}to{opacity:1}}
+.tile .ava{text-shadow:0 0 30px color-mix(in srgb,var(--acc2) 55%,transparent),0 4px 12px rgba(0,0,0,.5)}
+.tile.novideo .ava{animation:kzFadeUp .4s var(--ease-out)}
+.tile.muted::after{background:rgba(8,11,13,.6);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);animation:kzPopIn .3s var(--ease-spring)}
+.tile .lat{background:rgba(8,11,13,.55);border:1px solid rgba(255,255,255,.08)}
+.tvol{background:rgba(8,11,13,.6);border:1px solid rgba(255,255,255,.1);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);transform:translateY(-4px);transition:opacity .18s,transform .25s var(--ease-out)}
+.tile:hover .tvol,.tvol:focus-within{transform:none}
+.tact button{box-shadow:0 4px 12px -2px rgba(0,0,0,.5);background-image:none}
+.tile.pinned .tact .pin{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 10%),var(--acc));box-shadow:0 4px 12px -2px color-mix(in srgb,var(--acc) 70%,transparent)}
+.tact .kick:hover{box-shadow:0 4px 14px -2px rgba(255,80,60,.6)}
+:where(.room.hallview) .tile:not(.float):hover{box-shadow:0 0 0 1px rgba(255,255,255,.14),0 14px 30px -12px rgba(0,0,0,.8)}
+.tile.scr.watching{box-shadow:0 0 0 1px rgba(255,255,255,.06)}
+.tile.scr.watching::before{opacity:1;box-shadow:inset 0 0 0 3px var(--acc),inset 0 0 26px -4px color-mix(in srgb,var(--acc) 55%,transparent)}
+/* ушедший участник: снимок плитки тает на месте (его рисует index.html) */
+.tileghost{position:fixed;z-index:7;pointer-events:none;overflow:hidden;border-radius:14px;display:grid;place-items:center;color:var(--acc2);font:700 32px Unbounded,sans-serif;
+  background:color-mix(in srgb,var(--bg),#000 35%);box-shadow:0 0 0 1px rgba(255,255,255,.08);animation:kzGhost .42s var(--ease-out) forwards}
+.tileghost canvas{position:absolute;inset:0;width:100%;height:100%}
+@keyframes kzGhost{to{opacity:0;transform:scale(.82)}}
+
+/* сцена звонка */
+.callstage{background:radial-gradient(90% 70% at 50% 0%,color-mix(in srgb,var(--acc2) 5%,transparent),transparent 70%),color-mix(in srgb,var(--bg),#000 35%);border-radius:18px;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.05),inset 0 20px 60px -30px rgba(0,0,0,.6)}
+.room.hallview .tile.float{border-color:color-mix(in srgb,var(--bg),#000 35%)}
+.alone{background:rgba(8,11,13,.55);border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:flex;align-items:center;gap:8px;animation:kzFadeUp .4s var(--ease-out)}
+.alone::before{content:'';width:8px;height:8px;border-radius:50%;background:var(--acc2);box-shadow:0 0 0 0 color-mix(in srgb,var(--acc2) 60%,transparent);animation:mxpulse 1.8s infinite}
+.callnote{background:linear-gradient(90deg,color-mix(in srgb,var(--acc) 14%,var(--panel)),var(--panel));box-shadow:var(--hi),var(--sh2);animation:kzDrop .3s var(--ease-out)}
+
+/* окно «Что показать?» и плашка обновления */
+.modal{background:radial-gradient(1200px 700px at 50% 40%,rgba(0,0,0,.45),rgba(0,0,0,.72));backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+.modal:not([hidden]){animation:mxfade .2s}
+.modal-box{background:var(--grain),linear-gradient(180deg,color-mix(in srgb,var(--panel),var(--ink) 4%),var(--panel));border-color:var(--edge);border-radius:24px;box-shadow:var(--hi),var(--sh3)}
+.modal:not([hidden]) .modal-box{animation:mxpop .3s var(--ease-spring)}
+.src{background:var(--surf2);border-color:var(--edge);border-radius:14px;transition:transform .25s var(--ease-spring),border-color .18s,box-shadow .2s}
+.src:hover{transform:translateY(-3px);box-shadow:var(--hi),var(--sh2)}
+.src img{border-radius:9px;box-shadow:0 0 0 1px rgba(255,255,255,.05)}
+.src.sel{background:linear-gradient(180deg,color-mix(in srgb,var(--acc) 16%,var(--panel)),color-mix(in srgb,var(--acc) 8%,var(--panel)));border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 12px 28px -10px color-mix(in srgb,var(--acc) 60%,transparent)}
+.srcgrid>.src{animation:kzFadeUp .35s var(--ease-out) backwards}
+.srcgrid>.src:nth-child(2){animation-delay:.04s}.srcgrid>.src:nth-child(3){animation-delay:.08s}.srcgrid>.src:nth-child(4){animation-delay:.12s}.srcgrid>.src:nth-child(n+5){animation-delay:.16s}
+/* пока ищутся экраны и окна — мерцающие заготовки карточек */
+#srcs.loading::after{content:'';display:block;height:150px;border-radius:14px;
+  background:linear-gradient(100deg,var(--panel2) 40%,color-mix(in srgb,var(--panel2),var(--ink) 10%) 50%,var(--panel2) 60%) 0 0/200% 100%;animation:kzShimmer2 1.3s linear infinite;
+  -webkit-mask:repeating-linear-gradient(90deg,#000 0 calc(33.33% - 8px),transparent 0 33.33%);mask:repeating-linear-gradient(90deg,#000 0 calc(33.33% - 8px),transparent 0 33.33%)}
+@keyframes kzShimmer2{from{background-position:100% 0}to{background-position:-100% 0}}
+.upd{background:var(--glass);border-color:color-mix(in srgb,var(--acc) 60%,transparent);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:var(--hi),var(--sh3)}
+.upd:not([hidden]){animation:kzRise .45s var(--ease-spring)}
+.fxbar{background:var(--glass);border-color:var(--edge);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:var(--hi),var(--sh3);animation:kzPop .25s var(--ease-spring)}
+.fxbar button{box-shadow:none;background-image:none}
+.fxbar button:hover{transform:scale(1.25) translateY(-2px)}
+.lightbox{backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.lightbox a{background:linear-gradient(135deg,color-mix(in srgb,var(--acc),#fff 10%),var(--acc));box-shadow:var(--hi2),0 8px 20px -6px color-mix(in srgb,var(--acc) 70%,transparent)}
+.shareTip{background:rgba(255,179,163,.08)}
+.help.panel:not([hidden]){animation:kzDrop .3s var(--ease-out)}
+
+/* телефон: шторка чата в зале выезжает снизу; стеклянная полка кнопок */
+@media(max-width:760px){
+  #room.hallview.sheet .side{animation:kzSheet .34s var(--ease-out);background:var(--grain),linear-gradient(180deg,color-mix(in srgb,var(--bg),var(--ink) 4%),var(--bg))}
+  .stage{border-radius:12px}
+  .vbar{left:6px;right:6px;bottom:6px}
+  .panel{border-radius:14px}
+}
+@keyframes kzSheet{from{transform:translateY(40px);opacity:0}}
+
+/* всё, что лежит поверх видео и тёмной сцены, — светлым текстом при любой теме (и при светлых своих цветах) */
+.stage .empty b,.vbar,.vbar button,.osd,.offer,.submenu,.fslog div,.tile figcaption,.fcam span,.tvol,.tile .lat:not(.mid):not(.bad){color:#fff}
+.tile .lat{color:#7ee2a8}
+.stage .empty,.alone,.shareMe,.submenu small,#subName,.sharesw button{color:rgba(255,255,255,.72)}
+.shareMe b,.sharesw button.on{color:#fff}
+.sharesw button.on{color:#1b0b06}
+.callstage{background:radial-gradient(90% 70% at 50% 0%,color-mix(in srgb,var(--acc2) 6%,transparent),transparent 70%),color-mix(in srgb,var(--bg) 18%,#07090b)}
+.tile,.tileghost{background:radial-gradient(120% 90% at 50% 30%,color-mix(in srgb,var(--acc2) 10%,#0d1113),#080b0d)}
+.room.hallview .tile.float{border-color:#07090b}
+button.off,.ctrls>button.off{color:color-mix(in srgb,#e5484d 70%,var(--ink))}
+
+/* меньше движения — по просьбе системы */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+  .kz-rip{display:none}
+}

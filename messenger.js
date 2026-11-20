@@ -833,8 +833,11 @@ function renderList() {
     else { e.append(el('b', '', 'Пока нет чатов'), el('span', '', 'Добавь собеседника по его ID — и пишите, звоните, смотрите кино вместе.')); const b = el('button', 'btn pri', 'Добавить собеседника'); b.onclick = () => addContactDlg(); e.append(b); }
     box.append(e); return;
   }
-  for (const ch of list) {
-    const it = el('div', 'ci' + (ch.id === open ? ' act' : '')); it.dataset.chat = ch.id;
+  // при первом показе строки въезжают по очереди; счётчик непрочитанного подпрыгивает, только когда вырос
+  if (!box.dataset.shown) { box.dataset.shown = 1; box.classList.add('enter'); setTimeout(() => box.classList.remove('enter'), 1200); }
+  const was = renderList.unread ||= {};
+  list.forEach((ch, i) => {
+    const it = el('div', 'ci' + (ch.id === open ? ' act' : '')); it.dataset.chat = ch.id; it.style.setProperty('--i', i);
     const w = el('div', 'avwrap'); w.append(avEl(ch.id, 52), el('i', 'dot'));
     if (isDm(ch.id) && isOn(dmPeer(ch.id))) w.classList.add('on');
     const tx = el('div', 'tx'), r1 = el('div', 'r1'), r2 = el('div', 'r2');
@@ -845,7 +848,8 @@ function renderList() {
     const ls = el('span', 'ls'), ty = typingIn(ch.id);
     if (ty) ls.append(el('span', 'ty', (isDm(ch.id) ? '' : nameOf(ty) + ' ') + 'печатает'));
     else { const [who, t] = lastText(ch.id, l); if (who) ls.append(el('b', '', who)); ls.append(document.createTextNode(t)); }
-    r2.append(ls); if (ch.unread) r2.append(el('span', 'badge', ch.unread > 99 ? '99+' : String(ch.unread)));
+    r2.append(ls); if (ch.unread) r2.append(el('span', 'badge' + (ch.unread > (was[ch.id] || 0) ? ' bump' : ''), ch.unread > 99 ? '99+' : String(ch.unread)));
+    was[ch.id] = ch.unread || 0;
     tx.append(r1, r2); it.append(w, tx);
     it.onclick = () => { if (Date.now() - (it._lp || 0) < 700) return; openChat(ch.id); };
     it.addEventListener('contextmenu', e => { e.preventDefault(); it._lp = Date.now(); listMenu(ch.id, e.clientX, e.clientY); });
@@ -859,14 +863,14 @@ function renderList() {
     if (ch.unread) it.dataset.unread = ch.unread > 99 ? '99+' : ch.unread;   // в компактном списке — кружок на аватарке
     it.title = root.classList.contains('rail') ? chatTitle(ch.id) : '';
     box.append(it);
-  }
+  });
   addHits();
 }
 const readBy = (c, ts) => Object.entries(S.chats[c]?.seen || {}).some(([u, t]) => u !== myId && t >= ts);
 function presence(u) { renderList(); if (open && members(open).includes(u)) renderHead(); }
 
 // ---------- открытый чат ----------
-let open = null, shown = [], urls = new Map(), downCount = 0;
+let open = null, shown = [], urls = new Map(), downCount = 0, enterChat = false;
 function blobUrl(id) { return urls.get(id); }
 async function mediaUrl(m) { if (urls.has(m.id)) return urls.get(m.id); const b = await blobGet(m.id); if (!b) return ''; const u = URL.createObjectURL(b); urls.set(m.id, u); return u; }
 function freeUrls() { stopVoice(); for (const u of urls.values()) URL.revokeObjectURL(u); urls.clear(); }
@@ -894,7 +898,7 @@ async function copyInvite() {
 async function openChat(c) {
   if (!S.chats[c] && !isDm(c) && !S.groups[c]) return;
   ensureChat(c);
-  if (open !== c) { freeUrls(); open = c; }
+  if (open !== c) { freeUrls(); open = c; enterChat = true; }
   root.classList.add('chat-open');
   renderList(); await renderChat();
   markRead(c);
@@ -915,6 +919,7 @@ async function renderChat() {
       <button class="rec-btn" title=""></button><div class="rec-hint"></div><input type="file" multiple hidden></div>
     <button class="mx-down" hidden title="Вниз">${IC.down}<b hidden></b></button>`;
   main.append(sec);
+  if (enterChat) { enterChat = false; sec.classList.add('enter'); }   // только что открыт — шапка, переписка и поле въезжают
   $('.back', sec).onclick = closeChat;
   $('.who', sec).onclick = () => infoDlg(c);
   $('.mx-chead .avwrap', sec).onclick = () => infoDlg(c);
@@ -934,7 +939,9 @@ async function renderChat() {
   if (find && find.chat !== c) find = null;
   if (find) findBar(sec);   // поиск переживает перерисовку чата
   renderHead(); updCallUi();
+  box.classList.add('loading');   // силуэты сообщений, если чтение затянется
   const list = await chatMsgs(c, 400);
+  box.classList.remove('loading');
   if (open !== c) return;
   shown = list; shownAll = list.length < 400;
   box.textContent = '';
