@@ -495,3 +495,4 @@ html.wall-all #mx>.mx-side{z-index:2}
   #mx.rail.side-right .fabmenu{left:auto;right:0}
 }
 @media(max-width:760px){.mx-split,#mx .mx-sec .lay{display:none}}
+.filecard .ic.dir{font-size:24px}

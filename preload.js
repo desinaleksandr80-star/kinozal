@@ -10,7 +10,18 @@ const files = {
   done: (id, name) => ipcRenderer.invoke('kz:fdone', id, name),
   drop: id => ipcRenderer.invoke('kz:fdrop', id),
   show: p => ipcRenderer.invoke('kz:fshow', p),
-  dir: () => ipcRenderer.invoke('kz:fdir')
+  dir: () => ipcRenderer.invoke('kz:fdir'),
+  // папки: что это — файл или папка, выбрать папку, опись, чтение и запись склеенного потока
+  kind: f => { try { return ipcRenderer.invoke('kz:fkind', webUtils.getPathForFile(f)); } catch (e) { return Promise.resolve(''); } },
+  pathOfAny: f => { try { return webUtils.getPathForFile(f) || ''; } catch (e) { return ''; } },
+  pickDir: () => ipcRenderer.invoke('kz:fpickdir'),
+  dirAdd: (id, root) => ipcRenderer.invoke('kz:dadd', id, root),
+  dirMan: id => ipcRenderer.invoke('kz:dman', id),
+  dirStat: id => ipcRenderer.invoke('kz:dstat', id),
+  dirRead: (id, off, len) => ipcRenderer.invoke('kz:dread', id, off, len),
+  dirOpen: (id, blk, man, size) => ipcRenderer.invoke('kz:dopen', id, blk, man, size),
+  dirWrite: (id, off, data) => ipcRenderer.invoke('kz:dwrite', id, off, data),
+  dirDone: (id, name) => ipcRenderer.invoke('kz:ddone', id, name)
 };
 
 contextBridge.exposeInMainWorld('kinozalApp', {

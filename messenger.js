@@ -270,7 +270,7 @@ function dial(u) {
 async function dialAll() { for (const u of dialList()) { dial(u); await sleep(120); } }
 setInterval(dialAll, 40000);
 window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
-const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
+const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer', 'xdir'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
 function wire(c, outgoing, u, dev = '') {
   const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, dev, self: u === myId, peer: peerOf(u, dev), their: null, q: Promise.resolve() };
   c.on('open', () => { c.send(helloMsg(L.nonce)); });
@@ -363,6 +363,8 @@ async function onData(L, d) {
     case 'bye': if (L.self && L.dev && !myDev) revokeDev(L.dev); return;   // моё устройство вышло из профиля — его ключ стёрт, убираем из списка
     case 'xget': return xServe(L, d);
     case 'xno': return xNo(L, d);
+    case 'xmanq': return xManServe(L, d);
+    case 'xman': return xManGot(L, d);
   }
 }
 function linkUp(L) {
@@ -415,7 +417,7 @@ async function onSync(L, d) {
     for (const m of await chatMsgs(c)) if (!theirs.has(m.id)) { if (!await push(L, m)) return; await sleep(5); }
   }
 }
-const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, big: m.big, dev: m.big ? m.dev || '' : undefined, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
+const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, big: m.big, dev: m.big ? m.dev || '' : undefined, dir: m.dir, n: m.dir ? m.n : undefined, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
 // кому: id человека или одна связь; своим устройствам уходят ещё галочки и реакции
 async function push(x, m) {
   const self = typeof x === 'object' ? x.self : x === myId;
@@ -635,6 +637,7 @@ function cleanMsg(x) {
     m.name = fileName(x.name); m.size = Math.max(0, +x.size || 0);
     // большой файл в сообщение не вложен: его скачивают напрямую с устройства отправителя (dev), кусками
     if (x.big) { m.big = 1; m.dev = /^[0-9a-z]{6}$/.test(String(x.dev || '')) ? String(x.dev) : ''; if (!m.size || m.size > 1e13) return null; }
+    if (m.big && x.dir) { m.dir = 1; m.n = Math.max(1, Math.min(50000, x.n | 0)); }   // папка целиком: n файлов, size — сумма
     else m.blob = 1;
   }
   if (m.kind === 'call') { m.code = clean(x.code, 8).toUpperCase(); m.room = x.room === 'cinema' ? 'cinema' : 'call'; if (!/^[A-Z0-9]{5}$/.test(m.code)) return null; }
@@ -1170,7 +1173,7 @@ const riskOk = m => !RISKY.test(m.name || '') || confirm('«' + m.name + '» —
 function fileEl(m) {
   const w = el('a', 'filecard'); w.href = '#';
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
-  const ic = el('span', 'ic', ext || '📄'), t = el('div', 't');
+  const ic = el('span', 'ic' + (m.dir ? ' dir' : ''), m.dir ? '📁' : ext || '📄'), t = el('div', 't');
   t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
   w.append(ic, t);
   if (m.big) {
@@ -1185,6 +1188,7 @@ function fileEl(m) {
 }
 async function sendFiles(c, files) {
   for (const f of [...files].slice(0, 10)) {
+    if (DISK && !f.type && f.size <= 65536 && await APP.files.kind(f) === 'dir') { await sendDir(c, APP.files.pathOfAny(f)); continue; }   // перетащили папку
     if (!f.size) continue;
     if (f.size <= LIMIT) { await post(c, { kind: 'file', name: fileName(f.name), size: f.size }, f.type ? f : new Blob([f], { type: 'application/octet-stream' })); continue; }
     await sendBig(c, f);
@@ -1219,14 +1223,45 @@ async function sendBig(c, f) {
   if (old.length) toast('У ' + old.map(nameOf).join(', ') + ' старая версия Кинозала — большой файл скачается после обновления');
   else toast(path ? '«' + f.name + '» скачают напрямую с этого компьютера, пока Кинозал открыт' : '«' + f.name + '» скачают напрямую отсюда — не закрывай вкладку, пока не скачают');
 }
+// папка целиком (только программа для Windows): опись снимается сейчас, по ней и отдаём
+const nFiles = n => n + ' ' + plural(n, 'файл', 'файла', 'файлов');
+async function sendDir(c, root) {
+  if (!DISK || !root) return;
+  const id = uid(), name = fileName(root.split(/[\\/]/).filter(Boolean).pop() || 'папка');
+  toast('Считаю файлы в «' + name + '»…');
+  let r; try { r = await APP.files.dirAdd(id, root); } catch (e) { toast('Не получилось прочитать папку: ' + String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); return; }
+  if (!r.n || !r.size) { toast('В папке «' + name + '» нет файлов с содержимым — отправлять нечего'); return; }
+  S.src[id] = root; save();
+  const old = members(c).filter(u => u !== myId && linksOf(u).some(L => !L.their?.caps.includes('xdir')));
+  await post(c, { id, kind: 'file', big: 1, dir: 1, n: r.n, dev: myDev || '', name, size: r.size, mime: 'inode/directory' });
+  toast(old.length ? 'У ' + old.map(nameOf).join(', ') + ' старая версия Кинозала — папку скачают после обновления' : 'Папку «' + name + '» (' + nFiles(r.n) + ', ' + fmtSize(r.size) + ') скачают напрямую с этого компьютера, пока Кинозал открыт');
+}
 async function srcOf(m) {
+  if (m.dir) return DISK && S.src[m.id] && await APP.files.dirStat(m.id) === 'ok' ? { dir: m.id } : null;
   const f = srcMem.get(m.id); if (f) return f.size === m.size ? { file: f } : null;
   const p = S.src[m.id]; if (!p || !DISK) return null;
   const st = await APP.files.stat(p); return st && st.size === m.size ? { path: p } : null;
 }
 async function readSrc(src, off, len) {
   if (src.file) return new Uint8Array(await src.file.slice(off, off + len).arrayBuffer());
-  const b = await APP.files.read(src.path, off, len); return b instanceof Uint8Array ? b : new Uint8Array(b);
+  const b = src.dir ? await APP.files.dirRead(src.dir, off, len) : await APP.files.read(src.path, off, len);
+  return b instanceof Uint8Array ? b : new Uint8Array(b);
+}
+// опись папки: получатель просит её по обычной связи перед первой закачкой
+const manWait = new Map();
+async function xManServe(L, d) {
+  const id = clean(d.id, 60), m = await msgGet(id);
+  if (!m || !m.dir || !isMineSrc(m) || (!L.self && !members(m.chat).includes(L.uid))) return send(L, { t: 'xman', id, err: 'nofile' });
+  if (await APP.files?.dirStat(id) !== 'ok') return send(L, { t: 'xman', id, err: 'gone' });
+  const man = await APP.files.dirMan(id);
+  send(L, { t: 'xman', id, files: man.files, dirs: man.dirs });
+}
+function xManGot(L, d) { const w = manWait.get(clean(d.id, 60)); if (w && w.L === L) { manWait.delete(clean(d.id, 60)); w.res(d); } }
+function xManAsk(L, id) {
+  return new Promise(res => {
+    manWait.set(id, { L, res }); send(L, { t: 'xmanq', id });
+    setTimeout(() => { if (manWait.get(id)?.res === res) { manWait.delete(id); res(null); } }, 20000);
+  });
 }
 // скорость за последние секунды
 function speed(o, bytes) {
@@ -1277,11 +1312,24 @@ async function xStart(m) {
   delete d.why;
   const L = srcLink(m);
   if (!L) { d.st = 'wait'; save(); xPaint(m.id); dial(m.from); return; }
-  if (!L.their?.caps.includes('xfer')) { d.st = 'err'; d.why = 'у отправителя старая версия Кинозала'; save(); xPaint(m.id); return; }
+  if (!L.their?.caps.includes(m.dir ? 'xdir' : 'xfer')) { d.st = 'err'; d.why = 'у отправителя старая версия Кинозала'; save(); xPaint(m.id); return; }
+  if (m.dir && !DISK) { d.st = 'err'; d.why = 'папку целиком можно скачать только в программе для Windows'; save(); xPaint(m.id); return; }
   const x = { m, L, got: 0, tok: uid(), c: null, parts: [], plen: 0, q: Promise.resolve(), bad: 0 };
   dls.set(m.id, x);
-  try { x.got = DISK ? await APP.files.open(m.id, BLK) : Math.floor(Math.min(d.got || 0, m.size) / BLK) * BLK; }
-  catch (e) { return xDrop(x, 'err', 'не получилось создать файл на диске'); }
+  if (m.dir) {   // папка: сначала опись — какие файлы и каких размеров (один раз, дальше она лежит на диске)
+    try {
+      x.got = await APP.files.dirOpen(m.id, BLK, null, m.size);
+      if (x.got < 0) {
+        const r = await xManAsk(L, m.id); if (dls.get(m.id) !== x) return;
+        if (!r) return xDrop(x, 'wait');
+        if (r.err) return xDrop(x, r.err === 'gone' || r.err === 'nofile' ? 'gone' : 'err', r.err === 'gone' || r.err === 'nofile' ? '' : 'отправитель не может отдать папку');
+        x.got = await APP.files.dirOpen(m.id, BLK, { files: r.files, dirs: r.dirs }, m.size);
+      }
+    } catch (e) { return xDrop(x, 'err', 'опись папки не подошла: ' + String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
+  } else {
+    try { x.got = DISK ? await APP.files.open(m.id, BLK) : Math.floor(Math.min(d.got || 0, m.size) / BLK) * BLK; }
+    catch (e) { return xDrop(x, 'err', 'не получилось создать файл на диске'); }
+  }
   if (dls.get(m.id) !== x) return;
   d.st = 'go'; d.got = x.got; save(); xPaint(m.id);
   if (x.got >= m.size) return xFinish(x);
@@ -1316,7 +1364,7 @@ async function xData(x, d) {
       if (++x.bad > 5) return xDrop(x, 'err', 'файл приходит с ошибками');
       xDrop(x, 'wait'); setTimeout(() => xStart(m), 1000); return;
     }
-    if (DISK) await APP.files.write(m.id, x.got, buf); else await blobPut(m.id + ':' + i, new Blob([buf]));
+    if (m.dir) await APP.files.dirWrite(m.id, x.got, buf); else if (DISK) await APP.files.write(m.id, x.got, buf); else await blobPut(m.id + ':' + i, new Blob([buf]));
     if (dls.get(m.id) !== x) return;
     x.got += buf.byteLength; S.dl[m.id].got = x.got; save(); speed(x, x.got);
     try { x.c.send(JSON.stringify({ t: 'ok', i })); } catch (e) {}
@@ -1334,7 +1382,8 @@ async function xFinish(x) {
   dls.delete(m.id); clearInterval(x.dog); try { x.c?.close(); } catch (e) {}
   if (!d) return;
   try {
-    if (DISK) d.path = await APP.files.done(m.id, m.name);
+    if (m.dir) d.path = await APP.files.dirDone(m.id, m.name);
+    else if (DISK) d.path = await APP.files.done(m.id, m.name);
     else {
       const parts = []; for (let i = 0; i * BLK < m.size; i++) { const p = await blobGet(m.id + ':' + i); if (!p) throw new Error('нет куска ' + i); parts.push(p); }
       await blobPut(m.id, new Blob(parts, { type: m.mime })); await tx('blobs', 'readwrite', s => s.delete(partsKey(m.id)));
@@ -1390,6 +1439,7 @@ async function xServe(L, d) {
   if (!m || !m.big || !isMineSrc(m)) return no('nofile');
   if (!L.self && !members(m.chat).includes(L.uid)) return;
   if (!tok || from % BLK || from >= m.size) return no('bad');
+  if (m.dir && !L.their?.caps.includes('xdir')) return no('old');
   const src = await srcOf(m); if (!src) return no('gone');
   if (!peer || net !== 'on') return no('net');
   const c = peer.connect(L.peer, { reliable: true, serialization: 'raw', metadata: { v: 1, xfer: tok } });
@@ -1442,7 +1492,7 @@ async function pump(o, src) {
 
 // --- карточка файла ---
 function xLine(m) {
-  const size = fmtSize(m.size);
+  const size = fmtSize(m.size) + (m.dir ? ' · ' + nFiles(m.n || 0) : ''), total = fmtSize(m.size);
   if (isMineSrc(m)) {
     const o = [...ups.values()].find(v => v.m.id === m.id);
     if (o) return { txt: 'отдаю: ' + Math.floor(o.sent / m.size * 100) + '%' + (o.rate ? ' · ' + fmtSize(Math.round(o.rate)) + '/с' : ''), p: o.sent / m.size };
@@ -1452,7 +1502,7 @@ function xLine(m) {
   }
   const d = S.dl[m.id], x = dls.get(m.id), who = m.from === myId ? 'другое твоё устройство' : nameOf(m.from);
   if (!d) return { txt: size + ' · скачать' };
-  const part = fmtSize(d.got || 0) + ' из ' + size;
+  const part = fmtSize(d.got || 0) + ' из ' + total;
   switch (d.st) {
     case 'done': return { txt: size + (DISK ? ' · показать в папке' : ' · сохранить') };
     case 'go': {
@@ -1461,7 +1511,7 @@ function xLine(m) {
     }
     case 'pause': return { txt: part + ' · пауза — продолжить', p: (d.got || 0) / m.size };
     case 'wait': return { txt: (d.got ? part + ' · ' : size + ' · ') + 'ждём, когда ' + who + ' будет в сети', p: d.got ? d.got / m.size : null };
-    case 'gone': return { txt: size + ' · у отправителя файла уже нет' };
+    case 'gone': return { txt: size + (m.dir ? ' · у отправителя папка изменилась или пропала — пусть отправит заново' : ' · у отправителя файла уже нет') };
     default: return { txt: (d.why || 'не получилось') + ' · ещё раз', p: d.got ? d.got / m.size : null };
   }
 }
@@ -1528,6 +1578,7 @@ function setupInput(sec, c) {
     Object.assign(mn.style, { position: 'fixed', left: Math.max(8, r.left - 4) + 'px', bottom: innerHeight - r.top + 10 + 'px', top: 'auto', right: 'auto', width: '270px', zIndex: 50 });
     const add = (ic, t, f) => { const b = el('button'); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
     add('📎', 'Фото или файл', () => file.click());
+    if (DISK) add('📁', 'Папка целиком — без архива', () => APP.files.pickDir().then(p => p && sendDir(c, p)));
     add('⏳', 'Капсула времени', () => capsuleDlg(c));
     add('🗓', 'Назначить киносеанс', () => planDlg(c));
     add('👋', 'Постучаться', () => knock(c));
