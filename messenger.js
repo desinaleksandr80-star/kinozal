@@ -674,6 +674,7 @@ async function onMsg(L, d) {
   await msgPut(m);
   if (!L.self) send(L, { t: 'ack', ids: [m.id] });
   arrived(m);
+  autoRoute(m);   // маршруты: сохранить на диск или начать качать, если так настроено
   // пересылка между моими устройствами: чужое — моим другим устройствам (вдруг они не на связи с автором),
   // моё с другого устройства — собеседникам, что на связи здесь (например, старому Кинозалу, который не пускает дополнительные устройства)
   if (!L.self) { if (hasDevs()) push(myId, m); }
@@ -1109,7 +1110,8 @@ function msgMenu(m, e) {
   if (m.from === myId) add('🧨', 'Удалить у всех', () => dropForAll(m), 'danger');
   document.body.append(mn); mn.addEventListener('click', ev => ev.stopPropagation());
 }
-async function photo(m) { const u = await mediaUrl(m); if (!u) return; $('#lbImg').src = u; const a = $('#lbSave'); a.href = u; a.download = 'kinozal-foto-' + new Date(m.ts).toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.' + (m.mime === 'image/jpeg' ? 'jpg' : m.mime.split('/')[1]); $('#lb').hidden = false; }
+// фото из чата — в то же окно просмотра, с приближением и перемещением
+async function photo(m) { const u = await mediaUrl(m); if (!u) return; const b = await blobGet(m.id); viewer({ src: u, photo: true, m: { ...m, name: fileNameOf(m), size: b?.size || 0 } }); }
 
 // голосовые: одна общая «вертушка» на все сообщения
 const player = { a: new Audio(), id: null, speed: +store.get('mxSpeed', 1) || 1 };
@@ -1183,6 +1185,11 @@ const riskOk = m => !RISKY.test(m.name || '') || confirm('«' + m.name + '» —
 // файл с картинкой: превью (или сам оригинал, если он в переписке) над карточкой, по клику — просмотр в полный размер
 function fileEl(m) {
   const card = fileCard(m);
+  if (m.th && /\.pdf$/i.test(m.name || '')) {   // PDF: большая картинка титульного листа не нужна — маленькая вместо значка
+    const ic = $('.ic', card); ic.textContent = ''; ic.classList.add('thumb'); const i = el('img'); i.src = m.th; i.alt = ''; ic.append(i);
+    if (m.ex) $('.t span', card).after(el('span', 'pages', m.ex));
+    return card;
+  }
   if (!m.th && !(m.blob && viewable(m))) return card;
   const box = el('div', 'fwrap'), md = el('div', 'fmedia'), img = el('img');
   img.alt = m.name; img.decoding = 'async';
@@ -1192,7 +1199,7 @@ function fileEl(m) {
   else if (DISK && viewable(m)) { const p = isMineSrc(m) ? S.src[m.id] : S.dl[m.id]?.st === 'done' ? S.dl[m.id].path : ''; if (p) { const full = new Image(); full.onload = () => { img.src = full.src; }; full.src = fileUrl(p); } }
   const raw = isRawName(m.name), vid = isVideoName(m.name) || /^video\//.test(m.mime || '');
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
-  md.append(img, el('span', 'fbadge', raw ? (/^TIFF?$/.test(ext) ? ext + ' · миниатюра' : 'RAW · ' + ext) : vid ? '▶ ' + (m.dur ? fmtDur(m.dur) : ext) : ext + ' · оригинал'));
+  md.append(img, el('span', 'fbadge', raw ? (/^TIFF?$/.test(ext) ? ext + ' · миниатюра' : 'RAW · ' + ext) : vid ? '▶ ' + (m.dur ? fmtDur(m.dur) : ext) : typeOfName(m.name) === 'audio' ? '♪ ' + ext : /^PDF$/.test(ext) ? 'PDF' : ext + ' · оригинал'));
   if (m.ex) md.append(el('span', 'fex', m.ex));
   md.title = 'Посмотреть в полный размер'; md.onclick = e => { e.preventDefault(); e.stopPropagation(); openOriginal(m); };
   box.append(md, card); return box;
@@ -1201,7 +1208,7 @@ function fileCard(m) {
   const w = el('a', 'filecard'); w.href = '#';
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
   const ic = el('span', 'ic' + (m.dir ? ' dir' : ''), m.dir ? '📁' : ext || '📄'), t = el('div', 't');
-  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
+  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + (!m.big && canView(m) ? ' · открыть' : ' · сохранить'))); hilite(t.firstChild, findQ());
   w.append(ic, t);
   if (m.big) {
     w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'xbar'); bar.append(el('i')); t.append(bar);
@@ -1210,7 +1217,8 @@ function fileCard(m) {
     md.onclick = e => { e.preventDefault(); e.stopPropagation(); const soft = !xSoft(); setXMode(soft ? 'soft' : 'max'); toast(soft ? '🐢 Щадящий режим: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' (настраивается в профиле)' : '⚡ Максимальная скорость'); };
     xFill(w, m); w.onclick = e => { e.preventDefault(); xClick(m); }; return w; }
   w.title = 'Сохранить';
-  w.onclick = e => { e.preventDefault(); saveSmall(m); };
+  if (canView(m)) w.title = 'Посмотреть';
+  w.onclick = e => { e.preventDefault(); canView(m) ? openAny(m) : saveSmall(m); };
   return w;
 }
 // небольшой файл из переписки: в программе для Windows — в «Полученные» (его видно в разделе «Файлы»), в браузере — скачать
@@ -1220,7 +1228,7 @@ async function saveSmall(m) {
     if (d?.path && await APP.files.exists(d.path)) { APP.files.show(d.path); return; }
     if (!riskOk(m)) return;
     const b = await blobGet(m.id); if (!b) return;
-    try { const p = await APP.files.save(m.name, new Uint8Array(await b.arrayBuffer())); S.dl[m.id] = { st: 'done', got: m.size, path: p }; save(); APP.files.show(p); toast('«' + m.name + '» сохранён в «Загрузки → Кинозал → Полученные»'); }
+    try { const p = await saveToRoute(m); APP.files.show(p); toast('«' + m.name + '» сохранён — ' + routeLabel(m)); }
     catch (er) { toast('Не получилось сохранить: ' + errText(er)); }
     return;
   }
@@ -1250,14 +1258,31 @@ function rawFromBytes(u8) {
 // превью и данные для сообщения: уменьшенная копия картинки, встроенная картинка RAW или кадр видео
 async function makeThumb(f) {
   try {
+    if (/\.hei[cf]$/i.test(f.name) && window.kzView && f.size <= 150e6) {
+      const cv = await kzView.heic(new Uint8Array(await f.arrayBuffer()));
+      return { th: toDataUrl(oriented(cv, 1, 480)), w: cv.width, h: cv.height };
+    }
+    if (/\.pdf$/i.test(f.name) && window.kzView && f.size <= 200e6) {
+      const doc = await kzView.pdfOpen(new Uint8Array(await f.arrayBuffer())), cv = await kzView.pdfPage(doc, 1, 480), n = doc.numPages;
+      doc.destroy?.(); return { th: toDataUrl(cv), w: cv.width, h: cv.height, ex: n + ' ' + plural(n, 'страница', 'страницы', 'страниц') };
+    }
     if (isRawName(f.name)) {
       if (f.size > 400e6) return null;
-      const r = rawFromBytes(new Uint8Array(await f.arrayBuffer())); if (!r) return null;
+      const u8 = new Uint8Array(await f.arrayBuffer()), r = rawFromBytes(u8);
+      if (!r && /\.tiff?$/i.test(f.name) && window.kzView && f.size <= 150e6) { const cv = await kzView.tiff(u8); return { th: toDataUrl(oriented(cv, 1, 480)), w: cv.width, h: cv.height }; }
+      if (!r) return null;
       const bm = await bitmapOf(r.blob, true), rot = r.orient === 6 || r.orient === 8;
       const out = { th: toDataUrl(oriented(bm, r.orient, 480)), w: rot ? bm.height : bm.width, h: rot ? bm.width : bm.height, ex: r.ex }; bm.close?.(); return out;
     }
     if (VIEW.test(f.type)) { const bm = await createImageBitmap(f); const out = { th: toDataUrl(oriented(bm, 1, 480)), w: bm.width, h: bm.height }; bm.close?.(); return out; }
     if (/^video\//.test(f.type) || isVideoName(f.name)) return await videoThumb(f);
+    if (/\.(mp3|flac|m4a|aac)$/i.test(f.name) && window.kzView) {   // музыка: обложка и «исполнитель — название»
+      const src = { size: f.size, read: async (o, n) => new Uint8Array(await f.slice(o, o + n).arrayBuffer()) };
+      const t = await kzView.audioTags(src, f.name); if (!t) return null;
+      const out = { ex: [t.artist, t.title].filter(Boolean).join(' — ') + (t.album ? ' · ' + t.album : '') + (t.year ? ' · ' + t.year : '') };
+      if (t.cover) { const bm = await createImageBitmap(t.cover).catch(() => null); if (bm) { Object.assign(out, { th: toDataUrl(oriented(bm, 1, 480)), w: bm.width, h: bm.height }); bm.close?.(); } }
+      return out;
+    }
   } catch (e) { jlog('[файлы] превью не вышло', f.name, e?.message || e); }
   return null;
 }
@@ -1293,7 +1318,195 @@ function askImages(c, files) {
   });
 }
 // просмотр в полный размер: оригинал картинки, встроенная картинка RAW (с поворотом), видео
+// ---------- просмотр документов, таблиц, архивов, музыки и шрифтов (разбор форматов — в viewers.js) ----------
+const ZIPLIKE = /\.(zip|jar|mrpack|apk|epub|docx|xlsx|pptx|odt|ods)$/i;
+function canViewName(n) {
+  if (!window.kzView) return false;
+  const t = typeOfName(n);
+  return ['text', 'font', 'pdf'].includes(t) || (t === 'audio' && /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n)) || /\.(docx|xlsx|csv|tsv|zip|jar|mrpack|apk)$/i.test(n);
+}
+const canView = m => m.kind === 'file' && !m.dir && canViewName(m.name);
+// откуда брать байты: свой отправленный файл, переписка (или собранное в браузере), диск
+const diskSource = async p => {   // с диска — кусками до 32 МБ (за один раз главный процесс отдаёт не больше 64 МБ)
+  const size = await APP.files.size(p); if (size < 0) return null;
+  const part = async (o, n) => { const b = await APP.files.slice(p, o, n); return b instanceof Uint8Array ? b : new Uint8Array(b); };
+  return { size, path: p, read: async (o, n) => {
+    n = Math.max(0, Math.min(n, size - o)); if (n <= 32 << 20) return part(o, n);
+    const out = new Uint8Array(n); for (let d = 0; d < n; d += 32 << 20) out.set(await part(o + d, Math.min(32 << 20, n - d)), d); return out;
+  } };
+};
+const blobSource = b => ({ size: b.size, blob: b, read: async (o, n) => new Uint8Array(await b.slice(o, o + n).arrayBuffer()) });
+async function fileSource(m) {
+  const f = isMineSrc(m) ? srcMem.get(m.id) : null; if (f) return blobSource(f);
+  if (m.blob || (!DISK && S.dl[m.id]?.st === 'done')) { const b = await blobGet(m.id); if (b) return blobSource(b); }
+  const st = fileState(m); if (DISK && st.path) return diskSource(st.path);
+  return null;
+}
+async function srcBlob(src, type) { return src.blob ? (type ? new Blob([src.blob], { type }) : src.blob) : new Blob([await src.read(0, src.size)], type ? { type } : {}); }
+async function openDoc(m) {
+  const src = await fileSource(m);
+  if (!src) { if (m.big && !isMineSrc(m) && confirm('«' + m.name + '» ещё не скачан. Скачать?')) xClick(m); else if (!m.big) toast('Файла нет на этом устройстве'); return; }
+  docView({ name: m.name, size: m.size || src.size, m, path: fileState(m).path, src });
+}
+async function openDocPath(it) { const src = await diskSource(it.path); if (src) docView({ name: it.name, size: src.size, path: it.path, src }); }
+function docView(o) {
+  const ov = el('div', 'kzview kzdoc'), top = el('div', 'kvtop'), body = el('div', 'kvdoc'), t = el('div', 't'), acts = el('div', 'acts'), urls = [];
+  const info = el('span', '', fmtSize(o.size) + ' · ' + FT[typeOfName(o.name)].t);
+  t.append(el('b', '', o.name), info);
+  const offs = [], close = () => { ov.remove(); document.removeEventListener('keydown', key, true); for (const u of urls) URL.revokeObjectURL(u); for (const f of offs) try { f(); } catch (e) {} };
+  const btn = (txt, f, cls) => { const b = el('button', 'btn' + (cls ? ' ' + cls : ''), txt); b.onclick = e => { e.stopPropagation(); f(); }; acts.append(b); };
+  const m = o.m, st = m ? fileState(m) : null;
+  if (DISK && o.path) { btn('В проводнике', () => APP.files.show(o.path)); btn('Открыть в программе', () => openOnDisk({ name: o.name, path: o.path })); }
+  else if (m && st?.k === 'chat') btn(DISK ? 'Сохранить' : 'Скачать', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); APP.files.show(p); } catch (e) { toast('Не получилось: ' + errText(e)); } });
+  btn('Закрыть', close, 'pri');
+  top.append(t, acts); ov.append(top, body); document.body.append(ov);
+  const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', key, true);
+  const wait = el('div', 'fempty'); wait.append(el('div', 'big', '⏳'), el('b', '', 'Открываю…')); body.append(wait);
+  const fail = e => { body.textContent = ''; body.append(emptyEl('🤷', 'Не получилось показать', errText(e) + (DISK && o.path ? ' — попробуй «Открыть в программе».' : ''))); };
+  const n = o.name.toLowerCase(), ty = typeOfName(n);
+  (async () => {
+    if (/\.pdf$/.test(n)) return showPdf(o.src, body, info, offs);
+    if (/\.docx$/.test(n)) return showDocx(o.src, body, urls);
+    if (/\.xlsx$/.test(n)) return showXlsx(o.src, body);
+    if (/\.(zip|jar|mrpack|apk)$/.test(n)) return showZip(o, body, urls, info);
+    if (ty === 'audio') return showAudio(o, body, urls, info);
+    if (ty === 'font') return showFont(o.src, body, o.name);
+    return showText(o.src, body, n, info);
+  })().then(() => wait.remove(), fail);
+}
+// текст, код, лог, JSON, CSV, Markdown
+async function showText(src, body, n, info) {
+  const LIM = 2 << 20, u = await src.read(0, Math.min(src.size, LIM));
+  if (kzView.isBinary(u)) throw new Error('это не текстовый файл');
+  let text = kzView.decodeText(u); const cut = src.size > LIM;
+  body.textContent = '';
+  if (cut) body.append(el('p', 'fhint', 'Показаны первые 2 МБ из ' + fmtSize(src.size) + '.'));
+  if (/\.(csv|tsv)$/.test(n)) { const rows = kzView.csv(text); info.textContent += ' · строк: ' + rows.length + (rows.length >= 2000 ? '+' : ''); body.append(tableEl(rows, true)); return; }
+  if (/\.(md|markdown)$/.test(n)) { const d = el('div', 'kmd'); d.append(kzView.markdown(text)); body.append(d); return; }
+  if (/\.json$/.test(n) && !cut) try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+  const lines = text.split('\n'), shown = lines.length > 20000 ? lines.slice(0, 20000) : lines;
+  info.textContent += ' · строк: ' + lines.length;
+  const wrap = el('div', 'kcode'), gut = el('pre', 'gut'), code = el('pre', 'code');
+  gut.textContent = shown.map((_, i) => i + 1).join('\n');
+  if (text.length <= 400e3) code.append(kzView.highlight(shown.join('\n'), n)); else code.textContent = shown.join('\n');
+  wrap.append(gut, code); body.append(wrap);
+}
+function tableEl(rows, head) {
+  const t = el('table', 'ktable');
+  rows.forEach((r, i) => { const tr = t.insertRow(); if (head && i === 0) tr.className = 'h'; const w = Math.max(...rows.slice(0, 50).map(x => x?.length || 0), r?.length || 0); for (let c = 0; c < w; c++) { const td = tr.insertCell(); td.textContent = r?.[c] ?? ''; } });
+  return t;
+}
+// PDF: страницы рисуются, только когда до них долистали; масштаб, номер страницы
+async function showPdf(src, body, info, offs) {
+  if (src.size > 300e6) throw new Error('PDF слишком большой, чтобы открыть его здесь');
+  const doc = await kzView.pdfOpen(await src.read(0, src.size)); offs.push(() => doc.destroy?.());
+  const N = doc.numPages; info.textContent += ' · ' + N + ' ' + plural(N, 'страница', 'страницы', 'страниц');
+  body.textContent = ''; body.classList.add('pdfmode');
+  const bar = el('div', 'kpdfbar'), pages = el('div', 'kpdf'), cnt = el('span', 'cnt', '1 / ' + N);
+  let zoom = 1, gen = 0;
+  const v1 = (await doc.getPage(1)).getViewport({ scale: 1 });
+  const width = () => Math.round(Math.min(body.clientWidth - 48, 1000) * zoom);
+  const slots = [];
+  for (let i = 1; i <= N; i++) { const s = el('div', 'kpg'); s.dataset.n = i; s.style.aspectRatio = v1.width + '/' + v1.height; s.append(el('span', 'pn', String(i))); pages.append(s); slots.push(s); }
+  const render = async s => {
+    const g = gen; if (s.dataset.g === String(g)) return; s.dataset.g = String(g);
+    try { const cv = await kzView.pdfPage(doc, +s.dataset.n, width() * Math.min(2, devicePixelRatio || 1)); if (g !== gen) return; cv.className = 'pc'; s.querySelector('canvas')?.remove(); s.style.aspectRatio = cv.width + '/' + cv.height; s.prepend(cv); }
+    catch (e) { s.dataset.g = ''; }
+  };
+  const io = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) render(e.target); }, { root: body, rootMargin: '800px 0px' });
+  const relayout = () => { gen++; for (const s of slots) { s.style.width = width() + 'px'; io.unobserve(s); io.observe(s); } };
+  offs.push(() => io.disconnect());
+  body.addEventListener('scroll', () => { const mid = body.scrollTop + body.clientHeight / 3; let n = 1; for (const s of slots) { if (s.offsetTop <= mid) n = +s.dataset.n; else break; } cnt.textContent = n + ' / ' + N; });
+  const zb = (t, f, title) => { const b = el('button', 'btn', t); b.title = title || ''; b.onclick = () => { f(); relayout(); }; bar.append(b); };
+  zb('−', () => { zoom = Math.max(.4, zoom - .2); }, 'Мельче'); zb('+', () => { zoom = Math.min(3, zoom + .2); }, 'Крупнее'); zb('По ширине', () => { zoom = 1; });
+  bar.append(cnt); body.append(bar, pages); relayout();
+}
+async function showDocx(src, body, urls) {
+  const r = await kzView.docx(src); urls.push(...r.urls);
+  body.textContent = ''; const page = el('div', 'kpage'); page.append(r.el); body.append(page);
+  if (!r.el.textContent.trim() && !r.el.querySelector('img')) body.append(emptyEl('📄', 'Документ пустой', ''));
+}
+async function showXlsx(src, body) {
+  const sheets = await kzView.xlsx(src); body.textContent = '';
+  if (!sheets.length) throw new Error('в книге нет листов');
+  const tabs = el('div', 'fchips'), box = el('div', 'kxl');
+  const show = i => { box.textContent = ''; const s = sheets[i]; box.append(tableEl(s.rows.map(r => r || []), false)); if (s.cut) box.append(el('p', 'fhint', 'Показаны первые 1000 строк и 60 столбцов.')); [...tabs.children].forEach((b, j) => b.classList.toggle('on', i === j)); };
+  sheets.forEach((s, i) => { const b = el('button', 'fchip', s.name); b.onclick = () => show(i); tabs.append(b); });
+  if (sheets.length > 1) body.append(tabs);
+  body.append(box); show(0);
+}
+// архив: что внутри; у сборок Modrinth (.mrpack) и модов (.jar) — ещё и что это за сборка/мод
+async function showZip(o, body, urls, info) {
+  const list = await kzView.zipList(o.src), files = list.filter(e => !e.dir);
+  info.textContent += ' · ' + nFiles(files.length) + ' · распаковано ' + fmtSize(files.reduce((s, e) => s + e.size, 0));
+  body.textContent = '';
+  const about = async (name, f) => { const e = list.find(x => x.name === name); if (!e) return null; try { return f(JSON.parse(kzView.decodeText(await kzView.zipGet(o.src, e)))); } catch (er) { return null; } };
+  const card = await about('modrinth.index.json', j => [j.name + (j.versionId ? ' ' + j.versionId : ''), 'Minecraft ' + (j.dependencies?.minecraft || '?') + (j.dependencies ? ' · ' + Object.keys(j.dependencies).filter(k => k !== 'minecraft').join(', ') : ''), (j.files?.length || 0) + ' модов и файлов скачается при установке'])
+    || await about('fabric.mod.json', j => [(j.name || j.id) + ' ' + (j.version || ''), 'мод для Fabric' + (j.depends?.minecraft ? ' · Minecraft ' + j.depends.minecraft : ''), j.description || '']);
+  if (card) { const c = el('div', 'kabout'); c.append(el('b', '', card[0]), ...card.slice(1).filter(Boolean).map(x => el('span', '', x))); body.append(c); }
+  const q = el('input', 'fq'); q.type = 'search'; q.placeholder = 'Найти в архиве'; const tbl = el('div', 'kzip');
+  const paint = () => {
+    tbl.textContent = ''; const Q = q.value.trim().toLowerCase(), shown = files.filter(e => !Q || e.name.toLowerCase().includes(Q)).slice(0, 3000);
+    for (const e of shown) {
+      const r = el('div', 'kzr'), i = e.name.lastIndexOf('/');
+      r.append(el('span', 'ico', FT[typeOfName(e.name)].i), el('span', 'nm', ''), el('span', 'sz', fmtSize(e.size)));
+      r.children[1].append(el('small', '', i >= 0 ? e.name.slice(0, i + 1) : ''), e.name.slice(i + 1));
+      r.title = 'Нажми — посмотреть или достать'; r.onclick = () => zipEntry(o, e, urls); tbl.append(r);
+    }
+    if (files.length > shown.length && !Q) tbl.append(el('p', 'fhint', 'Показаны первые 3000 — найди нужное поиском.'));
+  };
+  q.oninput = paint; paint(); body.append(q, tbl);
+}
+async function zipEntry(o, e, urls) {
+  try {
+    const data = await kzView.zipGet(o.src, e), nm = e.name.split('/').pop(), src = kzView.memSrc(data);
+    if (/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(nm)) { const u = URL.createObjectURL(new Blob([data])); urls.push(u); return viewer({ src: u, m: { id: '', name: nm, size: data.length } }); }
+    if (canViewName(nm)) return docView({ name: nm, size: data.length, src });
+    // остальное — достать наружу
+    if (DISK) { const p = await APP.files.save(nm, data, o.m ? routeTarget(o.m) : null); toast('«' + nm + '» достан из архива'); APP.files.show(p); }
+    else { const u = URL.createObjectURL(new Blob([data])), a = el('a'); a.href = u; a.download = nm; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000); }
+  } catch (er) { toast('Не получилось: ' + errText(er)); }
+}
+async function showAudio(o, body, urls, info) {
+  const tags = await kzView.audioTags(o.src, o.name).catch(() => null) || {};
+  body.textContent = ''; const box = el('div', 'kaudio'), cov = el('div', 'cov');
+  if (tags.cover) { const u = URL.createObjectURL(tags.cover); urls.push(u); const i = el('img'); i.src = u; i.alt = ''; cov.append(i); } else cov.textContent = '🎵';
+  const a = el('audio'); a.controls = true; a.autoplay = true;
+  if (o.path) a.src = fileUrl(o.path); else { const u = URL.createObjectURL(await srcBlob(o.src)); urls.push(u); a.src = u; }
+  a.onerror = () => a.replaceWith(el('p', 'fhint', 'Такой звук Кинозал не играет — открой в программе.'));
+  const t = el('div', 't'); t.append(el('b', '', tags.title || o.name.replace(/\.[^.]+$/, '')), el('span', '', [tags.artist, tags.album, tags.year].filter(Boolean).join(' · ')));
+  box.append(cov, t, a); body.append(box);
+  if (tags.artist || tags.title) info.textContent += ' · ' + [tags.artist, tags.title].filter(Boolean).join(' — ');
+}
+let fontN = 0;
+async function showFont(src, body, name) {
+  const fam = 'kzfont' + (++fontN), ff = new FontFace(fam, await src.read(0, src.size));
+  await ff.load(); document.fonts.add(ff);
+  body.textContent = ''; const box = el('div', 'kfont'); box.style.fontFamily = fam;
+  box.append(el('div', 'big', 'Съешь же ещё этих мягких французских булок, да выпей чаю'), el('div', 'mid', 'The quick brown fox jumps over the lazy dog'), el('div', 'abc', 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ абвгдеёжзийклмнопрстуфхцчшщъыьэюя ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 !?.,:;«»()—'));
+  for (const px of [12, 16, 24, 36]) { const r = el('div', 'sz'); r.style.fontSize = px + 'px'; r.append(el('small', '', px + ' px'), document.createTextNode(' Кинозал — смотреть вместе')); box.append(r); }
+  body.append(box);
+}
+
+const HEAVY = /\.(heic|heif|tiff?)$/i;   // браузер их не показывает — раскодируем библиотеками (libheif, UTIF)
+async function heavyCanvas(name, src) {
+  if (src.size > 400e6) throw new Error('файл слишком большой, чтобы показать его здесь');
+  const u8 = await src.read(0, src.size);
+  return /\.hei[cf]$/i.test(name) ? kzView.heic(u8) : kzView.tiff(u8);
+}
+async function viewHeavy(name, size, src, m, path) {
+  const hint = toast2('Раскодирую «' + name + '»…');
+  try {
+    const cv = await heavyCanvas(name, src), b = await new Promise(r => cv.toBlob(r, 'image/jpeg', .95));
+    hint();
+    viewer({ src: URL.createObjectURL(b), own: true, full: true, m: { ...(m || { id: '' }), name, size, w: cv.width, h: cv.height }, path, ex: m?.ex });
+    return true;
+  } catch (e) { hint(); toast('Не получилось показать «' + name + '»: ' + errText(e)); return false; }
+}
+const toast2 = t => { toast(t); return () => { const e = $('#toast'); if (e?.textContent === t) e.classList.remove('on'); }; };
 async function openOriginal(m) {
+  if (HEAVY.test(m.name || '') && window.kzView) { const src = await fileSource(m); if (src && await viewHeavy(m.name, m.size || src.size, src, m, fileState(m).path)) return; }
   const raw = isRawName(m.name), vid = isVideoName(m.name) || /^video\//.test(m.mime || ''), d = S.dl[m.id], mine = isMineSrc(m);
   const path = mine ? S.src[m.id] || '' : d?.st === 'done' ? d.path || '' : '', file = mine ? srcMem.get(m.id) : null;
   let src = '', orient = 1, ex = m.ex || '', own = false;
@@ -1313,8 +1526,8 @@ async function openOriginal(m) {
 }
 function viewer(o) {
   const m = o.m, ov = el('div', 'kzview'), top = el('div', 'kvtop'), stage = el('div', 'kvstage'), t = el('div', 't');
-  const tif = /\.tiff?$/i.test(m.name || '');   // у TIFF видна только встроенная миниатюра, её размер — не размер снимка
-  t.append(el('b', '', m.name), el('span', '', [fmtSize(m.size), m.w && m.h && !tif ? m.w + '×' + m.h : '', tif ? 'TIFF — показана встроенная миниатюра, сам файл не тронут' : o.raw ? 'RAW — оригинал не тронут' : o.video ? '' : 'оригинал'].filter(Boolean).join(' · ')));
+  const tif = /\.tiff?$/i.test(m.name || '') && !o.full;   // TIFF без полной расшифровки: видна только встроенная миниатюра
+  t.append(el('b', '', m.name), el('span', '', [fmtSize(m.size), m.w && m.h && !tif ? m.w + '×' + m.h : '', tif ? 'TIFF — показана встроенная миниатюра, сам файл не тронут' : o.raw ? 'RAW — оригинал не тронут' : o.video ? '' : o.photo ? 'фото из чата' : o.full ? 'полный размер, раскодирован здесь' : 'оригинал'].filter(Boolean).join(' · ')));
   if (o.ex) t.append(el('span', 'ex', o.ex));
   if (o.preview) t.append(el('span', 'ex', 'Это превью — оригинал появится после скачивания'));
   const acts = el('div', 'acts'), urls = o.own ? [o.src] : [];
@@ -1329,16 +1542,72 @@ function viewer(o) {
   let media;
   if (o.video) { media = el('video'); media.controls = true; media.autoplay = true; media.src = o.src; media.onerror = () => media.replaceWith(el('p', 'fhint', 'Такое видео Кинозал не показывает — сохрани и открой в проигрывателе.')); }
   else {
-    media = el('img'); media.alt = m.name; media.draggable = false;
+    media = el('img'); media.alt = m.name || ''; media.draggable = false;
     if (o.orient > 1 && !o.preview) {   // RAW, снятый «вертикально»: поворачиваем картинку
       dataOr(o.src).then(b => bitmapOf(b, true)).then(async bm => { const cv = oriented(bm, o.orient); bm.close?.(); const b = await new Promise(r => cv.toBlob(r, 'image/jpeg', .95)); const u = URL.createObjectURL(b); urls.push(u); media.src = u; }).catch(() => { media.src = o.src; });
     } else media.src = o.src;
-    stage.title = 'Клик — 100%, ещё клик — по размеру окна';
-    stage.onclick = e => { if (e.target !== media) { close(); return; } const r = media.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height; stage.classList.toggle('full'); if (stage.classList.contains('full')) { stage.scrollLeft = media.naturalWidth * fx - stage.clientWidth / 2; stage.scrollTop = media.naturalHeight * fy - stage.clientHeight / 2; } };
+    zoomable(stage, media, top, close);
   }
   stage.append(media); ov.append(top, stage); document.body.append(ov);
-  const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } else stage.zoomKey?.(e); };
   document.addEventListener('keydown', key, true);
+}
+// приближение и перемещение: колесо — к точке под курсором, клик — «по окну ↔ 100%» (маленькие — ×2),
+// зажатая кнопка мыши — тащить, двумя пальцами — щипок; кнопки − 100% + и клавиши + − 0
+function zoomable(stage, img, top, close) {
+  let fit = 1, s = 1, x = 0, y = 0, ready = false;
+  const bar = el('div', 'kvzoom'), pct = el('button', 'btn', '—');
+  const zb = (t, f, title) => { const b = el('button', 'btn', t); b.title = title; b.onclick = e => { e.stopPropagation(); f(); }; return b; };
+  pct.title = 'По размеру окна / 100 %'; pct.onclick = e => { e.stopPropagation(); toggle(); };
+  bar.append(zb('−', () => zoomAt(s / 1.4), 'Отдалить (−)'), pct, zb('+', () => zoomAt(s * 1.4), 'Приблизить (+)'));
+  top.querySelector('.acts')?.before(bar);
+  const W = () => stage.clientWidth, H = () => stage.clientHeight, nw = () => img.naturalWidth || 1, nh = () => img.naturalHeight || 1;
+  const maxS = () => Math.max(fit * 8, 4), minS = () => Math.min(fit, 1) * .5;
+  function clamp() {   // картинка не уезжает за край: меньше окна — по центру, больше — край не отходит от края окна
+    const w = nw() * s, h = nh() * s;
+    x = w <= W() ? (W() - w) / 2 : Math.min(0, Math.max(W() - w, x));
+    y = h <= H() ? (H() - h) / 2 : Math.min(0, Math.max(H() - h, y));
+  }
+  function apply(anim) {
+    clamp(); img.style.transition = anim ? 'transform .18s ease-out' : 'none';
+    img.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+    pct.textContent = Math.round(s * 100) + ' %';
+    stage.classList.toggle('zoomed', s > fit * 1.01); stage.classList.toggle('pannable', nw() * s > W() + 1 || nh() * s > H() + 1);
+  }
+  function zoomAt(ns, cx = W() / 2, cy = H() / 2, anim = true) {   // точка (cx, cy) окна остаётся на месте
+    ns = Math.max(minS(), Math.min(maxS(), ns));
+    x = cx - (cx - x) * ns / s; y = cy - (cy - y) * ns / s; s = ns; apply(anim);
+  }
+  const toggle = (cx, cy) => zoomAt(s > fit * 1.01 ? fit : Math.max(1, fit * 2), cx, cy);
+  function reset() { if (!img.naturalWidth) return; fit = Math.min(1, W() / nw(), H() / nh()); s = fit; x = 0; y = 0; ready = true; apply(false); }
+  img.addEventListener('load', reset); if (img.complete) reset();
+  const ro = new ResizeObserver(() => { if (!ready) return; const was = s <= fit * 1.01; fit = Math.min(1, W() / nw(), H() / nh()); if (was) s = fit; apply(false); }); ro.observe(stage);
+  stage.addEventListener('wheel', e => { e.preventDefault(); const r = stage.getBoundingClientRect(); zoomAt(s * Math.pow(1.0018, -e.deltaY * (e.deltaMode ? 33 : 1)), e.clientX - r.left, e.clientY - r.top, false); }, { passive: false });
+  // мышь и пальцы
+  const pts = new Map(); let moved = 0, last = null, pinch = null;
+  stage.addEventListener('pointerdown', e => {
+    if (e.button > 0) return; stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved = 0; last = { x: e.clientX, y: e.clientY };
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s }; }
+    stage.classList.add('drag');
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const r = stage.getBoundingClientRect();
+    if (pts.size === 2 && pinch) { const [a, b] = [...pts.values()]; zoomAt(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, false); moved = 99; return; }
+    const dx = e.clientX - last.x, dy = e.clientY - last.y; last = { x: e.clientX, y: e.clientY }; moved += Math.abs(dx) + Math.abs(dy);
+    x += dx; y += dy; apply(false);
+  });
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (!pts.size) stage.classList.remove('drag'); if (pts.size === 1) last = [...pts.values()][0]; };
+  stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+  stage.addEventListener('click', e => {
+    if (moved > 5) return;   // это было перетаскивание, а не клик
+    const r = img.getBoundingClientRect();
+    if (s <= fit * 1.01 && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) { close(); return; }   // мимо картинки — закрыть
+    const sr = stage.getBoundingClientRect(); toggle(e.clientX - sr.left, e.clientY - sr.top);
+  });
+  stage.zoomKey = e => { if (e.key === '+' || e.key === '=') zoomAt(s * 1.4); else if (e.key === '-' || e.key === '_') zoomAt(s / 1.4); else if (e.key === '0') zoomAt(fit); };
+  stage.title = 'Колесо — приблизить к курсору · клик — 100 % / по окну · тяни — двигать';
 }
 const dataOr = src => fetch(src).then(r => r.blob());
 async function sendFiles(c, files) {
@@ -1538,15 +1807,15 @@ async function xFinish(x) {
   dls.delete(m.id); clearInterval(x.dog); try { x.c?.close(); } catch (e) {}
   if (!d) return;
   try {
-    if (m.dir) d.path = await APP.files.dirDone(m.id, m.name);
-    else if (DISK) d.path = await APP.files.done(m.id, m.name);
+    if (m.dir) d.path = await APP.files.dirDone(m.id, m.name, routeTarget(m));
+    else if (DISK) d.path = await APP.files.done(m.id, m.name, routeTarget(m));
     else {
       const parts = []; for (let i = 0; i * BLK < m.size; i++) { const p = await blobGet(m.id + ':' + i); if (!p) throw new Error('нет куска ' + i); parts.push(p); }
       await blobPut(m.id, new Blob(parts, { type: m.mime })); await tx('blobs', 'readwrite', s => s.delete(partsKey(m.id)));
     }
     d.st = 'done'; d.got = m.size; delete d.why; save(); xPaint(m.id);
     jlog('[файлы] скачан', m.name, fmtSize(m.size));
-    toast('«' + m.name + '» скачан' + (DISK ? ' — он в «Загрузки → Кинозал → Полученные»' : ''));
+    if (!d.auto) toast('«' + m.name + '» скачан' + (DISK ? ' — ' + routeLabel(m) : ''));
   } catch (e) { d.st = 'err'; d.why = 'не получилось сохранить: ' + (e?.message || e); save(); xPaint(m.id); }
 }
 // закачка остановилась: пауза, ждём отправителя (сама продолжится) или ошибка
@@ -1693,7 +1962,7 @@ function xPaint(id) {
 
 // ---------- раздел «Файлы»: передачи со всех чатов, полученное, отправленное ----------
 // Не проводник по всему диску: только то, что прошло через Кинозал, — с тем, кто прислал и из какого чата.
-let filesOpen = false, fTab = store.get('fTab', 'live'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
+let filesOpen = false, fTab = store.get('fTab', 'all'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
 const FICON = { img: '🖼', video: '🎬', audio: '🎵', arc: '🗜', doc: '📄', exe: '⚙️', dir: '📁', raw: '📷' };
 const fKind = n => isRawName(n) ? 'raw' : /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(n) ? 'img' : /\.(mp4|webm|mkv|mov|m4v|avi)$/i.test(n) ? 'video' : /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n) ? 'audio' : /\.(zip|rar|7z|tar|gz|jar|mrpack)$/i.test(n) ? 'arc' : RISKY.test(n) ? 'exe' : 'doc';
 const fileUrl = p => 'file:///' + String(p).replace(/\\/g, '/').split('/').map((s, i) => i === 0 && /^[A-Za-z]:$/.test(s) ? s : encodeURIComponent(s)).join('/');
@@ -1710,9 +1979,10 @@ const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).s
 function openFiles(tab) {
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
-  if (!DISK && fTab === 'recv') fTab = 'live';
+  if (!DISK && (fTab === 'recv' || fTab === 'routes')) fTab = 'all';
+  if (!['all', 'live', 'recv', 'routes'].includes(fTab)) fTab = 'all';
   root.classList.add('chat-open'); renderList(); renderFiles();
-  APP?.files?.watch?.(() => { if (filesOpen && fTab === 'recv') renderFiles(); });
+  APP?.files?.watch?.(() => { if (filesOpen && (fTab === 'recv' || fTab === 'all')) renderFiles(); });
 }
 function closeFiles() { filesOpen = false; showEmpty(); }
 // строка с карточкой сообщения (она сама обновляет прогресс) и подписью: кто, где, когда
@@ -1731,20 +2001,262 @@ async function renderFiles() {
   const sec = el('section', 'mx-files'), head = el('header', 'mx-chead'), tabs = el('div', 'ftabs'), bar = el('div', 'fbar'), list = el('div', 'flist');
   const back = el('button', 'ib back'); back.innerHTML = IC.back; back.title = 'К чатам'; back.onclick = closeFiles;
   const n = liveCount();
-  for (const [k, t] of [['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Полученные']] : []), ['sent', 'Отправленные']]) {
+  for (const [k, t] of [['all', 'Все файлы'], ['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Папки'], ['routes', 'Маршруты']] : [])]) {
     const b = el('button', 'ftab' + (fTab === k ? ' on' : ''), t); b.onclick = () => { fTab = k; store.set('fTab', k); fPath = ''; fQ = ''; renderFiles(); }; tabs.append(b);
   }
   head.append(back, el('h2', '', 'Файлы'), tabs);
   sec.append(head, bar, list);
   if (fTab === 'live') await fillLive(bar, list);
   else if (fTab === 'recv') await fillRecv(bar, list, gen);
-  else await fillSent(bar, list);
+  else if (fTab === 'routes') await fillRoutes(bar, list);
+  else await fillAll(bar, list, gen);
   if (gen !== fGen || !filesOpen) return;
-  const keep = $('.mx-files .flist')?.scrollTop || 0, hadFocus = document.activeElement?.classList.contains('fq');
+  const keep = fKeepTop ? 0 : $('.mx-files .flist')?.scrollTop || 0, hadFocus = document.activeElement?.classList.contains('fq'); fKeepTop = false;
   main.textContent = ''; main.append(sec); list.scrollTop = keep;
   if (hadFocus) { const q = $('.fq', sec); q?.focus(); q?.setSelectionRange(q.value.length, q.value.length); }
 }
+let fKeepTop = false;
 function emptyEl(icon, t, s) { const e = el('div', 'fempty'); e.append(el('div', 'big', icon), el('b', '', t), el('span', '', s)); return e; }
+
+// --- типы файлов ---
+const FTYPES = [['photo', 'Фото', '🖼'], ['raw', 'RAW', '📷'], ['video', 'Видео', '🎬'], ['audio', 'Звук', '🎵'], ['pdf', 'PDF', '📕'], ['doc', 'Документы', '📄'], ['sheet', 'Таблицы', '📊'], ['text', 'Текст и код', '📝'], ['arc', 'Архивы', '🗜'], ['dir', 'Папки', '📁'], ['font', 'Шрифты', '🔤'], ['exe', 'Программы', '⚙️'], ['other', 'Другое', '📦']];
+const FT = Object.fromEntries(FTYPES.map(([k, t, i]) => [k, { t, i }]));
+function typeOfName(n) {
+  n = String(n || '').toLowerCase();
+  if (isRawName(n) && !/\.tiff?$/.test(n)) return 'raw';
+  if (/\.(png|jpe?g|webp|gif|avif|bmp|heic|heif|tiff?|svg|ico)$/.test(n)) return 'photo';
+  if (/\.(mp4|webm|mkv|mov|m4v|avi|wmv|flv|3gp|ts)$/.test(n)) return 'video';
+  if (/\.(mp3|ogg|opus|wav|flac|m4a|aac|wma|aiff?)$/.test(n)) return 'audio';
+  if (/\.pdf$/.test(n)) return 'pdf';
+  if (/\.(docx?|odt|rtf|pptx?|odp|epub|djvu)$/.test(n)) return 'doc';
+  if (/\.(xlsx?|ods|csv|tsv)$/.test(n)) return 'sheet';
+  if (/\.(txt|md|markdown|json|jsonc|log|ini|cfg|conf|toml|ya?ml|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|java|kt|c|h|cpp|hpp|cs|go|rs|rb|php|sh|bat|cmd|ps1|sql|lua|properties|srt|vtt|nfo|mcmeta)$/.test(n)) return 'text';
+  if (/\.(zip|rar|7z|tar|gz|tgz|bz2|xz|jar|mrpack|apk)$/.test(n)) return 'arc';
+  if (/\.(ttf|otf|woff2?)$/.test(n)) return 'font';
+  if (RISKY.test(n)) return 'exe';
+  return 'other';
+}
+const ftype = m => m.kind === 'img' ? 'photo' : m.dir ? 'dir' : typeOfName(m.name);
+const fileNameOf = m => m.kind === 'img' ? 'Фото ' + new Date(m.ts).toISOString().slice(0, 19).replace('T', ' ').replace(/:/g, '-') + '.' + (m.mime === 'image/jpeg' ? 'jpg' : String(m.mime || 'image/webp').split('/')[1]) : m.name;
+const whoName = m => m.from === myId ? 'Я' : nameOf(m.from);
+
+// --- маршруты: куда класть полученное ---
+// Правила проверяются сверху вниз, первое подходящее решает: тип файла и от кого → папка и подпапки.
+// Если ни одно не подошло — «Полученные». Маленькие файлы сохраняются сразу, большие качаются сами до заданного размера.
+S.routing ||= { auto: true, bigMax: 2048, sub: 'none', rules: [] };
+const SUBS = { none: 'без подпапок', person: 'по человеку', month: 'по месяцу', 'person-month': 'по человеку, внутри по месяцам', type: 'по типу файла' };
+function routeOf(m) { const t = ftype(m); return S.routing.rules.find(r => r.on !== false && (!r.types?.length || r.types.includes(t)) && (!r.who || r.who === m.from || r.who === m.chat)) || null; }
+function routeTarget(m) {
+  const r = routeOf(m), d = new Date(m.ts), mon = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  const sub = { none: [], person: [whoName(m)], month: [mon], 'person-month': [whoName(m), mon], type: [FT[ftype(m)].t] }[r ? r.sub : S.routing.sub] || [];
+  return { root: r?.dest || '', sub };
+}
+const rootName = p => p ? String(p).split(/[\\/]/).filter(Boolean).pop() || p : 'Полученные';
+function routeLabel(m) { const t = routeTarget(m); return 'он в «' + [rootName(t.root), ...t.sub].join(' → ') + '»'; }
+async function saveToRoute(m, auto) {
+  const b = await blobGet(m.id); if (!b) throw new Error('файла нет в переписке');
+  const p = await APP.files.save(fileNameOf(m), new Uint8Array(await b.arrayBuffer()), routeTarget(m));
+  S.dl[m.id] = { st: 'done', got: m.size || b.size, path: p, ...(auto ? { auto: 1 } : {}) }; save(); return p;
+}
+// пришёл файл — разложить по маршруту (old — «разложить уже полученное» из настроек)
+async function autoRoute(m, old) {
+  if (!DISK || (!S.routing.auto && !old) || m.from === myId || !['file', 'img'].includes(m.kind)) return false;
+  if (!old && Date.now() - m.ts > 3 * 864e5) return false;               // старое, пришедшее досинхронизацией, само не раскладываем
+  if (m.open > Date.now() || RISKY.test(m.name || '') || S.dl[m.id]) return false;   // капсулы и программы — только вручную
+  try {
+    if (m.big) { if (old || m.size > S.routing.bigMax * MB) return false; S.dl[m.id] = { st: 'wait', got: 0, auto: 1 }; save(); xStart(m); return true; }
+    await saveToRoute(m, true); if (filesOpen && fTab === 'all') renderFiles(); return true;
+  } catch (e) { jlog('[маршруты] не сохранил', m.name || m.id, errText(e)); return false; }
+}
+
+// --- библиотека: все файлы из всех чатов, любого размера ---
+const fl = { type: store.get('flType', 'all'), who: '', sort: store.get('flSort', 'date'), group: store.get('flGroup', 'none'), view: store.get('flView', 'list'), q: '', shown: 150 };
+function allFileMsgs() {
+  return new Promise((res, rej) => {
+    const out = [], r = db.transaction('msgs').objectStore('msgs').openCursor();
+    r.onsuccess = () => { const c = r.result; if (!c) return res(out); const m = c.value; if ((m.kind === 'file' || m.kind === 'img') && !(m.open > Date.now() && m.from !== myId)) out.push(m); c.continue(); };
+    r.onerror = () => rej(r.error);
+  });
+}
+function fileState(m) {
+  const d = S.dl[m.id], mine = isMineSrc(m);
+  if (mine && S.src[m.id]) return { k: 'disk', path: S.src[m.id], t: 'отправлено отсюда' };
+  if (d?.st === 'done' && d.path) return { k: 'disk', path: d.path, t: 'на диске' };
+  if (d?.st === 'done') return { k: 'here', t: 'скачано' };
+  if (m.blob) return { k: 'chat', t: 'в переписке' };
+  if (d && ['go', 'wait', 'pause'].includes(d.st)) return { k: 'dl', t: d.st === 'go' ? 'качается ' + Math.floor((d.got || 0) / m.size * 100) + '%' : d.st === 'pause' ? 'на паузе' : 'ждёт отправителя' };
+  if (mine) return { k: 'gone', t: 'отправлено с другого устройства' };
+  return { k: 'remote', t: m.big ? 'не скачано' : '' };
+}
+const fMonth = ts => new Date(ts).toLocaleDateString('ru', { month: 'long', year: 'numeric' });
+function fActions(m) {
+  const st = fileState(m), a = [['Открыть', () => openAny(m)]];
+  if (st.path) a.push(['В проводнике', () => APP.files.show(st.path)]);
+  if (st.k === 'chat') a.push([DISK ? 'Сохранить — ' + rootName(routeTarget(m).root) : 'Сохранить', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); APP.files.show(p); renderFiles(); } catch (e) { toast('Не получилось: ' + errText(e)); } }]);
+  if (m.big && !isMineSrc(m) && st.k !== 'disk' && st.k !== 'here') a.push([S.dl[m.id]?.st === 'go' ? 'Пауза' : 'Скачать', () => { xClick(m); setTimeout(renderFiles, 300); }]);
+  a.push(['Переслать', () => pickChat('Кому переслать «' + fileNameOf(m) + '»?', c => fwdMsg(c, m))]);
+  a.push(['К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); }]);
+  if (isMineSrc(m) && (S.src[m.id] || srcMem.has(m.id))) a.push(['Больше не раздавать', () => {
+    if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
+    for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
+    delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
+  }]);
+  return a;
+}
+// переслать из библиотеки: из переписки — прямо в сообщении, с диска — как файл или папку, своё большое — напрямую
+async function fwdMsg(c, m) {
+  const st = fileState(m), meta = { th: m.th, w: m.w, h: m.h, ex: m.ex, dur: m.dur };
+  try {
+    if (m.kind === 'img') { const b = await blobGet(m.id); if (!b) throw new Error('фото нет в переписке'); await post(c, { kind: 'img', w: m.w, h: m.h }, b); }
+    else if (m.blob) { const b = await blobGet(m.id); if (!b) throw new Error('файла нет в переписке'); await post(c, { kind: 'file', name: m.name, size: m.size, mime: m.mime, ...meta }, b); }
+    else if (isMineSrc(m)) return fwdSent(c, m);
+    else if (st.path) return fwdPath(c, { path: st.path, name: m.name, size: m.size, dir: !!m.dir }, m);
+    else { toast('Сначала скачай файл — пересылать его будешь со своего компьютера'); return; }
+    toast('Отправлено в «' + chatTitle(c) + '»');
+  } catch (e) { toast('Не получилось переслать: ' + errText(e)); }
+}
+// открыть чем умеем: картинки, RAW, видео — просмотр; документы, звук, архивы — свои просмотрщики; иначе — программой Windows
+async function openAny(m) {
+  const t = ftype(m), st = fileState(m);
+  if (m.kind === 'img') return photo(m);
+  if (m.dir) { if (st.path) { fTab = 'recv'; store.set('fTab', 'recv'); fPath = st.path; fQ = ''; renderFiles(); } else xClick(m); return; }
+  if (viewable(m) || t === 'raw' || t === 'video' || HEAVY.test(m.name || '')) return openOriginal(m);
+  if (typeof openDoc === 'function' && ['audio', 'pdf', 'doc', 'sheet', 'text', 'arc', 'font', 'photo'].includes(t)) return openDoc(m);
+  if (st.path) return openOnDisk({ name: m.name, path: st.path });
+  if (m.blob) return saveSmall(m);
+  xClick(m);
+}
+function thumbEl(m, cls) {
+  const t = ftype(m), box = el('span', cls + ' ' + t);
+  const img = src => { const i = el('img'); i.loading = 'lazy'; i.alt = ''; i.src = src; box.textContent = ''; box.append(i); };
+  if (m.th) img(m.th);
+  else if (m.kind === 'img' || (m.blob && viewable(m))) { box.textContent = FT[t].i; mediaUrl(m).then(u => u && img(u)); }
+  else { const ext = (String(m.name || '').match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase(); box.textContent = FT[t].i; if (ext && !['photo', 'dir'].includes(t)) box.append(el('small', '', ext)); }
+  return box;
+}
+async function fillAll(bar, list, gen) {
+  const ms = await allFileMsgs(); if (gen !== fGen) return;
+  const Q = fl.q.trim().toLowerCase();
+  const base = ms.filter(m => (!fl.who || (fl.who === 'me' ? m.from === myId : m.from === fl.who)) && (!Q || [fileNameOf(m), whoName(m), chatTitle(m.chat), m.ex || ''].join(' ').toLowerCase().includes(Q)));
+  const cnt = {}; for (const m of base) cnt[ftype(m)] = (cnt[ftype(m)] || 0) + 1;
+  // строка фильтров: поиск, кто, сортировка, группировка, вид
+  const q = el('input', 'fq'); q.type = 'search'; q.placeholder = 'Поиск: имя файла, человек, чат, камера…'; q.value = fl.q;
+  q.oninput = () => { fl.q = q.value; fl.shown = 150; clearTimeout(q.t); q.t = setTimeout(renderFiles, 200); };
+  const sel = (opts, val, set) => { const s = el('select', 'fsort'); for (const [v, t] of opts) { const o = el('option', '', t); o.value = v; o.selected = v === val; s.append(o); } s.onchange = () => { set(s.value); fl.shown = 150; fKeepTop = true; renderFiles(); }; return s; };
+  const people = [...new Set(ms.filter(m => m.from !== myId).map(m => m.from))].map(u => [u, nameOf(u)]).sort((a, b) => a[1].localeCompare(b[1], 'ru'));
+  const viewBtn = el('button', 'btn fview', fl.view === 'grid' ? '☰ Список' : '▦ Плитка'); viewBtn.onclick = () => { fl.view = fl.view === 'grid' ? 'list' : 'grid'; store.set('flView', fl.view); renderFiles(); };
+  const row = el('div', 'frowbar');
+  row.append(q,
+    sel([['', 'Все люди'], ['me', 'Только мои'], ...people], fl.who, v => { fl.who = v; }),
+    sel([['date', 'Сначала новые'], ['old', 'Сначала старые'], ['name', 'По имени'], ['size', 'Сначала большие'], ['type', 'По типу']], fl.sort, v => { fl.sort = v; store.set('flSort', v); }),
+    sel([['none', 'Без групп'], ['type', 'Группы: тип'], ['person', 'Группы: человек'], ['chat', 'Группы: чат'], ['month', 'Группы: месяц']], fl.group, v => { fl.group = v; store.set('flGroup', v); }),
+    viewBtn);
+  const chips = el('div', 'fchips');
+  const chip = (k, t) => { const b = el('button', 'fchip' + (fl.type === k ? ' on' : ''), t); b.onclick = () => { fl.type = k; store.set('flType', k); fl.shown = 150; fKeepTop = true; renderFiles(); }; chips.append(b); };
+  chip('all', 'Все · ' + base.length);
+  for (const [k, t, i] of FTYPES) if (cnt[k] || fl.type === k) chip(k, i + ' ' + t + ' · ' + (cnt[k] || 0));
+  bar.append(row, chips);
+  let items = fl.type === 'all' ? base : base.filter(m => ftype(m) === fl.type);
+  const size = m => m.size || 0, nm = m => fileNameOf(m).toLowerCase();
+  const cmp = { date: (a, b) => b.ts - a.ts, old: (a, b) => a.ts - b.ts, name: (a, b) => nm(a).localeCompare(nm(b), 'ru', { numeric: true }), size: (a, b) => size(b) - size(a), type: (a, b) => FTYPES.findIndex(x => x[0] === ftype(a)) - FTYPES.findIndex(x => x[0] === ftype(b)) || b.ts - a.ts }[fl.sort] || ((a, b) => b.ts - a.ts);
+  items.sort(cmp);
+  const total = items.reduce((s, m) => s + size(m), 0), onDisk = items.filter(m => fileState(m).k === 'disk').length;
+  bar.append(el('p', 'fhint', items.length ? plural(items.length, 'файл', 'файла', 'файлов').replace(/^/, items.length + ' ') + ' · ' + fmtSize(total) + (DISK ? ' · на диске ' + onDisk : '') + (DISK && S.routing.auto ? ' · новые раскладываются по маршрутам сами' : '') : ''));
+  if (!items.length) { list.append(Q || fl.who || fl.type !== 'all' ? emptyEl('🔍', 'Ничего не нашлось', 'Попробуй убрать фильтры или поискать по-другому.') : emptyEl('🗂', 'Файлов пока нет', 'Здесь будут все файлы и фото из всех чатов — и твои, и присланные, любого размера.')); return; }
+  // группы
+  const key = { type: m => FT[ftype(m)].i + ' ' + FT[ftype(m)].t, person: m => whoName(m), chat: m => chatTitle(m.chat), month: m => fMonth(m.ts) }[fl.group];
+  const groups = new Map(); for (const m of items.slice(0, fl.shown)) { const k = key ? key(m) : ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m); }
+  for (const [k, gm] of groups) {
+    if (k) list.append(el('h3', '', k + ' · ' + gm.length));
+    const box = fl.view === 'grid' ? el('div', 'fgrid') : list;
+    for (const m of gm) box.append(fl.view === 'grid' ? libTile(m) : libRow(m));
+    if (box !== list) list.append(box);
+  }
+  if (items.length > fl.shown) { const more = el('button', 'btn fmore', 'Показать ещё ' + Math.min(300, items.length - fl.shown) + ' из ' + (items.length - fl.shown)); more.onclick = () => { fl.shown += 300; renderFiles(); }; list.append(more); }
+}
+function libRow(m) {
+  const r = el('div', 'frow file lib'), st = fileState(m), t = el('div', 't'), acts = el('div', 'facts');
+  t.append(el('b', '', fileNameOf(m)));
+  const info = [FT[ftype(m)].t, m.size ? fmtSize(m.size) : '', m.dir ? nFiles(m.n || 0) : '', (m.from === myId ? 'ты → ' + chatTitle(m.chat) : nameOf(m.from) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat))), fDate(m.ts)].filter(Boolean);
+  t.append(el('span', '', info.join(' · ')));
+  if (m.ex) t.append(el('span', 'ex', m.ex));
+  if (st.t) { const s = el('span', 'fst ' + st.k, st.t + (st.path && st.k === 'disk' ? ' · ' + st.path.split(/[\\/]/).slice(-3, -1).join('\\') : '')); s.title = st.path || ''; t.append(s); }
+  for (const [txt, f] of fActions(m).slice(1)) acts.append(lnk(txt, f));
+  r.append(thumbEl(m, 'fic'), t, acts);
+  r.onclick = e => { if (!e.target.closest('button')) openAny(m); };
+  return r;
+}
+function libTile(m) {
+  const r = el('div', 'ftile'), st = fileState(m), more = el('button', 'ib fmorebtn', '⋯');
+  more.title = 'Действия'; more.onclick = e => {
+    e.stopPropagation(); closeMenus(); menuAt = Date.now();
+    const mn = el('div', 'menu mx-pop'), rc = more.getBoundingClientRect();
+    Object.assign(mn.style, { position: 'fixed', left: Math.min(innerWidth - 240, rc.left) + 'px', top: Math.min(innerHeight - 280, rc.bottom + 4) + 'px', width: '230px', zIndex: 50 });
+    for (const [txt, f] of fActions(m)) { const b = el('button', '', txt); b.onclick = () => { closeMenus(); f(); }; mn.append(b); }
+    document.body.append(mn); mn.addEventListener('click', ev => ev.stopPropagation());
+  };
+  const cap = el('div', 'cap'); cap.append(el('b', '', fileNameOf(m)), el('span', '', [m.size ? fmtSize(m.size) : '', whoName(m), st.k === 'remote' && m.big ? '☁ не скачано' : ''].filter(Boolean).join(' · ')));
+  r.append(thumbEl(m, 'fpic'), cap, more); r.title = fileNameOf(m);
+  r.onclick = () => openAny(m);
+  return r;
+}
+
+// --- настройка маршрутов ---
+function fillRoutes(bar, list) {
+  const R = S.routing, ch = () => { save(); renderFiles(); };
+  const auto = el('label', 'switch'), ac = el('input'); ac.type = 'checkbox'; ac.checked = R.auto;
+  auto.append(document.createTextNode('Сохранять полученное само, по маршрутам'), ac); ac.onchange = () => { R.auto = ac.checked; ch(); };
+  const big = el('select', 'fsort');
+  for (const [v, t] of [[0, 'большие — только по кнопке'], [500, 'большие — сами до 500 МБ'], [2048, 'большие — сами до 2 ГБ'], [10240, 'большие — сами до 10 ГБ'], [1e6, 'большие — сами, любого размера']]) { const o = el('option', '', t); o.value = v; o.selected = +R.bigMax === v; big.append(o); }
+  big.onchange = () => { R.bigMax = +big.value; ch(); }; big.disabled = !R.auto;
+  const row = el('div', 'frowbar'); row.append(auto, big);
+  bar.append(row, el('p', 'fhint', 'Правила проверяются сверху вниз — решает первое подходящее. Программы (.exe и подобные) и капсулы времени сами не сохраняются. Удобно: RAW — в папку для фото, документы — по людям, всё остальное — в «Полученные».'));
+  // быстрые заготовки
+  const presets = el('div', 'fchips');
+  const preset = (t, rule) => { const b = el('button', 'fchip', '+ ' + t); b.onclick = async () => { const dest = await APP.files.pickRoot(); if (!dest) return; R.rules.push({ id: uid(), on: true, dest, ...rule }); ch(); }; presets.append(b); };
+  preset('RAW — в свою папку', { types: ['raw'], who: '', sub: 'month' });
+  preset('Фото и видео по месяцам', { types: ['photo', 'video'], who: '', sub: 'month' });
+  preset('Документы по людям', { types: ['pdf', 'doc', 'sheet', 'text'], who: '', sub: 'person' });
+  preset('Сборки и архивы', { types: ['arc', 'dir'], who: '', sub: 'person' });
+  const addBtn = el('button', 'fchip', '+ Свой маршрут'); addBtn.onclick = () => { R.rules.push({ id: uid(), on: true, types: [], who: '', dest: '', sub: 'person' }); ch(); }; presets.append(addBtn);
+  bar.append(presets);
+  // сами правила
+  const whoOpts = [['', 'от кого угодно'], ...Object.values(S.contacts).filter(c => c.state !== 'blocked' && c.id !== myId).map(c => [c.id, 'от ' + nameOf(c.id)]), ...Object.values(S.groups).filter(g => !g.gone).map(g => [g.id, 'в группе «' + g.name + '»'])];
+  R.rules.forEach((r, i) => {
+    const c = el('div', 'frow route' + (r.on === false ? ' off' : '')), top = el('div', 'rtop');
+    const on = el('input'); on.type = 'checkbox'; on.checked = r.on !== false; on.title = 'Включён'; on.onchange = () => { r.on = on.checked; ch(); };
+    top.append(on, el('b', '', (i + 1) + '. ' + (r.types?.length ? r.types.map(t => FT[t].t).join(', ') : 'Любые файлы')));
+    const mv = (d, t) => lnk(t, () => { const j = i + d; if (j < 0 || j >= R.rules.length) return; [R.rules[i], R.rules[j]] = [R.rules[j], R.rules[i]]; ch(); });
+    top.append(el('span', 'grow'), mv(-1, '↑'), mv(1, '↓'), lnk('🗑', () => { R.rules.splice(i, 1); ch(); }, 'del'));
+    const types = el('div', 'fchips sm');
+    for (const [k, t, ic] of FTYPES) { const b = el('button', 'fchip' + (r.types?.includes(k) ? ' on' : ''), ic + ' ' + t); b.onclick = () => { r.types = r.types?.includes(k) ? r.types.filter(x => x !== k) : [...(r.types || []), k]; ch(); }; types.append(b); }
+    const who = el('select', 'fsort'); for (const [v, t] of whoOpts) { const o = el('option', '', t); o.value = v; o.selected = (r.who || '') === v; who.append(o); } who.onchange = () => { r.who = who.value; ch(); };
+    const sub = el('select', 'fsort'); for (const [v, t] of Object.entries(SUBS)) { const o = el('option', '', 'подпапки: ' + t); o.value = v; o.selected = r.sub === v; sub.append(o); } sub.onchange = () => { r.sub = sub.value; ch(); };
+    const dest = el('button', 'btn fdest', '📂 ' + (r.dest ? rootName(r.dest) : 'Полученные')); dest.title = r.dest || 'Загрузки → Кинозал → Полученные';
+    dest.onclick = async () => { const p = await APP.files.pickRoot(); if (p) { r.dest = p; ch(); } };
+    const line = el('div', 'frowbar'); line.append(who, el('span', 'arrow', '→'), dest, sub);
+    const ex = { ts: Date.now(), from: r.who && S.contacts[r.who] ? r.who : (Object.keys(S.contacts)[0] || myId), chat: '', kind: 'file', name: 'пример' };
+    const segs = { none: [], person: [whoName(ex)], month: [new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0')], 'person-month': [whoName(ex), new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0')], type: [r.types?.[0] ? FT[r.types[0]].t : 'Фото'] }[r.sub] || [];
+    c.append(top, types, line, el('p', 'fhint', 'Например: ' + [r.dest || 'Загрузки\\Кинозал\\Полученные', ...segs].join('\\')));
+    list.append(c);
+  });
+  // всё остальное
+  const fb = el('div', 'frow route'), fsub = el('select', 'fsort');
+  for (const [v, t] of Object.entries(SUBS)) { const o = el('option', '', 'подпапки: ' + t); o.value = v; o.selected = R.sub === v; fsub.append(o); }
+  fsub.onchange = () => { R.sub = fsub.value; ch(); };
+  const fl2 = el('div', 'frowbar'); fl2.append(el('b', '', R.rules.length ? 'Всё остальное' : 'Все файлы'), el('span', 'arrow', '→'), lnk('📂 Полученные', () => APP.files.dir()), fsub);
+  fb.append(fl2); list.append(fb);
+  // применить к тому, что уже пришло
+  const again = el('button', 'btn', 'Разложить уже полученное по маршрутам');
+  again.onclick = async () => {
+    const ms = (await allFileMsgs()).filter(m => m.from !== myId && m.blob && !S.dl[m.id] && !RISKY.test(m.name || ''));
+    if (!ms.length) { toast('Всё, что пришло в переписке, уже на диске'); return; }
+    if (!confirm('Сохранить на диск ' + ms.length + ' ' + plural(ms.length, 'файл', 'файла', 'файлов') + ' из переписки, по маршрутам? Большие файлы, которые ещё не скачаны, останутся как есть.')) return;
+    let n = 0; for (const m of ms) if (await autoRoute(m, true)) n++;
+    toast('Сохранено: ' + n); renderFiles();
+  };
+  list.append(again);
+}
 
 // --- передачи ---
 async function fillLive(bar, list) {
@@ -1781,20 +2293,24 @@ async function fillRecv(bar, list, gen) {
   sort.onchange = () => { fSort = sort.value; store.set('fSort', fSort); renderFiles(); };
   const row = el('div', 'frowbar'); row.append(q, sort, lnk('📂 в проводнике', () => fPath ? APP.files.show(fPath) : APP.files.dir()));
   bar.append(row);
-  let r, items;
+  let r, items, rootsList = null;
   try {
+    const roots = await APP.files.roots();
     if (fQ.trim()) { items = await APP.files.search(fQ.trim()); r = null; }
-    else { r = await APP.files.list(fPath); items = r.items; }
+    else if (!fPath && roots.length > 1) {   // несколько папок маршрутов — сначала сами папки
+      rootsList = roots; items = [];
+      for (const x of roots) { const l = await APP.files.list(x.path).catch(() => null); items.push({ name: x.def ? 'Полученные (по умолчанию)' : x.path.split(/[\\/]/).filter(Boolean).pop() || x.path, path: x.path, dir: true, size: l ? l.items.reduce((a, b) => a + (b.size || 0), 0) : 0, count: l ? l.items.length : 0, mtime: 0, where: x.path, root: true }); }
+    } else { r = await APP.files.list(fPath); items = r.items; }
   } catch (e) { list.append(emptyEl('⚠️', 'Не получилось прочитать папку', errText(e))); return; }
   if (gen !== fGen) return;
-  // хлебные крошки: Полученные › папка › папка
+  // хлебные крошки: Папки › корень › папка › папка
   if (r) {
     const crumbs = el('div', 'fcrumbs'), rel = r.path.slice(r.root.length).split(/[\\/]/).filter(Boolean);
     const step = (t, p) => crumbs.append(lnk(t, () => { fPath = p; renderFiles(); }));
-    step('Полученные', ''); let acc = r.root;
+    step('Папки', ''); crumbs.append(el('span', '', '›')); step(r.root.split(/[\\/]/).filter(Boolean).pop() || r.root, r.root); let acc = r.root;
     for (const s of rel) { acc += '\\' + s; crumbs.append(el('span', '', '›')); step(s, acc); }
-    bar.append(crumbs); fPath = r.path === r.root ? '' : r.path;
-  } else bar.append(el('div', 'fcrumbs', 'Найдено: ' + items.length + (items.length >= 300 ? '+' : '')));
+    bar.append(crumbs);
+  } else bar.append(el('div', 'fcrumbs', rootsList ? 'Папки, куда маршруты складывают файлы' : 'Найдено: ' + items.length + (items.length >= 300 ? '+' : '')));
   const cmp = { date: (a, b) => b.mtime - a.mtime, name: (a, b) => a.name.localeCompare(b.name, 'ru', { numeric: true }), size: (a, b) => b.size - a.size }[fSort];
   items.sort((a, b) => (b.dir - a.dir) * (fSort === 'name' ? 1 : 0) || cmp(a, b));
   if (!items.length) {
@@ -1808,6 +2324,7 @@ async function fillRecv(bar, list, gen) {
 // картинка или RAW из «Полученных»: если знаем сообщение — как из чата, иначе прямо с диска
 async function viewFile(it, m, k) {
   if (m && m.kind === 'file' && !m.dir) return openOriginal(m);
+  if (HEAVY.test(it.name) && window.kzView) { const src = await diskSource(it.path); if (src && await viewHeavy(it.name, it.size, src, null, it.path)) return; }
   const fake = { id: '', name: it.name, size: it.size };
   if (k === 'raw') { const r = await APP.files.rawPreview(it.path).catch(() => null); if (!r) { toast('В этом RAW нет встроенной картинки — открой его в своей программе для RAW'); return; } viewer({ src: URL.createObjectURL(new Blob([r.jpeg], { type: 'image/jpeg' })), own: true, orient: r.orient, raw: true, ex: r.ex, m: fake, path: it.path }); }
   else viewer({ src: fileUrl(it.path), m: fake, path: it.path });
@@ -1816,19 +2333,19 @@ function recvRow(it, m) {
   const r = el('div', 'frow file'), k = it.dir ? 'dir' : fKind(it.name);
   const ic = el('span', 'fic ' + k, FICON[k]), t = el('div', 't'), acts = el('div', 'facts');
   t.append(el('b', '', it.name));
-  const info = [it.dir ? (it.approx ? '≈ ' : '') + fmtSize(it.size) + ' · ' + it.count + ' ' + plural(it.count, 'объект', 'объекта', 'объектов') : fmtSize(it.size), fDate(it.mtime)];
-  if (it.where) info.push('в «' + (it.where || 'Полученные') + '»');
+  const info = [it.dir ? (it.approx ? '≈ ' : '') + fmtSize(it.size) + ' · ' + it.count + ' ' + plural(it.count, 'объект', 'объекта', 'объектов') : fmtSize(it.size), it.mtime ? fDate(it.mtime) : ''].filter(Boolean);
+  if (it.where) info.push(it.root ? it.where : 'в «' + it.where + '»');
   if (m) info.push('от ' + (m.from === myId ? 'тебя' : nameOf(m.from)) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat)));
   t.append(el('span', '', info.join(' · ')));
   if (k === 'img' || m?.th) { const th = el('img', 'fthumb'); th.loading = 'lazy'; th.src = m?.th || fileUrl(it.path); th.alt = ''; ic.textContent = ''; ic.append(th); }
   if (k === 'raw' && m?.ex) info.push(m.ex), t.lastChild.textContent = info.join(' · ');
-  const open1 = () => it.dir ? (fQ = '', fPath = it.path, renderFiles()) : k === 'img' || k === 'raw' ? viewFile(it, m, k) : ['video', 'audio'].includes(k) ? preview(it, k) : openOnDisk(it);
+  const open1 = () => it.dir ? (fQ = '', fPath = it.path, renderFiles()) : k === 'img' || k === 'raw' || HEAVY.test(it.name) ? viewFile(it, m, k) : canViewName(it.name) ? openDocPath(it) : ['video', 'audio'].includes(k) ? preview(it, k) : openOnDisk(it);
   acts.append(
     ...(it.dir ? [] : [lnk('Открыть', () => openOnDisk(it))]),
     lnk('В проводнике', () => APP.files.show(it.path)),
     lnk('Переслать', () => pickChat('Кому переслать «' + it.name + '»?', c => fwdPath(c, it, m))),
     ...(m ? [lnk('К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); })] : []),
-    lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del'));
+    ...(it.root ? [] : [lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del')]));
   r.append(ic, t, acts); r.onclick = e => { if (!e.target.closest('button')) open1(); };
   r.title = it.dir ? 'Открыть папку' : ['img', 'video', 'audio'].includes(k) ? 'Посмотреть' : 'Открыть';
   return r;
@@ -1846,25 +2363,6 @@ function preview(it, k) {
     const row = el('div', 'row'); row.append(btnEl('В проводнике', '', () => APP.files.show(it.path)), btnEl('Открыть', '', () => { openOnDisk(it); close(); }), btnEl('Закрыть', 'pri', close));
     card.append(el('h2', '', it.name), m, row);
   }, 'wide');
-}
-
-// --- отправленные: что я раздаю (большие файлы и папки) ---
-async function fillSent(bar, list) {
-  const ids = [...new Set([...Object.keys(S.src), ...srcMem.keys()])], ms = [];
-  for (const id of ids) { const m = await msgGet(id); if (m) ms.push(m); else { delete S.src[id]; srcMem.delete(id); } }
-  bar.append(el('p', 'fhint', 'Большие файлы и папки скачивают напрямую с этого ' + (DISK ? 'компьютера, пока Кинозал открыт' : 'устройства, пока открыта вкладка') + '. «Больше не раздавать» — их больше нельзя будет скачать (то, что уже скачали, останется у людей).'));
-  if (!ms.length) { list.append(emptyEl('📤', 'Ты пока ничего не раздаёшь', 'Отправь в чат файл больше 25 МБ или папку целиком — он появится здесь.')); return; }
-  for (const m of ms.sort((a, b) => b.ts - a.ts)) {
-    const p = S.src[m.id], extra = [];
-    if (DISK && p) extra.push(lnk('в проводнике', () => APP.files.show(p)));
-    extra.push(lnk('переслать', () => pickChat('Кому переслать «' + m.name + '»?', c => fwdSent(c, m))));
-    extra.push(lnk('больше не раздавать', () => {
-      if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
-      for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
-      delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
-    }, 'del'));
-    list.append(msgRow(m, extra));
-  }
 }
 
 // --- переслать: выбрать чат ---
