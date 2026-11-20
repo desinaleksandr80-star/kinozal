@@ -639,3 +639,13 @@ html.wall-all #mx>.mx-side{z-index:2}
 .kfont .big{font-size:44px;line-height:1.2}.kfont .mid{font-size:28px}.kfont .abc{font-size:20px;line-height:1.5;opacity:.9}
 .kfont .sz small{font:600 11px var(--font),sans-serif;opacity:.5;display:inline-block;width:46px}
 .kzdoc{background:#080b0c}
+/* PDF */
+.kvdoc.pdfmode{padding-top:0}
+.kpdfbar{position:sticky;top:0;z-index:2;display:flex;gap:8px;align-items:center;justify-content:center;padding:10px;background:linear-gradient(#080b0c 70%,transparent)}
+.kpdfbar .btn{min-height:36px!important;padding:6px 14px}
+.kpdfbar .cnt{color:#cfd6d4;font:700 13px var(--font),sans-serif;min-width:70px;text-align:center}
+.kpdf{display:grid;justify-items:center;gap:14px}
+.kpg{position:relative;max-width:100%;background:#fff;border-radius:4px;box-shadow:0 12px 40px rgba(0,0,0,.45);overflow:hidden}
+.kpg .pc{display:block;width:100%;height:100%}
+.kpg .pn{position:absolute;inset:0;display:grid;place-items:center;color:#bbb;font:700 28px var(--font),sans-serif}
+.kpg .pc{position:relative;z-index:1}

@@ -272,6 +272,47 @@ async function audioTags(src, name) {
   return id3(head) || flac(head);
 }
 
-const api = { decodeText, isBinary, highlight, csv, markdown, zipList, zipGet, memSrc, docx, xlsx, audioTags };
+// ---------- сторонние библиотеки (vendor/): грузим только когда понадобились ----------
+// pdf.js (Mozilla) — PDF; libheif — фото с iPhone (HEIC); UTIF + pako — TIFF целиком
+const once = {};
+const script = src => once[src] ||= new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => { delete once[src]; rej(new Error('не загрузилась библиотека ' + src)); }; document.head.append(s); });
+function pdfjs() {
+  return once.pdf ||= import('./vendor/pdfjs/pdf.min.mjs').then(m => { m.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.mjs', location.href).href; return m; })
+    .catch(e => { delete once.pdf; throw e; });
+}
+async function pdfOpen(u8) {
+  const lib = await pdfjs();
+  // isEvalSupported: false — шрифты в PDF не превращаются в исполняемый код (защита от вредных PDF)
+  return lib.getDocument({ data: u8, isEvalSupported: false, enableXfa: false }).promise;
+}
+async function pdfPage(doc, n, width) {
+  const page = await doc.getPage(n), v1 = page.getViewport({ scale: 1 }), scale = width / v1.width, vp = page.getViewport({ scale });
+  const cv = document.createElement('canvas'); cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+  await page.render({ canvasContext: cv.getContext('2d'), viewport: vp, canvas: cv }).promise; page.cleanup();
+  return cv;
+}
+async function heic(u8) {
+  await script('vendor/libheif/libheif-bundle.js');
+  const lib = await (once.heifMod ||= root.libheif());
+  const dec = new lib.HeifDecoder(), imgs = dec.decode(u8);
+  if (!imgs || !imgs.length) throw new Error('в файле HEIC нет картинки');
+  const im = imgs[0], w = im.get_width(), h = im.get_height(), cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const ctx = cv.getContext('2d'), id = ctx.createImageData(w, h);
+  await new Promise((res, rej) => im.display(id, d => d ? res() : rej(new Error('HEIC не раскодировался'))));
+  ctx.putImageData(id, 0, 0); for (const x of imgs) try { x.free(); } catch (e) {}
+  return cv;
+}
+async function tiff(u8) {
+  await script('vendor/utif/pako_inflate.min.js'); await script('vendor/utif/UTIF.js');
+  const buf = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength), ifds = root.UTIF.decode(buf);
+  const main = ifds.filter(x => x.t256 && x.t257).sort((a, b) => b.t256[0] * b.t257[0] - a.t256[0] * a.t257[0])[0];
+  if (!main) throw new Error('в TIFF нет картинки');
+  root.UTIF.decodeImage(buf, main, ifds);
+  const w = main.width, h = main.height, rgba = root.UTIF.toRGBA8(main), cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, w * h * 4), w, h), 0, 0);
+  return cv;
+}
+
+const api = { decodeText, isBinary, highlight, csv, markdown, zipList, zipGet, memSrc, docx, xlsx, audioTags, pdfOpen, pdfPage, heic, tiff };
 root.kzView = api;
 })(window);
