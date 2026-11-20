@@ -566,3 +566,37 @@ html.wall-all #mx>.mx-side{z-index:2}
 .kvstage.full img{max-width:none;max-height:none}
 .kvstage .fhint{color:#ddd}
 @media (max-width:760px){.kvtop{flex-wrap:wrap}.kvtop .acts{width:100%}.kvtop .acts .btn{flex:1}}
+/* библиотека файлов и маршруты */
+.fchips{display:flex;gap:6px;flex-wrap:wrap}
+.fchip{border:1px solid var(--line2);background:var(--btn);color:var(--ink);border-radius:999px;padding:5px 11px;font:700 12.5px var(--font),sans-serif;cursor:pointer;white-space:nowrap}
+.fchip:hover{border-color:color-mix(in srgb,var(--acc) 50%,var(--line2))}
+.fchip.on{background:var(--acc);border-color:transparent;color:#fff}
+.fchips.sm .fchip{padding:3px 9px;font-size:12px}
+.fview{min-height:38px!important;padding:6px 12px}
+.frow.file.lib .t .ex{display:block;font-size:12px;opacity:.85}
+.fst{display:inline-block;margin-top:3px;padding:1px 8px;border-radius:999px;font-size:11.5px!important;font-weight:700;background:rgba(127,127,127,.16)}
+.fst.disk{color:#5fd4a4;background:rgba(95,212,164,.12)}.fst.chat{color:#8fb7ff;background:rgba(143,183,255,.12)}
+.fst.dl{color:#ffcf6b;background:rgba(255,207,107,.12)}.fst.remote,.fst.gone{opacity:.8}
+.fic small{position:absolute;bottom:3px;font:800 8.5px var(--font),sans-serif;opacity:.8}
+.fic{position:relative}
+.fgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.ftile{position:relative;border-radius:14px;background:var(--card);border:1px solid var(--line2);overflow:hidden;cursor:pointer;display:grid;grid-template-rows:auto auto}
+.ftile:hover{border-color:color-mix(in srgb,var(--acc) 45%,var(--line2))}
+.fpic{aspect-ratio:1;display:grid;place-items:center;font-size:40px;background:rgba(127,127,127,.12);position:relative;overflow:hidden}
+.fpic img{width:100%;height:100%;object-fit:cover}
+.fpic small{position:absolute;bottom:10px;font:800 11px var(--font),sans-serif;opacity:.75}
+.ftile .cap{padding:7px 9px;display:grid;gap:1px;min-width:0}
+.ftile .cap b{font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ftile .cap span{font-size:11px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fmorebtn{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:10px;background:rgba(0,0,0,.55);color:#fff;opacity:0;transition:opacity .15s}
+.ftile:hover .fmorebtn,.fmorebtn:focus{opacity:1}
+.fmore{justify-self:center;margin-top:6px}
+.frow.route{display:grid;gap:10px}
+.frow.route.off{opacity:.55}
+.rtop{display:flex;align-items:center;gap:10px}.rtop .grow{flex:1}
+.rtop input{width:18px;height:18px;accent-color:var(--acc)}
+.frow.route .arrow{color:var(--mute);font-weight:800}
+.fdest{min-height:38px!important;padding:6px 12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.frow.route .fhint{margin:0}
+@media (max-width:760px){.fgrid{grid-template-columns:repeat(auto-fill,minmax(110px,1fr))}.fmorebtn{opacity:1}}
+.fst{justify-self:start;width:fit-content;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

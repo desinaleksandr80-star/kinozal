@@ -674,6 +674,7 @@ async function onMsg(L, d) {
   await msgPut(m);
   if (!L.self) send(L, { t: 'ack', ids: [m.id] });
   arrived(m);
+  autoRoute(m);   // маршруты: сохранить на диск или начать качать, если так настроено
   // пересылка между моими устройствами: чужое — моим другим устройствам (вдруг они не на связи с автором),
   // моё с другого устройства — собеседникам, что на связи здесь (например, старому Кинозалу, который не пускает дополнительные устройства)
   if (!L.self) { if (hasDevs()) push(myId, m); }
@@ -1220,7 +1221,7 @@ async function saveSmall(m) {
     if (d?.path && await APP.files.exists(d.path)) { APP.files.show(d.path); return; }
     if (!riskOk(m)) return;
     const b = await blobGet(m.id); if (!b) return;
-    try { const p = await APP.files.save(m.name, new Uint8Array(await b.arrayBuffer())); S.dl[m.id] = { st: 'done', got: m.size, path: p }; save(); APP.files.show(p); toast('«' + m.name + '» сохранён в «Загрузки → Кинозал → Полученные»'); }
+    try { const p = await saveToRoute(m); APP.files.show(p); toast('«' + m.name + '» сохранён — ' + routeLabel(m)); }
     catch (er) { toast('Не получилось сохранить: ' + errText(er)); }
     return;
   }
@@ -1538,15 +1539,15 @@ async function xFinish(x) {
   dls.delete(m.id); clearInterval(x.dog); try { x.c?.close(); } catch (e) {}
   if (!d) return;
   try {
-    if (m.dir) d.path = await APP.files.dirDone(m.id, m.name);
-    else if (DISK) d.path = await APP.files.done(m.id, m.name);
+    if (m.dir) d.path = await APP.files.dirDone(m.id, m.name, routeTarget(m));
+    else if (DISK) d.path = await APP.files.done(m.id, m.name, routeTarget(m));
     else {
       const parts = []; for (let i = 0; i * BLK < m.size; i++) { const p = await blobGet(m.id + ':' + i); if (!p) throw new Error('нет куска ' + i); parts.push(p); }
       await blobPut(m.id, new Blob(parts, { type: m.mime })); await tx('blobs', 'readwrite', s => s.delete(partsKey(m.id)));
     }
     d.st = 'done'; d.got = m.size; delete d.why; save(); xPaint(m.id);
     jlog('[файлы] скачан', m.name, fmtSize(m.size));
-    toast('«' + m.name + '» скачан' + (DISK ? ' — он в «Загрузки → Кинозал → Полученные»' : ''));
+    if (!d.auto) toast('«' + m.name + '» скачан' + (DISK ? ' — ' + routeLabel(m) : ''));
   } catch (e) { d.st = 'err'; d.why = 'не получилось сохранить: ' + (e?.message || e); save(); xPaint(m.id); }
 }
 // закачка остановилась: пауза, ждём отправителя (сама продолжится) или ошибка
@@ -1693,7 +1694,7 @@ function xPaint(id) {
 
 // ---------- раздел «Файлы»: передачи со всех чатов, полученное, отправленное ----------
 // Не проводник по всему диску: только то, что прошло через Кинозал, — с тем, кто прислал и из какого чата.
-let filesOpen = false, fTab = store.get('fTab', 'live'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
+let filesOpen = false, fTab = store.get('fTab', 'all'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
 const FICON = { img: '🖼', video: '🎬', audio: '🎵', arc: '🗜', doc: '📄', exe: '⚙️', dir: '📁', raw: '📷' };
 const fKind = n => isRawName(n) ? 'raw' : /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(n) ? 'img' : /\.(mp4|webm|mkv|mov|m4v|avi)$/i.test(n) ? 'video' : /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n) ? 'audio' : /\.(zip|rar|7z|tar|gz|jar|mrpack)$/i.test(n) ? 'arc' : RISKY.test(n) ? 'exe' : 'doc';
 const fileUrl = p => 'file:///' + String(p).replace(/\\/g, '/').split('/').map((s, i) => i === 0 && /^[A-Za-z]:$/.test(s) ? s : encodeURIComponent(s)).join('/');
@@ -1710,9 +1711,10 @@ const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).s
 function openFiles(tab) {
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
-  if (!DISK && fTab === 'recv') fTab = 'live';
+  if (!DISK && (fTab === 'recv' || fTab === 'routes')) fTab = 'all';
+  if (!['all', 'live', 'recv', 'routes'].includes(fTab)) fTab = 'all';
   root.classList.add('chat-open'); renderList(); renderFiles();
-  APP?.files?.watch?.(() => { if (filesOpen && fTab === 'recv') renderFiles(); });
+  APP?.files?.watch?.(() => { if (filesOpen && (fTab === 'recv' || fTab === 'all')) renderFiles(); });
 }
 function closeFiles() { filesOpen = false; showEmpty(); }
 // строка с карточкой сообщения (она сама обновляет прогресс) и подписью: кто, где, когда
@@ -1731,20 +1733,262 @@ async function renderFiles() {
   const sec = el('section', 'mx-files'), head = el('header', 'mx-chead'), tabs = el('div', 'ftabs'), bar = el('div', 'fbar'), list = el('div', 'flist');
   const back = el('button', 'ib back'); back.innerHTML = IC.back; back.title = 'К чатам'; back.onclick = closeFiles;
   const n = liveCount();
-  for (const [k, t] of [['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Полученные']] : []), ['sent', 'Отправленные']]) {
+  for (const [k, t] of [['all', 'Все файлы'], ['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Папки'], ['routes', 'Маршруты']] : [])]) {
     const b = el('button', 'ftab' + (fTab === k ? ' on' : ''), t); b.onclick = () => { fTab = k; store.set('fTab', k); fPath = ''; fQ = ''; renderFiles(); }; tabs.append(b);
   }
   head.append(back, el('h2', '', 'Файлы'), tabs);
   sec.append(head, bar, list);
   if (fTab === 'live') await fillLive(bar, list);
   else if (fTab === 'recv') await fillRecv(bar, list, gen);
-  else await fillSent(bar, list);
+  else if (fTab === 'routes') await fillRoutes(bar, list);
+  else await fillAll(bar, list, gen);
   if (gen !== fGen || !filesOpen) return;
-  const keep = $('.mx-files .flist')?.scrollTop || 0, hadFocus = document.activeElement?.classList.contains('fq');
+  const keep = fKeepTop ? 0 : $('.mx-files .flist')?.scrollTop || 0, hadFocus = document.activeElement?.classList.contains('fq'); fKeepTop = false;
   main.textContent = ''; main.append(sec); list.scrollTop = keep;
   if (hadFocus) { const q = $('.fq', sec); q?.focus(); q?.setSelectionRange(q.value.length, q.value.length); }
 }
+let fKeepTop = false;
 function emptyEl(icon, t, s) { const e = el('div', 'fempty'); e.append(el('div', 'big', icon), el('b', '', t), el('span', '', s)); return e; }
+
+// --- типы файлов ---
+const FTYPES = [['photo', 'Фото', '🖼'], ['raw', 'RAW', '📷'], ['video', 'Видео', '🎬'], ['audio', 'Звук', '🎵'], ['pdf', 'PDF', '📕'], ['doc', 'Документы', '📄'], ['sheet', 'Таблицы', '📊'], ['text', 'Текст и код', '📝'], ['arc', 'Архивы', '🗜'], ['dir', 'Папки', '📁'], ['font', 'Шрифты', '🔤'], ['exe', 'Программы', '⚙️'], ['other', 'Другое', '📦']];
+const FT = Object.fromEntries(FTYPES.map(([k, t, i]) => [k, { t, i }]));
+function typeOfName(n) {
+  n = String(n || '').toLowerCase();
+  if (isRawName(n) && !/\.tiff?$/.test(n)) return 'raw';
+  if (/\.(png|jpe?g|webp|gif|avif|bmp|heic|heif|tiff?|svg|ico)$/.test(n)) return 'photo';
+  if (/\.(mp4|webm|mkv|mov|m4v|avi|wmv|flv|3gp|ts)$/.test(n)) return 'video';
+  if (/\.(mp3|ogg|opus|wav|flac|m4a|aac|wma|aiff?)$/.test(n)) return 'audio';
+  if (/\.pdf$/.test(n)) return 'pdf';
+  if (/\.(docx?|odt|rtf|pptx?|odp|epub|djvu)$/.test(n)) return 'doc';
+  if (/\.(xlsx?|ods|csv|tsv)$/.test(n)) return 'sheet';
+  if (/\.(txt|md|markdown|json|jsonc|log|ini|cfg|conf|toml|ya?ml|xml|html?|css|js|mjs|cjs|ts|tsx|jsx|py|java|kt|c|h|cpp|hpp|cs|go|rs|rb|php|sh|bat|cmd|ps1|sql|lua|properties|srt|vtt|nfo|mcmeta)$/.test(n)) return 'text';
+  if (/\.(zip|rar|7z|tar|gz|tgz|bz2|xz|jar|mrpack|apk)$/.test(n)) return 'arc';
+  if (/\.(ttf|otf|woff2?)$/.test(n)) return 'font';
+  if (RISKY.test(n)) return 'exe';
+  return 'other';
+}
+const ftype = m => m.kind === 'img' ? 'photo' : m.dir ? 'dir' : typeOfName(m.name);
+const fileNameOf = m => m.kind === 'img' ? 'Фото ' + new Date(m.ts).toISOString().slice(0, 19).replace('T', ' ').replace(/:/g, '-') + '.' + (m.mime === 'image/jpeg' ? 'jpg' : String(m.mime || 'image/webp').split('/')[1]) : m.name;
+const whoName = m => m.from === myId ? 'Я' : nameOf(m.from);
+
+// --- маршруты: куда класть полученное ---
+// Правила проверяются сверху вниз, первое подходящее решает: тип файла и от кого → папка и подпапки.
+// Если ни одно не подошло — «Полученные». Маленькие файлы сохраняются сразу, большие качаются сами до заданного размера.
+S.routing ||= { auto: true, bigMax: 2048, sub: 'none', rules: [] };
+const SUBS = { none: 'без подпапок', person: 'по человеку', month: 'по месяцу', 'person-month': 'по человеку, внутри по месяцам', type: 'по типу файла' };
+function routeOf(m) { const t = ftype(m); return S.routing.rules.find(r => r.on !== false && (!r.types?.length || r.types.includes(t)) && (!r.who || r.who === m.from || r.who === m.chat)) || null; }
+function routeTarget(m) {
+  const r = routeOf(m), d = new Date(m.ts), mon = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+  const sub = { none: [], person: [whoName(m)], month: [mon], 'person-month': [whoName(m), mon], type: [FT[ftype(m)].t] }[r ? r.sub : S.routing.sub] || [];
+  return { root: r?.dest || '', sub };
+}
+const rootName = p => p ? String(p).split(/[\\/]/).filter(Boolean).pop() || p : 'Полученные';
+function routeLabel(m) { const t = routeTarget(m); return 'он в «' + [rootName(t.root), ...t.sub].join(' → ') + '»'; }
+async function saveToRoute(m, auto) {
+  const b = await blobGet(m.id); if (!b) throw new Error('файла нет в переписке');
+  const p = await APP.files.save(fileNameOf(m), new Uint8Array(await b.arrayBuffer()), routeTarget(m));
+  S.dl[m.id] = { st: 'done', got: m.size || b.size, path: p, ...(auto ? { auto: 1 } : {}) }; save(); return p;
+}
+// пришёл файл — разложить по маршруту (old — «разложить уже полученное» из настроек)
+async function autoRoute(m, old) {
+  if (!DISK || (!S.routing.auto && !old) || m.from === myId || !['file', 'img'].includes(m.kind)) return false;
+  if (!old && Date.now() - m.ts > 3 * 864e5) return false;               // старое, пришедшее досинхронизацией, само не раскладываем
+  if (m.open > Date.now() || RISKY.test(m.name || '') || S.dl[m.id]) return false;   // капсулы и программы — только вручную
+  try {
+    if (m.big) { if (old || m.size > S.routing.bigMax * MB) return false; S.dl[m.id] = { st: 'wait', got: 0, auto: 1 }; save(); xStart(m); return true; }
+    await saveToRoute(m, true); if (filesOpen && fTab === 'all') renderFiles(); return true;
+  } catch (e) { jlog('[маршруты] не сохранил', m.name || m.id, errText(e)); return false; }
+}
+
+// --- библиотека: все файлы из всех чатов, любого размера ---
+const fl = { type: store.get('flType', 'all'), who: '', sort: store.get('flSort', 'date'), group: store.get('flGroup', 'none'), view: store.get('flView', 'list'), q: '', shown: 150 };
+function allFileMsgs() {
+  return new Promise((res, rej) => {
+    const out = [], r = db.transaction('msgs').objectStore('msgs').openCursor();
+    r.onsuccess = () => { const c = r.result; if (!c) return res(out); const m = c.value; if ((m.kind === 'file' || m.kind === 'img') && !(m.open > Date.now() && m.from !== myId)) out.push(m); c.continue(); };
+    r.onerror = () => rej(r.error);
+  });
+}
+function fileState(m) {
+  const d = S.dl[m.id], mine = isMineSrc(m);
+  if (mine && S.src[m.id]) return { k: 'disk', path: S.src[m.id], t: 'отправлено отсюда' };
+  if (d?.st === 'done' && d.path) return { k: 'disk', path: d.path, t: 'на диске' };
+  if (d?.st === 'done') return { k: 'here', t: 'скачано' };
+  if (m.blob) return { k: 'chat', t: 'в переписке' };
+  if (d && ['go', 'wait', 'pause'].includes(d.st)) return { k: 'dl', t: d.st === 'go' ? 'качается ' + Math.floor((d.got || 0) / m.size * 100) + '%' : d.st === 'pause' ? 'на паузе' : 'ждёт отправителя' };
+  if (mine) return { k: 'gone', t: 'отправлено с другого устройства' };
+  return { k: 'remote', t: m.big ? 'не скачано' : '' };
+}
+const fMonth = ts => new Date(ts).toLocaleDateString('ru', { month: 'long', year: 'numeric' });
+function fActions(m) {
+  const st = fileState(m), a = [['Открыть', () => openAny(m)]];
+  if (st.path) a.push(['В проводнике', () => APP.files.show(st.path)]);
+  if (st.k === 'chat') a.push([DISK ? 'Сохранить — ' + rootName(routeTarget(m).root) : 'Сохранить', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); APP.files.show(p); renderFiles(); } catch (e) { toast('Не получилось: ' + errText(e)); } }]);
+  if (m.big && !isMineSrc(m) && st.k !== 'disk' && st.k !== 'here') a.push([S.dl[m.id]?.st === 'go' ? 'Пауза' : 'Скачать', () => { xClick(m); setTimeout(renderFiles, 300); }]);
+  a.push(['Переслать', () => pickChat('Кому переслать «' + fileNameOf(m) + '»?', c => fwdMsg(c, m))]);
+  a.push(['К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); }]);
+  if (isMineSrc(m) && (S.src[m.id] || srcMem.has(m.id))) a.push(['Больше не раздавать', () => {
+    if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
+    for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
+    delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
+  }]);
+  return a;
+}
+// переслать из библиотеки: из переписки — прямо в сообщении, с диска — как файл или папку, своё большое — напрямую
+async function fwdMsg(c, m) {
+  const st = fileState(m), meta = { th: m.th, w: m.w, h: m.h, ex: m.ex, dur: m.dur };
+  try {
+    if (m.kind === 'img') { const b = await blobGet(m.id); if (!b) throw new Error('фото нет в переписке'); await post(c, { kind: 'img', w: m.w, h: m.h }, b); }
+    else if (m.blob) { const b = await blobGet(m.id); if (!b) throw new Error('файла нет в переписке'); await post(c, { kind: 'file', name: m.name, size: m.size, mime: m.mime, ...meta }, b); }
+    else if (isMineSrc(m)) return fwdSent(c, m);
+    else if (st.path) return fwdPath(c, { path: st.path, name: m.name, size: m.size, dir: !!m.dir }, m);
+    else { toast('Сначала скачай файл — пересылать его будешь со своего компьютера'); return; }
+    toast('Отправлено в «' + chatTitle(c) + '»');
+  } catch (e) { toast('Не получилось переслать: ' + errText(e)); }
+}
+// открыть чем умеем: картинки, RAW, видео — просмотр; документы, звук, архивы — свои просмотрщики; иначе — программой Windows
+async function openAny(m) {
+  const t = ftype(m), st = fileState(m);
+  if (m.kind === 'img') return photo(m);
+  if (m.dir) { if (st.path) { fTab = 'recv'; store.set('fTab', 'recv'); fPath = st.path; fQ = ''; renderFiles(); } else xClick(m); return; }
+  if (viewable(m) || t === 'raw' || t === 'video' || /\.tiff?$/i.test(m.name || '')) return openOriginal(m);
+  if (typeof openDoc === 'function' && ['audio', 'pdf', 'doc', 'sheet', 'text', 'arc', 'font', 'photo'].includes(t)) return openDoc(m);
+  if (st.path) return openOnDisk({ name: m.name, path: st.path });
+  if (m.blob) return saveSmall(m);
+  xClick(m);
+}
+function thumbEl(m, cls) {
+  const t = ftype(m), box = el('span', cls + ' ' + t);
+  const img = src => { const i = el('img'); i.loading = 'lazy'; i.alt = ''; i.src = src; box.textContent = ''; box.append(i); };
+  if (m.th) img(m.th);
+  else if (m.kind === 'img' || (m.blob && viewable(m))) { box.textContent = FT[t].i; mediaUrl(m).then(u => u && img(u)); }
+  else { const ext = (String(m.name || '').match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase(); box.textContent = FT[t].i; if (ext && !['photo', 'dir'].includes(t)) box.append(el('small', '', ext)); }
+  return box;
+}
+async function fillAll(bar, list, gen) {
+  const ms = await allFileMsgs(); if (gen !== fGen) return;
+  const Q = fl.q.trim().toLowerCase();
+  const base = ms.filter(m => (!fl.who || (fl.who === 'me' ? m.from === myId : m.from === fl.who)) && (!Q || [fileNameOf(m), whoName(m), chatTitle(m.chat), m.ex || ''].join(' ').toLowerCase().includes(Q)));
+  const cnt = {}; for (const m of base) cnt[ftype(m)] = (cnt[ftype(m)] || 0) + 1;
+  // строка фильтров: поиск, кто, сортировка, группировка, вид
+  const q = el('input', 'fq'); q.type = 'search'; q.placeholder = 'Поиск: имя файла, человек, чат, камера…'; q.value = fl.q;
+  q.oninput = () => { fl.q = q.value; fl.shown = 150; clearTimeout(q.t); q.t = setTimeout(renderFiles, 200); };
+  const sel = (opts, val, set) => { const s = el('select', 'fsort'); for (const [v, t] of opts) { const o = el('option', '', t); o.value = v; o.selected = v === val; s.append(o); } s.onchange = () => { set(s.value); fl.shown = 150; fKeepTop = true; renderFiles(); }; return s; };
+  const people = [...new Set(ms.filter(m => m.from !== myId).map(m => m.from))].map(u => [u, nameOf(u)]).sort((a, b) => a[1].localeCompare(b[1], 'ru'));
+  const viewBtn = el('button', 'btn fview', fl.view === 'grid' ? '☰ Список' : '▦ Плитка'); viewBtn.onclick = () => { fl.view = fl.view === 'grid' ? 'list' : 'grid'; store.set('flView', fl.view); renderFiles(); };
+  const row = el('div', 'frowbar');
+  row.append(q,
+    sel([['', 'Все люди'], ['me', 'Только мои'], ...people], fl.who, v => { fl.who = v; }),
+    sel([['date', 'Сначала новые'], ['old', 'Сначала старые'], ['name', 'По имени'], ['size', 'Сначала большие'], ['type', 'По типу']], fl.sort, v => { fl.sort = v; store.set('flSort', v); }),
+    sel([['none', 'Без групп'], ['type', 'Группы: тип'], ['person', 'Группы: человек'], ['chat', 'Группы: чат'], ['month', 'Группы: месяц']], fl.group, v => { fl.group = v; store.set('flGroup', v); }),
+    viewBtn);
+  const chips = el('div', 'fchips');
+  const chip = (k, t) => { const b = el('button', 'fchip' + (fl.type === k ? ' on' : ''), t); b.onclick = () => { fl.type = k; store.set('flType', k); fl.shown = 150; fKeepTop = true; renderFiles(); }; chips.append(b); };
+  chip('all', 'Все · ' + base.length);
+  for (const [k, t, i] of FTYPES) if (cnt[k] || fl.type === k) chip(k, i + ' ' + t + ' · ' + (cnt[k] || 0));
+  bar.append(row, chips);
+  let items = fl.type === 'all' ? base : base.filter(m => ftype(m) === fl.type);
+  const size = m => m.size || 0, nm = m => fileNameOf(m).toLowerCase();
+  const cmp = { date: (a, b) => b.ts - a.ts, old: (a, b) => a.ts - b.ts, name: (a, b) => nm(a).localeCompare(nm(b), 'ru', { numeric: true }), size: (a, b) => size(b) - size(a), type: (a, b) => FTYPES.findIndex(x => x[0] === ftype(a)) - FTYPES.findIndex(x => x[0] === ftype(b)) || b.ts - a.ts }[fl.sort] || ((a, b) => b.ts - a.ts);
+  items.sort(cmp);
+  const total = items.reduce((s, m) => s + size(m), 0), onDisk = items.filter(m => fileState(m).k === 'disk').length;
+  bar.append(el('p', 'fhint', items.length ? plural(items.length, 'файл', 'файла', 'файлов').replace(/^/, items.length + ' ') + ' · ' + fmtSize(total) + (DISK ? ' · на диске ' + onDisk : '') + (DISK && S.routing.auto ? ' · новые раскладываются по маршрутам сами' : '') : ''));
+  if (!items.length) { list.append(Q || fl.who || fl.type !== 'all' ? emptyEl('🔍', 'Ничего не нашлось', 'Попробуй убрать фильтры или поискать по-другому.') : emptyEl('🗂', 'Файлов пока нет', 'Здесь будут все файлы и фото из всех чатов — и твои, и присланные, любого размера.')); return; }
+  // группы
+  const key = { type: m => FT[ftype(m)].i + ' ' + FT[ftype(m)].t, person: m => whoName(m), chat: m => chatTitle(m.chat), month: m => fMonth(m.ts) }[fl.group];
+  const groups = new Map(); for (const m of items.slice(0, fl.shown)) { const k = key ? key(m) : ''; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(m); }
+  for (const [k, gm] of groups) {
+    if (k) list.append(el('h3', '', k + ' · ' + gm.length));
+    const box = fl.view === 'grid' ? el('div', 'fgrid') : list;
+    for (const m of gm) box.append(fl.view === 'grid' ? libTile(m) : libRow(m));
+    if (box !== list) list.append(box);
+  }
+  if (items.length > fl.shown) { const more = el('button', 'btn fmore', 'Показать ещё ' + Math.min(300, items.length - fl.shown) + ' из ' + (items.length - fl.shown)); more.onclick = () => { fl.shown += 300; renderFiles(); }; list.append(more); }
+}
+function libRow(m) {
+  const r = el('div', 'frow file lib'), st = fileState(m), t = el('div', 't'), acts = el('div', 'facts');
+  t.append(el('b', '', fileNameOf(m)));
+  const info = [FT[ftype(m)].t, m.size ? fmtSize(m.size) : '', m.dir ? nFiles(m.n || 0) : '', (m.from === myId ? 'ты → ' + chatTitle(m.chat) : nameOf(m.from) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat))), fDate(m.ts)].filter(Boolean);
+  t.append(el('span', '', info.join(' · ')));
+  if (m.ex) t.append(el('span', 'ex', m.ex));
+  if (st.t) { const s = el('span', 'fst ' + st.k, st.t + (st.path && st.k === 'disk' ? ' · ' + st.path.split(/[\\/]/).slice(-3, -1).join('\\') : '')); s.title = st.path || ''; t.append(s); }
+  for (const [txt, f] of fActions(m).slice(1)) acts.append(lnk(txt, f));
+  r.append(thumbEl(m, 'fic'), t, acts);
+  r.onclick = e => { if (!e.target.closest('button')) openAny(m); };
+  return r;
+}
+function libTile(m) {
+  const r = el('div', 'ftile'), st = fileState(m), more = el('button', 'ib fmorebtn', '⋯');
+  more.title = 'Действия'; more.onclick = e => {
+    e.stopPropagation(); closeMenus(); menuAt = Date.now();
+    const mn = el('div', 'menu mx-pop'), rc = more.getBoundingClientRect();
+    Object.assign(mn.style, { position: 'fixed', left: Math.min(innerWidth - 240, rc.left) + 'px', top: Math.min(innerHeight - 280, rc.bottom + 4) + 'px', width: '230px', zIndex: 50 });
+    for (const [txt, f] of fActions(m)) { const b = el('button', '', txt); b.onclick = () => { closeMenus(); f(); }; mn.append(b); }
+    document.body.append(mn); mn.addEventListener('click', ev => ev.stopPropagation());
+  };
+  const cap = el('div', 'cap'); cap.append(el('b', '', fileNameOf(m)), el('span', '', [m.size ? fmtSize(m.size) : '', whoName(m), st.k === 'remote' && m.big ? '☁ не скачано' : ''].filter(Boolean).join(' · ')));
+  r.append(thumbEl(m, 'fpic'), cap, more); r.title = fileNameOf(m);
+  r.onclick = () => openAny(m);
+  return r;
+}
+
+// --- настройка маршрутов ---
+function fillRoutes(bar, list) {
+  const R = S.routing, ch = () => { save(); renderFiles(); };
+  const auto = el('label', 'switch'), ac = el('input'); ac.type = 'checkbox'; ac.checked = R.auto;
+  auto.append(document.createTextNode('Сохранять полученное само, по маршрутам'), ac); ac.onchange = () => { R.auto = ac.checked; ch(); };
+  const big = el('select', 'fsort');
+  for (const [v, t] of [[0, 'большие — только по кнопке'], [500, 'большие — сами до 500 МБ'], [2048, 'большие — сами до 2 ГБ'], [10240, 'большие — сами до 10 ГБ'], [1e6, 'большие — сами, любого размера']]) { const o = el('option', '', t); o.value = v; o.selected = +R.bigMax === v; big.append(o); }
+  big.onchange = () => { R.bigMax = +big.value; ch(); }; big.disabled = !R.auto;
+  const row = el('div', 'frowbar'); row.append(auto, big);
+  bar.append(row, el('p', 'fhint', 'Правила проверяются сверху вниз — решает первое подходящее. Программы (.exe и подобные) и капсулы времени сами не сохраняются. Удобно: RAW — в папку для фото, документы — по людям, всё остальное — в «Полученные».'));
+  // быстрые заготовки
+  const presets = el('div', 'fchips');
+  const preset = (t, rule) => { const b = el('button', 'fchip', '+ ' + t); b.onclick = async () => { const dest = await APP.files.pickRoot(); if (!dest) return; R.rules.push({ id: uid(), on: true, dest, ...rule }); ch(); }; presets.append(b); };
+  preset('RAW — в свою папку', { types: ['raw'], who: '', sub: 'month' });
+  preset('Фото и видео по месяцам', { types: ['photo', 'video'], who: '', sub: 'month' });
+  preset('Документы по людям', { types: ['pdf', 'doc', 'sheet', 'text'], who: '', sub: 'person' });
+  preset('Сборки и архивы', { types: ['arc', 'dir'], who: '', sub: 'person' });
+  const addBtn = el('button', 'fchip', '+ Свой маршрут'); addBtn.onclick = () => { R.rules.push({ id: uid(), on: true, types: [], who: '', dest: '', sub: 'person' }); ch(); }; presets.append(addBtn);
+  bar.append(presets);
+  // сами правила
+  const whoOpts = [['', 'от кого угодно'], ...Object.values(S.contacts).filter(c => c.state !== 'blocked' && c.id !== myId).map(c => [c.id, 'от ' + nameOf(c.id)]), ...Object.values(S.groups).filter(g => !g.gone).map(g => [g.id, 'в группе «' + g.name + '»'])];
+  R.rules.forEach((r, i) => {
+    const c = el('div', 'frow route' + (r.on === false ? ' off' : '')), top = el('div', 'rtop');
+    const on = el('input'); on.type = 'checkbox'; on.checked = r.on !== false; on.title = 'Включён'; on.onchange = () => { r.on = on.checked; ch(); };
+    top.append(on, el('b', '', (i + 1) + '. ' + (r.types?.length ? r.types.map(t => FT[t].t).join(', ') : 'Любые файлы')));
+    const mv = (d, t) => lnk(t, () => { const j = i + d; if (j < 0 || j >= R.rules.length) return; [R.rules[i], R.rules[j]] = [R.rules[j], R.rules[i]]; ch(); });
+    top.append(el('span', 'grow'), mv(-1, '↑'), mv(1, '↓'), lnk('🗑', () => { R.rules.splice(i, 1); ch(); }, 'del'));
+    const types = el('div', 'fchips sm');
+    for (const [k, t, ic] of FTYPES) { const b = el('button', 'fchip' + (r.types?.includes(k) ? ' on' : ''), ic + ' ' + t); b.onclick = () => { r.types = r.types?.includes(k) ? r.types.filter(x => x !== k) : [...(r.types || []), k]; ch(); }; types.append(b); }
+    const who = el('select', 'fsort'); for (const [v, t] of whoOpts) { const o = el('option', '', t); o.value = v; o.selected = (r.who || '') === v; who.append(o); } who.onchange = () => { r.who = who.value; ch(); };
+    const sub = el('select', 'fsort'); for (const [v, t] of Object.entries(SUBS)) { const o = el('option', '', 'подпапки: ' + t); o.value = v; o.selected = r.sub === v; sub.append(o); } sub.onchange = () => { r.sub = sub.value; ch(); };
+    const dest = el('button', 'btn fdest', '📂 ' + (r.dest ? rootName(r.dest) : 'Полученные')); dest.title = r.dest || 'Загрузки → Кинозал → Полученные';
+    dest.onclick = async () => { const p = await APP.files.pickRoot(); if (p) { r.dest = p; ch(); } };
+    const line = el('div', 'frowbar'); line.append(who, el('span', 'arrow', '→'), dest, sub);
+    const ex = { ts: Date.now(), from: r.who && S.contacts[r.who] ? r.who : (Object.keys(S.contacts)[0] || myId), chat: '', kind: 'file', name: 'пример' };
+    const segs = { none: [], person: [whoName(ex)], month: [new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0')], 'person-month': [whoName(ex), new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0')], type: [r.types?.[0] ? FT[r.types[0]].t : 'Фото'] }[r.sub] || [];
+    c.append(top, types, line, el('p', 'fhint', 'Например: ' + [r.dest || 'Загрузки\\Кинозал\\Полученные', ...segs].join('\\')));
+    list.append(c);
+  });
+  // всё остальное
+  const fb = el('div', 'frow route'), fsub = el('select', 'fsort');
+  for (const [v, t] of Object.entries(SUBS)) { const o = el('option', '', 'подпапки: ' + t); o.value = v; o.selected = R.sub === v; fsub.append(o); }
+  fsub.onchange = () => { R.sub = fsub.value; ch(); };
+  const fl2 = el('div', 'frowbar'); fl2.append(el('b', '', R.rules.length ? 'Всё остальное' : 'Все файлы'), el('span', 'arrow', '→'), lnk('📂 Полученные', () => APP.files.dir()), fsub);
+  fb.append(fl2); list.append(fb);
+  // применить к тому, что уже пришло
+  const again = el('button', 'btn', 'Разложить уже полученное по маршрутам');
+  again.onclick = async () => {
+    const ms = (await allFileMsgs()).filter(m => m.from !== myId && m.blob && !S.dl[m.id] && !RISKY.test(m.name || ''));
+    if (!ms.length) { toast('Всё, что пришло в переписке, уже на диске'); return; }
+    if (!confirm('Сохранить на диск ' + ms.length + ' ' + plural(ms.length, 'файл', 'файла', 'файлов') + ' из переписки, по маршрутам? Большие файлы, которые ещё не скачаны, останутся как есть.')) return;
+    let n = 0; for (const m of ms) if (await autoRoute(m, true)) n++;
+    toast('Сохранено: ' + n); renderFiles();
+  };
+  list.append(again);
+}
 
 // --- передачи ---
 async function fillLive(bar, list) {
@@ -1781,20 +2025,24 @@ async function fillRecv(bar, list, gen) {
   sort.onchange = () => { fSort = sort.value; store.set('fSort', fSort); renderFiles(); };
   const row = el('div', 'frowbar'); row.append(q, sort, lnk('📂 в проводнике', () => fPath ? APP.files.show(fPath) : APP.files.dir()));
   bar.append(row);
-  let r, items;
+  let r, items, rootsList = null;
   try {
+    const roots = await APP.files.roots();
     if (fQ.trim()) { items = await APP.files.search(fQ.trim()); r = null; }
-    else { r = await APP.files.list(fPath); items = r.items; }
+    else if (!fPath && roots.length > 1) {   // несколько папок маршрутов — сначала сами папки
+      rootsList = roots; items = [];
+      for (const x of roots) { const l = await APP.files.list(x.path).catch(() => null); items.push({ name: x.def ? 'Полученные (по умолчанию)' : x.path.split(/[\\/]/).filter(Boolean).pop() || x.path, path: x.path, dir: true, size: l ? l.items.reduce((a, b) => a + (b.size || 0), 0) : 0, count: l ? l.items.length : 0, mtime: 0, where: x.path, root: true }); }
+    } else { r = await APP.files.list(fPath); items = r.items; }
   } catch (e) { list.append(emptyEl('⚠️', 'Не получилось прочитать папку', errText(e))); return; }
   if (gen !== fGen) return;
-  // хлебные крошки: Полученные › папка › папка
+  // хлебные крошки: Папки › корень › папка › папка
   if (r) {
     const crumbs = el('div', 'fcrumbs'), rel = r.path.slice(r.root.length).split(/[\\/]/).filter(Boolean);
     const step = (t, p) => crumbs.append(lnk(t, () => { fPath = p; renderFiles(); }));
-    step('Полученные', ''); let acc = r.root;
+    step('Папки', ''); crumbs.append(el('span', '', '›')); step(r.root.split(/[\\/]/).filter(Boolean).pop() || r.root, r.root); let acc = r.root;
     for (const s of rel) { acc += '\\' + s; crumbs.append(el('span', '', '›')); step(s, acc); }
-    bar.append(crumbs); fPath = r.path === r.root ? '' : r.path;
-  } else bar.append(el('div', 'fcrumbs', 'Найдено: ' + items.length + (items.length >= 300 ? '+' : '')));
+    bar.append(crumbs);
+  } else bar.append(el('div', 'fcrumbs', rootsList ? 'Папки, куда маршруты складывают файлы' : 'Найдено: ' + items.length + (items.length >= 300 ? '+' : '')));
   const cmp = { date: (a, b) => b.mtime - a.mtime, name: (a, b) => a.name.localeCompare(b.name, 'ru', { numeric: true }), size: (a, b) => b.size - a.size }[fSort];
   items.sort((a, b) => (b.dir - a.dir) * (fSort === 'name' ? 1 : 0) || cmp(a, b));
   if (!items.length) {
@@ -1816,8 +2064,8 @@ function recvRow(it, m) {
   const r = el('div', 'frow file'), k = it.dir ? 'dir' : fKind(it.name);
   const ic = el('span', 'fic ' + k, FICON[k]), t = el('div', 't'), acts = el('div', 'facts');
   t.append(el('b', '', it.name));
-  const info = [it.dir ? (it.approx ? '≈ ' : '') + fmtSize(it.size) + ' · ' + it.count + ' ' + plural(it.count, 'объект', 'объекта', 'объектов') : fmtSize(it.size), fDate(it.mtime)];
-  if (it.where) info.push('в «' + (it.where || 'Полученные') + '»');
+  const info = [it.dir ? (it.approx ? '≈ ' : '') + fmtSize(it.size) + ' · ' + it.count + ' ' + plural(it.count, 'объект', 'объекта', 'объектов') : fmtSize(it.size), it.mtime ? fDate(it.mtime) : ''].filter(Boolean);
+  if (it.where) info.push(it.root ? it.where : 'в «' + it.where + '»');
   if (m) info.push('от ' + (m.from === myId ? 'тебя' : nameOf(m.from)) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat)));
   t.append(el('span', '', info.join(' · ')));
   if (k === 'img' || m?.th) { const th = el('img', 'fthumb'); th.loading = 'lazy'; th.src = m?.th || fileUrl(it.path); th.alt = ''; ic.textContent = ''; ic.append(th); }
@@ -1828,7 +2076,7 @@ function recvRow(it, m) {
     lnk('В проводнике', () => APP.files.show(it.path)),
     lnk('Переслать', () => pickChat('Кому переслать «' + it.name + '»?', c => fwdPath(c, it, m))),
     ...(m ? [lnk('К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); })] : []),
-    lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del'));
+    ...(it.root ? [] : [lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del')]));
   r.append(ic, t, acts); r.onclick = e => { if (!e.target.closest('button')) open1(); };
   r.title = it.dir ? 'Открыть папку' : ['img', 'video', 'audio'].includes(k) ? 'Посмотреть' : 'Открыть';
   return r;
@@ -1846,25 +2094,6 @@ function preview(it, k) {
     const row = el('div', 'row'); row.append(btnEl('В проводнике', '', () => APP.files.show(it.path)), btnEl('Открыть', '', () => { openOnDisk(it); close(); }), btnEl('Закрыть', 'pri', close));
     card.append(el('h2', '', it.name), m, row);
   }, 'wide');
-}
-
-// --- отправленные: что я раздаю (большие файлы и папки) ---
-async function fillSent(bar, list) {
-  const ids = [...new Set([...Object.keys(S.src), ...srcMem.keys()])], ms = [];
-  for (const id of ids) { const m = await msgGet(id); if (m) ms.push(m); else { delete S.src[id]; srcMem.delete(id); } }
-  bar.append(el('p', 'fhint', 'Большие файлы и папки скачивают напрямую с этого ' + (DISK ? 'компьютера, пока Кинозал открыт' : 'устройства, пока открыта вкладка') + '. «Больше не раздавать» — их больше нельзя будет скачать (то, что уже скачали, останется у людей).'));
-  if (!ms.length) { list.append(emptyEl('📤', 'Ты пока ничего не раздаёшь', 'Отправь в чат файл больше 25 МБ или папку целиком — он появится здесь.')); return; }
-  for (const m of ms.sort((a, b) => b.ts - a.ts)) {
-    const p = S.src[m.id], extra = [];
-    if (DISK && p) extra.push(lnk('в проводнике', () => APP.files.show(p)));
-    extra.push(lnk('переслать', () => pickChat('Кому переслать «' + m.name + '»?', c => fwdSent(c, m))));
-    extra.push(lnk('больше не раздавать', () => {
-      if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
-      for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
-      delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
-    }, 'del'));
-    list.append(msgRow(m, extra));
-  }
 }
 
 // --- переслать: выбрать чат ---
