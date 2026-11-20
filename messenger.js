@@ -1193,7 +1193,7 @@ function fileEl(m) {
   else if (DISK && viewable(m)) { const p = isMineSrc(m) ? S.src[m.id] : S.dl[m.id]?.st === 'done' ? S.dl[m.id].path : ''; if (p) { const full = new Image(); full.onload = () => { img.src = full.src; }; full.src = fileUrl(p); } }
   const raw = isRawName(m.name), vid = isVideoName(m.name) || /^video\//.test(m.mime || '');
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
-  md.append(img, el('span', 'fbadge', raw ? (/^TIFF?$/.test(ext) ? ext + ' · миниатюра' : 'RAW · ' + ext) : vid ? '▶ ' + (m.dur ? fmtDur(m.dur) : ext) : ext + ' · оригинал'));
+  md.append(img, el('span', 'fbadge', raw ? (/^TIFF?$/.test(ext) ? ext + ' · миниатюра' : 'RAW · ' + ext) : vid ? '▶ ' + (m.dur ? fmtDur(m.dur) : ext) : typeOfName(m.name) === 'audio' ? '♪ ' + ext : ext + ' · оригинал'));
   if (m.ex) md.append(el('span', 'fex', m.ex));
   md.title = 'Посмотреть в полный размер'; md.onclick = e => { e.preventDefault(); e.stopPropagation(); openOriginal(m); };
   box.append(md, card); return box;
@@ -1211,7 +1211,8 @@ function fileCard(m) {
     md.onclick = e => { e.preventDefault(); e.stopPropagation(); const soft = !xSoft(); setXMode(soft ? 'soft' : 'max'); toast(soft ? '🐢 Щадящий режим: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' (настраивается в профиле)' : '⚡ Максимальная скорость'); };
     xFill(w, m); w.onclick = e => { e.preventDefault(); xClick(m); }; return w; }
   w.title = 'Сохранить';
-  w.onclick = e => { e.preventDefault(); saveSmall(m); };
+  if (canView(m)) w.title = 'Посмотреть';
+  w.onclick = e => { e.preventDefault(); canView(m) ? openAny(m) : saveSmall(m); };
   return w;
 }
 // небольшой файл из переписки: в программе для Windows — в «Полученные» (его видно в разделе «Файлы»), в браузере — скачать
@@ -1259,6 +1260,13 @@ async function makeThumb(f) {
     }
     if (VIEW.test(f.type)) { const bm = await createImageBitmap(f); const out = { th: toDataUrl(oriented(bm, 1, 480)), w: bm.width, h: bm.height }; bm.close?.(); return out; }
     if (/^video\//.test(f.type) || isVideoName(f.name)) return await videoThumb(f);
+    if (/\.(mp3|flac|m4a|aac)$/i.test(f.name) && window.kzView) {   // музыка: обложка и «исполнитель — название»
+      const src = { size: f.size, read: async (o, n) => new Uint8Array(await f.slice(o, o + n).arrayBuffer()) };
+      const t = await kzView.audioTags(src, f.name); if (!t) return null;
+      const out = { ex: [t.artist, t.title].filter(Boolean).join(' — ') + (t.album ? ' · ' + t.album : '') + (t.year ? ' · ' + t.year : '') };
+      if (t.cover) { const bm = await createImageBitmap(t.cover).catch(() => null); if (bm) { Object.assign(out, { th: toDataUrl(oriented(bm, 1, 480)), w: bm.width, h: bm.height }); bm.close?.(); } }
+      return out;
+    }
   } catch (e) { jlog('[файлы] превью не вышло', f.name, e?.message || e); }
   return null;
 }
@@ -1294,6 +1302,144 @@ function askImages(c, files) {
   });
 }
 // просмотр в полный размер: оригинал картинки, встроенная картинка RAW (с поворотом), видео
+// ---------- просмотр документов, таблиц, архивов, музыки и шрифтов (разбор форматов — в viewers.js) ----------
+const ZIPLIKE = /\.(zip|jar|mrpack|apk|epub|docx|xlsx|pptx|odt|ods)$/i;
+function canViewName(n) {
+  if (!window.kzView) return false;
+  const t = typeOfName(n);
+  return ['text', 'font'].includes(t) || (t === 'audio' && /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n)) || /\.(docx|xlsx|csv|tsv|zip|jar|mrpack|apk)$/i.test(n);
+}
+const canView = m => m.kind === 'file' && !m.dir && canViewName(m.name);
+// откуда брать байты: свой отправленный файл, переписка (или собранное в браузере), диск
+const diskSource = async p => { const size = await APP.files.size(p); return size < 0 ? null : { size, path: p, read: async (o, n) => { const b = await APP.files.slice(p, o, Math.min(n, size - o)); return b instanceof Uint8Array ? b : new Uint8Array(b); } }; };
+const blobSource = b => ({ size: b.size, blob: b, read: async (o, n) => new Uint8Array(await b.slice(o, o + n).arrayBuffer()) });
+async function fileSource(m) {
+  const f = isMineSrc(m) ? srcMem.get(m.id) : null; if (f) return blobSource(f);
+  if (m.blob || (!DISK && S.dl[m.id]?.st === 'done')) { const b = await blobGet(m.id); if (b) return blobSource(b); }
+  const st = fileState(m); if (DISK && st.path) return diskSource(st.path);
+  return null;
+}
+async function srcBlob(src, type) { return src.blob ? (type ? new Blob([src.blob], { type }) : src.blob) : new Blob([await src.read(0, src.size)], type ? { type } : {}); }
+async function openDoc(m) {
+  const src = await fileSource(m);
+  if (!src) { if (m.big && !isMineSrc(m) && confirm('«' + m.name + '» ещё не скачан. Скачать?')) xClick(m); else if (!m.big) toast('Файла нет на этом устройстве'); return; }
+  docView({ name: m.name, size: m.size || src.size, m, path: fileState(m).path, src });
+}
+async function openDocPath(it) { const src = await diskSource(it.path); if (src) docView({ name: it.name, size: src.size, path: it.path, src }); }
+function docView(o) {
+  const ov = el('div', 'kzview kzdoc'), top = el('div', 'kvtop'), body = el('div', 'kvdoc'), t = el('div', 't'), acts = el('div', 'acts'), urls = [];
+  const info = el('span', '', fmtSize(o.size) + ' · ' + FT[typeOfName(o.name)].t);
+  t.append(el('b', '', o.name), info);
+  const close = () => { ov.remove(); document.removeEventListener('keydown', key, true); for (const u of urls) URL.revokeObjectURL(u); };
+  const btn = (txt, f, cls) => { const b = el('button', 'btn' + (cls ? ' ' + cls : ''), txt); b.onclick = e => { e.stopPropagation(); f(); }; acts.append(b); };
+  const m = o.m, st = m ? fileState(m) : null;
+  if (DISK && o.path) { btn('В проводнике', () => APP.files.show(o.path)); btn('Открыть в программе', () => openOnDisk({ name: o.name, path: o.path })); }
+  else if (m && st?.k === 'chat') btn(DISK ? 'Сохранить' : 'Скачать', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); APP.files.show(p); } catch (e) { toast('Не получилось: ' + errText(e)); } });
+  btn('Закрыть', close, 'pri');
+  top.append(t, acts); ov.append(top, body); document.body.append(ov);
+  const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  document.addEventListener('keydown', key, true);
+  const wait = el('div', 'fempty'); wait.append(el('div', 'big', '⏳'), el('b', '', 'Открываю…')); body.append(wait);
+  const fail = e => { body.textContent = ''; body.append(emptyEl('🤷', 'Не получилось показать', errText(e) + (DISK && o.path ? ' — попробуй «Открыть в программе».' : ''))); };
+  const n = o.name.toLowerCase(), ty = typeOfName(n);
+  (async () => {
+    if (/\.docx$/.test(n)) return showDocx(o.src, body, urls);
+    if (/\.xlsx$/.test(n)) return showXlsx(o.src, body);
+    if (/\.(zip|jar|mrpack|apk)$/.test(n)) return showZip(o, body, urls, info);
+    if (ty === 'audio') return showAudio(o, body, urls, info);
+    if (ty === 'font') return showFont(o.src, body, o.name);
+    return showText(o.src, body, n, info);
+  })().then(() => wait.remove(), fail);
+}
+// текст, код, лог, JSON, CSV, Markdown
+async function showText(src, body, n, info) {
+  const LIM = 2 << 20, u = await src.read(0, Math.min(src.size, LIM));
+  if (kzView.isBinary(u)) throw new Error('это не текстовый файл');
+  let text = kzView.decodeText(u); const cut = src.size > LIM;
+  body.textContent = '';
+  if (cut) body.append(el('p', 'fhint', 'Показаны первые 2 МБ из ' + fmtSize(src.size) + '.'));
+  if (/\.(csv|tsv)$/.test(n)) { const rows = kzView.csv(text); info.textContent += ' · строк: ' + rows.length + (rows.length >= 2000 ? '+' : ''); body.append(tableEl(rows, true)); return; }
+  if (/\.(md|markdown)$/.test(n)) { const d = el('div', 'kmd'); d.append(kzView.markdown(text)); body.append(d); return; }
+  if (/\.json$/.test(n) && !cut) try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+  const lines = text.split('\n'), shown = lines.length > 20000 ? lines.slice(0, 20000) : lines;
+  info.textContent += ' · строк: ' + lines.length;
+  const wrap = el('div', 'kcode'), gut = el('pre', 'gut'), code = el('pre', 'code');
+  gut.textContent = shown.map((_, i) => i + 1).join('\n');
+  if (text.length <= 400e3) code.append(kzView.highlight(shown.join('\n'), n)); else code.textContent = shown.join('\n');
+  wrap.append(gut, code); body.append(wrap);
+}
+function tableEl(rows, head) {
+  const t = el('table', 'ktable');
+  rows.forEach((r, i) => { const tr = t.insertRow(); if (head && i === 0) tr.className = 'h'; const w = Math.max(...rows.slice(0, 50).map(x => x?.length || 0), r?.length || 0); for (let c = 0; c < w; c++) { const td = tr.insertCell(); td.textContent = r?.[c] ?? ''; } });
+  return t;
+}
+async function showDocx(src, body, urls) {
+  const r = await kzView.docx(src); urls.push(...r.urls);
+  body.textContent = ''; const page = el('div', 'kpage'); page.append(r.el); body.append(page);
+  if (!r.el.textContent.trim() && !r.el.querySelector('img')) body.append(emptyEl('📄', 'Документ пустой', ''));
+}
+async function showXlsx(src, body) {
+  const sheets = await kzView.xlsx(src); body.textContent = '';
+  if (!sheets.length) throw new Error('в книге нет листов');
+  const tabs = el('div', 'fchips'), box = el('div', 'kxl');
+  const show = i => { box.textContent = ''; const s = sheets[i]; box.append(tableEl(s.rows.map(r => r || []), false)); if (s.cut) box.append(el('p', 'fhint', 'Показаны первые 1000 строк и 60 столбцов.')); [...tabs.children].forEach((b, j) => b.classList.toggle('on', i === j)); };
+  sheets.forEach((s, i) => { const b = el('button', 'fchip', s.name); b.onclick = () => show(i); tabs.append(b); });
+  if (sheets.length > 1) body.append(tabs);
+  body.append(box); show(0);
+}
+// архив: что внутри; у сборок Modrinth (.mrpack) и модов (.jar) — ещё и что это за сборка/мод
+async function showZip(o, body, urls, info) {
+  const list = await kzView.zipList(o.src), files = list.filter(e => !e.dir);
+  info.textContent += ' · ' + nFiles(files.length) + ' · распаковано ' + fmtSize(files.reduce((s, e) => s + e.size, 0));
+  body.textContent = '';
+  const about = async (name, f) => { const e = list.find(x => x.name === name); if (!e) return null; try { return f(JSON.parse(kzView.decodeText(await kzView.zipGet(o.src, e)))); } catch (er) { return null; } };
+  const card = await about('modrinth.index.json', j => [j.name + (j.versionId ? ' ' + j.versionId : ''), 'Minecraft ' + (j.dependencies?.minecraft || '?') + (j.dependencies ? ' · ' + Object.keys(j.dependencies).filter(k => k !== 'minecraft').join(', ') : ''), (j.files?.length || 0) + ' модов и файлов скачается при установке'])
+    || await about('fabric.mod.json', j => [(j.name || j.id) + ' ' + (j.version || ''), 'мод для Fabric' + (j.depends?.minecraft ? ' · Minecraft ' + j.depends.minecraft : ''), j.description || '']);
+  if (card) { const c = el('div', 'kabout'); c.append(el('b', '', card[0]), ...card.slice(1).filter(Boolean).map(x => el('span', '', x))); body.append(c); }
+  const q = el('input', 'fq'); q.type = 'search'; q.placeholder = 'Найти в архиве'; const tbl = el('div', 'kzip');
+  const paint = () => {
+    tbl.textContent = ''; const Q = q.value.trim().toLowerCase(), shown = files.filter(e => !Q || e.name.toLowerCase().includes(Q)).slice(0, 3000);
+    for (const e of shown) {
+      const r = el('div', 'kzr'), i = e.name.lastIndexOf('/');
+      r.append(el('span', 'ico', FT[typeOfName(e.name)].i), el('span', 'nm', ''), el('span', 'sz', fmtSize(e.size)));
+      r.children[1].append(el('small', '', i >= 0 ? e.name.slice(0, i + 1) : ''), e.name.slice(i + 1));
+      r.title = 'Нажми — посмотреть или достать'; r.onclick = () => zipEntry(o, e, urls); tbl.append(r);
+    }
+    if (files.length > shown.length && !Q) tbl.append(el('p', 'fhint', 'Показаны первые 3000 — найди нужное поиском.'));
+  };
+  q.oninput = paint; paint(); body.append(q, tbl);
+}
+async function zipEntry(o, e, urls) {
+  try {
+    const data = await kzView.zipGet(o.src, e), nm = e.name.split('/').pop(), src = kzView.memSrc(data);
+    if (/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(nm)) { const u = URL.createObjectURL(new Blob([data])); urls.push(u); return viewer({ src: u, m: { id: '', name: nm, size: data.length } }); }
+    if (canViewName(nm)) return docView({ name: nm, size: data.length, src });
+    // остальное — достать наружу
+    if (DISK) { const p = await APP.files.save(nm, data, o.m ? routeTarget(o.m) : null); toast('«' + nm + '» достан из архива'); APP.files.show(p); }
+    else { const u = URL.createObjectURL(new Blob([data])), a = el('a'); a.href = u; a.download = nm; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000); }
+  } catch (er) { toast('Не получилось: ' + errText(er)); }
+}
+async function showAudio(o, body, urls, info) {
+  const tags = await kzView.audioTags(o.src, o.name).catch(() => null) || {};
+  body.textContent = ''; const box = el('div', 'kaudio'), cov = el('div', 'cov');
+  if (tags.cover) { const u = URL.createObjectURL(tags.cover); urls.push(u); const i = el('img'); i.src = u; i.alt = ''; cov.append(i); } else cov.textContent = '🎵';
+  const a = el('audio'); a.controls = true; a.autoplay = true;
+  if (o.path) a.src = fileUrl(o.path); else { const u = URL.createObjectURL(await srcBlob(o.src)); urls.push(u); a.src = u; }
+  a.onerror = () => a.replaceWith(el('p', 'fhint', 'Такой звук Кинозал не играет — открой в программе.'));
+  const t = el('div', 't'); t.append(el('b', '', tags.title || o.name.replace(/\.[^.]+$/, '')), el('span', '', [tags.artist, tags.album, tags.year].filter(Boolean).join(' · ')));
+  box.append(cov, t, a); body.append(box);
+  if (tags.artist || tags.title) info.textContent += ' · ' + [tags.artist, tags.title].filter(Boolean).join(' — ');
+}
+let fontN = 0;
+async function showFont(src, body, name) {
+  const fam = 'kzfont' + (++fontN), ff = new FontFace(fam, await src.read(0, src.size));
+  await ff.load(); document.fonts.add(ff);
+  body.textContent = ''; const box = el('div', 'kfont'); box.style.fontFamily = fam;
+  box.append(el('div', 'big', 'Съешь же ещё этих мягких французских булок, да выпей чаю'), el('div', 'mid', 'The quick brown fox jumps over the lazy dog'), el('div', 'abc', 'АБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ абвгдеёжзийклмнопрстуфхцчшщъыьэюя ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789 !?.,:;«»()—'));
+  for (const px of [12, 16, 24, 36]) { const r = el('div', 'sz'); r.style.fontSize = px + 'px'; r.append(el('small', '', px + ' px'), document.createTextNode(' Кинозал — смотреть вместе')); box.append(r); }
+  body.append(box);
+}
+
 async function openOriginal(m) {
   const raw = isRawName(m.name), vid = isVideoName(m.name) || /^video\//.test(m.mime || ''), d = S.dl[m.id], mine = isMineSrc(m);
   const path = mine ? S.src[m.id] || '' : d?.st === 'done' ? d.path || '' : '', file = mine ? srcMem.get(m.id) : null;
@@ -2070,7 +2216,7 @@ function recvRow(it, m) {
   t.append(el('span', '', info.join(' · ')));
   if (k === 'img' || m?.th) { const th = el('img', 'fthumb'); th.loading = 'lazy'; th.src = m?.th || fileUrl(it.path); th.alt = ''; ic.textContent = ''; ic.append(th); }
   if (k === 'raw' && m?.ex) info.push(m.ex), t.lastChild.textContent = info.join(' · ');
-  const open1 = () => it.dir ? (fQ = '', fPath = it.path, renderFiles()) : k === 'img' || k === 'raw' ? viewFile(it, m, k) : ['video', 'audio'].includes(k) ? preview(it, k) : openOnDisk(it);
+  const open1 = () => it.dir ? (fQ = '', fPath = it.path, renderFiles()) : k === 'img' || k === 'raw' ? viewFile(it, m, k) : canViewName(it.name) ? openDocPath(it) : ['video', 'audio'].includes(k) ? preview(it, k) : openOnDisk(it);
   acts.append(
     ...(it.dir ? [] : [lnk('Открыть', () => openOnDisk(it))]),
     lnk('В проводнике', () => APP.files.show(it.path)),
