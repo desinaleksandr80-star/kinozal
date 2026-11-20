@@ -92,8 +92,8 @@ const delMsg = id => new Promise(res => { const t = db.transaction(['msgs', 'blo
 let S = await kvGet('state') || null;
 if (!S) S = { me: null, contacts: {}, groups: {}, chats: {}, ended: {} };
 S.ended ||= {};
-let saveT = 0;
-function save() { clearTimeout(saveT); saveT = setTimeout(() => kvSet('state', S).catch(e => console.warn('save', e)), 250); }
+let saveT = 0, wiping = false;
+function save() { if (wiping) return; clearTimeout(saveT); saveT = setTimeout(() => kvSet('state', S).catch(e => console.warn('save', e)), 250); }
 
 // ---------- личность: ключ и подписи ----------
 const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -109,12 +109,32 @@ if (!keys) {
   keys = { pub: { kty: 'EC', crv: 'P-256', x: j.x, y: j.y }, priv: k.privateKey };
   await kvSet('keys', keys);
 }
-const myId = await idFromPub(keys.pub);
+// Связанные устройства. Ключ профиля живёт только на основном устройстве (его нельзя скопировать).
+// Другое устройство («вошёл в профиль») держит свой ключ и сертификат: подпись ключом профиля
+// под строкой 'dev|ID профиля|ID устройства|ключ устройства'. В сети оно — kzm-<профиль>-<устройство>.
+const devIdOf = async p => (await idFromPub(p)).slice(0, 6).toLowerCase();
+const certStr = (id, dev, p) => 'dev|' + id + '|' + dev + '|' + String(p.x) + '.' + String(p.y);
+const cleanPub = p => ({ kty: 'EC', crv: 'P-256', x: String(p?.x || ''), y: String(p?.y || '') });
+let ident = await kvGet('ident') || null;   // {profile, ppub, dev, cert, name} — это устройство вошло в профиль с другого
+if (ident && ident.dev !== await devIdOf(keys.pub)) { console.error('[личность] ключ устройства не совпадает с сертификатом — выхожу из профиля'); ident = null; S = null; await kvSet('ident', null); }
+if (!S) S = { me: null, contacts: {}, groups: {}, chats: {}, ended: {} };
+const myDev = ident?.dev || '';                         // '' — основное устройство профиля
+const myId = ident ? ident.profile : await idFromPub(keys.pub);
+const myPub = ident ? ident.ppub : keys.pub;            // открытый ключ профиля
+const peerOf = (u, dev) => pid(u) + (dev ? '-' + dev : '');
+const myPeer = peerOf(myId, myDev);
 if (S?.me?.id && S.me.id !== myId) console.error('[личность] сохранённый ключ не найден — создан новый: был ' + S.me.id + ', стал ' + myId);
 const sign = async s => b64(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keys.priv, enc(s)));
 async function verify(pub, sig, s) {
   try { const k = await crypto.subtle.importKey('jwk', pub, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']); return await crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, k, unb64(sig), enc(s)); }
   catch (e) { return false; }
+}
+// как назвать это устройство в списке устройств профиля
+function devName() {
+  const ua = navigator.userAgent;
+  if (ANDROID || /Android/i.test(ua)) { const m = ua.match(/Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?\s*[;)]/), md = m ? m[1].trim() : ''; return 'Телефон' + (md && !/^(K|wv|Linux)$/i.test(md) ? ' ' + md.slice(0, 24) : ''); }
+  if (/iPhone|iPad/i.test(ua)) return /iPad/i.test(ua) ? 'Планшет iPad' : 'iPhone';
+  return APP ? 'Компьютер' : 'Браузер на компьютере';
 }
 let appVer = '';
 APP?.version?.().then(v => { appVer = String(v || ''); }).catch(() => {});
@@ -183,24 +203,36 @@ const fmtDur = s => { s = Math.max(0, Math.round(s || 0)); return Math.floor(s /
 
 // ---------- сеть ----------
 let peer = null, net = 'off', idTaken = 0;
-const links = new Map();    // id -> связь {c, authed, outgoing, nonce, uid, their, q}
-const dialing = new Map();  // id -> когда начали звонить
+// связи: id человека -> Map(устройство -> связь {c, authed, outgoing, nonce, uid, dev, self, peer, their, q}); '' — его основное устройство.
+// У человека бывает несколько устройств, у меня самого — тоже: uid === myId — это мои же устройства (self).
+const links = new Map();
+const dialing = new Map();  // адрес в сети (kzm-…) -> когда начали звонить
 const typing = new Map();   // chat|uid -> до какого времени «печатает»
+const hasDevs = () => !!myDev || Object.keys(S.devs || {}).length > 0;   // есть ли у профиля другие устройства
+const revStr = (id, list) => 'revoked|' + id + '|' + [...list].sort().join(',');
+const revSet = u => new Set((u === myId ? S.revs : S.contacts[u]?.revs)?.list || []);
+function devsOf(u) {   // на какие устройства человека звонить
+  const src = u === myId ? S.devs : S.contacts[u]?.devs, rv = revSet(u);
+  return ['', ...Object.keys(src || {})].filter(d => !rv.has(d) && !(u === myId && d === myDev));
+}
+function parsePeer(s) { const m = String(s || '').toLowerCase().match(/^kzm-([0-9a-z]{10})(?:-([0-9a-z]{6}))?$/); return m ? { u: normId(m[1]), dev: m[2] || '' } : null; }
 function startPeer() {
   if (typeof Peer === 'undefined') { setNet('off'); setTimeout(startPeer, 5000); return; }
+  if (wiping) return;
   try { peer?.destroy(); } catch (e) {}
   setNet('wait');
-  const p = peer = new Peer(pid(myId), { config: iceCfg(), debug: 0 });
+  const p = peer = new Peer(myPeer, { config: iceCfg(), debug: 0 });
   p.on('open', () => { if (peer !== p) return; idTaken = 0; setNet('on'); dialAll(); });
   p.on('connection', c => {
-    const u = c.peer.startsWith('kzm-') ? normId(c.peer.slice(4)) : '';
-    if (!u || u.length !== 10 || S.contacts[u]?.state === 'blocked') { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }
-    wire(c, false, u);
+    if (c.metadata?.link === 1) { linkServe(c); return; }   // новое устройство входит в мой профиль по коду
+    const x = parsePeer(c.peer);
+    if (!x || (x.u === myId && x.dev === myDev) || S.contacts[x.u]?.state === 'blocked') { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }
+    wire(c, false, x.u, x.dev);
   });
   p.on('disconnected', () => { if (peer !== p) return; setNet('wait'); setTimeout(() => { if (peer === p && !p.destroyed && p.disconnected) try { p.reconnect(); } catch (e) {} }, 2000); });
   p.on('error', e => {
     if (peer !== p) return;
-    if (e.type === 'peer-unavailable') { const m = String(e.message || '').match(/kzm-([0-9a-z]+)/i); if (m) dialing.delete(normId(m[1])); return; }
+    if (e.type === 'peer-unavailable') { const m = String(e.message || '').match(/kzm-[0-9a-z-]+/i); if (m) dialing.delete(m[0].toLowerCase()); return; }
     if (e.type === 'unavailable-id') { idTaken++; setNet(idTaken > 3 ? 'dup' : 'wait'); setTimeout(startPeer, 4000); return; }
     if (['network', 'server-error', 'socket-error', 'socket-closed'].includes(e.type)) { setNet('off'); setTimeout(() => { if (peer === p) startPeer(); }, 6000); return; }
     console.warn('peer', e.type, e.message);
@@ -211,60 +243,95 @@ function dialList() {
   const set = new Set();
   for (const [u, ct] of Object.entries(S.contacts)) if (ct.state !== 'blocked' && (ct.state !== 'req' || S.chats[dmId(u)])) set.add(u);
   for (const g of Object.values(S.groups)) if (!g.gone) for (const u of g.members) set.add(u);
-  set.delete(myId); return [...set];
+  set.delete(myId); return hasDevs() ? [myId, ...set] : [...set];   // свои устройства — первыми: с них досинхронизируется всё остальное
 }
 function dial(u) {
-  if (!peer || net !== 'on' || u === myId || S.contacts[u]?.state === 'blocked') return;
-  const l = links.get(u); if (l?.c.open) return;
-  const t = dialing.get(u); if (t && Date.now() - t < 20000) return;
-  dialing.set(u, Date.now());
-  try { wire(peer.connect(pid(u), { reliable: true, metadata: { v: 1 } }), true, u); } catch (e) { dialing.delete(u); }
+  if (!peer || net !== 'on' || S.contacts[u]?.state === 'blocked') return;
+  if (myDev && u !== myId && S.contacts[u]?.old) return;   // старый Кинозал не пускает дополнительные устройства — до него дойдёт через основное
+  for (const dev of devsOf(u)) {
+    if (links.get(u)?.get(dev)?.c.open) continue;
+    const pk = peerOf(u, dev), t = dialing.get(pk); if (t && Date.now() - t < 20000) continue;
+    dialing.set(pk, Date.now());
+    try { wire(peer.connect(pk, { reliable: true, metadata: { v: 1 } }), true, u, dev); } catch (e) { dialing.delete(pk); }
+  }
 }
 async function dialAll() { for (const u of dialList()) { dial(u); await sleep(120); } }
 setInterval(dialAll, 40000);
 window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
-function wire(c, outgoing, u) {
-  const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, their: null, q: Promise.resolve() };
-  c.on('open', () => { c.send({ t: 'hello', v: 1, id: myId, pub: keys.pub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, nonce: L.nonce, ver: appVer }); });
+const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
+function wire(c, outgoing, u, dev = '') {
+  const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, dev, self: u === myId, peer: peerOf(u, dev), their: null, q: Promise.resolve() };
+  c.on('open', () => { c.send(helloMsg(L.nonce)); });
   c.on('data', d => { L.q = L.q.then(() => onData(L, d)).catch(e => console.error('[сообщение] ' + (e?.stack || e))); });
   const end = () => {
-    if (outgoing) dialing.delete(u);
-    if (links.get(u) === L) { links.delete(u); jlog('[связь] нет с', u); if (S.contacts[u]) { S.contacts[u].seen = Date.now(); save(); } presence(u); }
+    if (outgoing) dialing.delete(L.peer);
+    const m = links.get(u);
+    if (m?.get(dev) === L) {
+      m.delete(dev); if (!m.size) links.delete(u);
+      jlog('[связь] нет с', L.peer);
+      if (L.self) { (S.devSeen ||= {})[dev] = Date.now(); save(); renderDevs(); }
+      else if (!isOn(u) && S.contacts[u]) { S.contacts[u].seen = Date.now(); save(); }
+      presence(u);
+    }
   };
   c.on('close', end); c.on('error', end);
   setTimeout(() => { if (!L.authed) { try { c.close(); } catch (e) {} end(); } }, 25000);
 }
-const isOn = u => !!links.get(u)?.authed && links.get(u).c.open;
-function send(u, m) { const l = links.get(u); if (!l?.authed || !l.c.open) return false; try { l.c.send(m); return true; } catch (e) { return false; } }
-function sendChat(c, m) { for (const u of members(c)) if (u !== myId) send(u, m); }
+const linksOf = u => [...(links.get(u)?.values() || [])].filter(L => L.authed && L.c.open);
+const isOn = u => linksOf(u).length > 0;
+const isDevOn = (u, dev) => { const L = links.get(u)?.get(dev); return !!L?.authed && L.c.open; };
+// кому: id человека (на все его устройства; myId — на мои другие устройства) или одна связь
+function send(x, m) {
+  const ls = typeof x === 'object' ? (x?.authed && x.c.open ? [x] : []) : linksOf(x);
+  let ok = false; for (const L of ls) try { L.c.send(m); ok = true; } catch (e) {}
+  return ok;
+}
+function closeLinks(u, dev) { for (const [d, L] of links.get(u) || []) if (dev == null || d === dev) try { L.c.close(); } catch (e) {} }
+function sendChat(c, m) { for (const u of members(c)) send(u, m); }   // в том числе моим другим устройствам
 
 async function onData(L, d) {
   if (!d || typeof d !== 'object') return;
   if (d.t === 'hello') {
     if (L.their || !d.pub || normId(d.id) !== L.uid) return;
-    const pub = { kty: 'EC', crv: 'P-256', x: String(d.pub.x || ''), y: String(d.pub.y || '') };
+    const pub = cleanPub(d.pub);
     if (await idFromPub(pub) !== L.uid) { console.warn('чужой ключ', L.uid); L.c.close(); return; }
-    L.their = { pub, name: clean(d.name, 40), avatar: cleanAvatar(d.avatar), ver: clean(d.ver, 20), frame: window.kzTheme?.cleanFrame(d.frame) || null };
+    const dev = String(d.dev || '').toLowerCase(); let dpub = null;
+    if (dev !== L.dev) { console.warn('чужое устройство', L.peer); L.c.close(); return; }
+    if (dev) {   // дополнительное устройство: сертификат подписан ключом профиля
+      dpub = cleanPub(d.dpub);
+      if (await devIdOf(dpub) !== dev || !await verify(pub, String(d.cert || ''), certStr(L.uid, dev, dpub))) { console.warn('сертификат устройства не сошёлся', L.peer); L.c.close(); return; }
+      if (revSet(L.uid).has(dev)) { jlog('[устройства] отвязанное устройство', L.peer); if (L.self && S.revs) try { L.c.send({ t: 'revoked', revs: S.revs }); } catch (e) {} setTimeout(() => { try { L.c.close(); } catch (e) {} }, 800); return; }
+    }
+    L.their = { pub, dpub, dev, cert: dev ? String(d.cert) : '', name: clean(d.name, 40), avatar: cleanAvatar(d.avatar), ver: clean(d.ver, 20), frame: window.kzTheme?.cleanFrame(d.frame) || null, pts: +d.pts || 0, caps: [].concat(d.caps || []).map(String) };
     L.c.send({ t: 'proof', sig: await sign(String(d.nonce || '') + '|' + myId) });
     return;
   }
   if (d.t === 'proof') {
     if (!L.their || L.authed) return;
-    if (!await verify(L.their.pub, d.sig, L.nonce + '|' + L.uid)) { console.warn('подпись не сошлась', L.uid); L.c.close(); return; }
+    if (!await verify(L.their.dpub || L.their.pub, d.sig, L.nonce + '|' + L.uid)) { console.warn('подпись не сошлась', L.uid); L.c.close(); return; }
     L.authed = true; return linkUp(L);
   }
+  if (d.t === 'revoked' && L.self && myDev) return onRevs(d.revs, true);   // меня отвязали, пока я был не в сети
   if (!L.authed) return;
   const u = L.uid;
   switch (d.t) {
-    case 'msg': return onMsg(u, d);
-    case 'ack': for (const id of [].concat(d.ids || []).slice(0, 500)) { const m = await msgGet(String(id)); if (m && m.from === myId && !m.ack) { m.ack = 1; await msgPut(m); const l = S.chats[m.chat]?.last; if (l?.id === m.id) { l.ack = 1; save(); } tick(m); } } return;
-    case 'read': { const c = String(d.chat || ''); if (!shares(c, u)) return; const ch = S.chats[c]; if (!ch) return; /* отметка о прочтении не воскрешает удалённый чат */ const ts = +d.ts || 0; if (ts > (ch.seen[u] || 0)) { ch.seen[u] = ts; save(); ticksAll(c); renderList(); } return; }
-    case 'sync': return onSync(u, d);
+    case 'msg': return onMsg(L, d);
+    case 'ack': {
+      if (L.self && !d.fwd) return;   // моё другое устройство получило — это ещё не «доставлено»
+      const ids = [].concat(d.ids || []).slice(0, 500).map(String);
+      for (const id of ids) { const m = await msgGet(id); if (m && m.from === myId && !m.ack) { m.ack = 1; await msgPut(m); const l = S.chats[m.chat]?.last; if (l?.id === m.id) { l.ack = 1; save(); } tick(m); } }
+      if (!L.self && hasDevs()) send(myId, { t: 'ack', ids, fwd: 1 });
+      return;
+    }
+    case 'read': return onRead(L, d);
+    case 'sync': return onSync(L, d);
     case 'groups': for (const g of [].concat(d.list || []).slice(0, 100)) mergeGroup(g, u); return;
-    case 'profile': { const ct = S.contacts[u]; const n = clean(d.name, 40); if (ct) { if (n) ct.name = n; ct.avatar = cleanAvatar(d.avatar); ct.frame = window.kzTheme?.cleanFrame(d.frame) || null; } for (const g of groupsWith(u)) if (n) g.names[u] = n; save(); renderList(); renderHead(); return; }
-    case 'typing': { const c = String(d.chat || ''); if (!shares(c, u)) return; typing.set(c + '|' + u, Date.now() + 4500); renderHead(); renderList(); setTimeout(() => { renderHead(); renderList(); }, 4700); return; }
-    case 'decline': if (myCall && d.code === myCall.code) toast(nameOf(u) + ' сейчас не может ответить'); return;
+    case 'profile': return onProfile(L, d);
+    case 'typing': { if (L.self) return; const c = String(d.chat || ''); if (!shares(c, u)) return; typing.set(c + '|' + u, Date.now() + 4500); renderHead(); renderList(); setTimeout(() => { renderHead(); renderList(); }, 4700); return; }
+    case 'decline': if (!L.self && myCall && d.code === myCall.code) toast(nameOf(u) + ' сейчас не может ответить'); return;
+    case 'ringoff': if (L.self && ringing && ringing.code === clean(d.code, 8)) stopRing(); return;   // ответил(а) или отклонил(а) на другом своём устройстве
     case 'calls': {   // какие звонки у собеседника на самом деле идут — остальные его приглашения гаснут
+      if (L.self) return;
       const live = new Set([].concat(d.live || []).map(x => clean(x, 8)));
       let ch = false;
       for (const [code, x] of Object.entries(S.calls || {})) if (x.from === u && !live.has(code) && !S.ended[code] && Date.now() - x.ts > 15000) {
@@ -274,49 +341,262 @@ async function onData(L, d) {
       if (ch) { save(); refreshCallCards(); }
       return;
     }
-    case 'react': return onReact(u, d);
-    case 'del': return onDel(u, d);
-    case 'knock': return onKnock(u, d);
+    case 'react': return onReact(L, d);
+    case 'del': return onDel(L, d);
+    case 'knock': if (L.self) return; return onKnock(u, d);
     case 'callend': { const code = clean(d.code, 8); if (!code) return; S.ended[code] = Date.now(); save(); if (ringing?.code === code) stopRing(); refreshCallCards(); return; }
+    case 'devs': return onDevs(L, d);
+    case 'contacts': if (L.self) onContacts(d); return;
+    case 'bye': if (L.self && L.dev && !myDev) revokeDev(L.dev); return;   // моё устройство вышло из профиля — его ключ стёрт, убираем из списка
   }
 }
 function linkUp(L) {
-  const u = L.uid, ex = links.get(u);
+  const u = L.uid; let lm = links.get(u); const ex = lm?.get(L.dev);
   if (ex && ex !== L && ex.authed && ex.c.open) {
-    // двое позвонили друг другу одновременно — оставляем соединение того, у кого ID меньше
-    const exO = ex.outgoing ? myId : u, myO = L.outgoing ? myId : u;
+    // двое позвонили друг другу одновременно — оставляем соединение того, чей адрес в сети меньше
+    const exO = ex.outgoing ? myPeer : L.peer, myO = L.outgoing ? myPeer : L.peer;
     if (exO < myO) { setTimeout(() => L.c.close(), 300); return; }
     setTimeout(() => ex.c.close(), 300);
   }
-  links.set(u, L); dialing.delete(u); jlog('[связь] есть с', u, L.their?.ver || '');
+  if (!lm) links.set(u, lm = new Map());
+  lm.set(L.dev, L); dialing.delete(L.peer); jlog('[связь] есть с', L.peer, L.their?.ver || '');
+  if (L.self) return selfUp(L);
   const t = L.their; let ct = S.contacts[u];
-  if (ct) { if (t.name) ct.name = t.name; ct.avatar = t.avatar; ct.ver = t.ver; ct.frame = t.frame; if (ct.state === 'pending') ct.state = 'ok'; }
-  else S.contacts[u] = ct = { id: u, name: t.name, avatar: t.avatar, ver: t.ver, frame: t.frame, state: groupsWith(u).length ? 'member' : 'req', added: Date.now() };
-  for (const g of groupsWith(u)) if (t.name) g.names[u] = t.name;
+  // имя и аватарка — самые свежие из всех устройств собеседника (старый Кинозал времени правки не присылает — верим ему)
+  const fresh = !t.caps.includes('dev') || t.pts >= (ct?.pts || 0);
+  if (ct) { if (fresh) { if (t.name) ct.name = t.name; ct.avatar = t.avatar; ct.frame = t.frame; if (t.pts) ct.pts = t.pts; } ct.ver = t.ver; if (ct.state === 'pending') ct.state = 'ok'; }
+  else { S.contacts[u] = ct = { id: u, name: t.name, avatar: t.avatar, ver: t.ver, frame: t.frame, pts: t.pts, state: groupsWith(u).length ? 'member' : 'req', added: Date.now() }; if (hasDevs()) send(myId, contactsMsg([ct])); }
+  const old = !t.caps.includes('dev'); if (ct.old !== old) { ct.old = old; if (hasDevs()) send(myId, contactsMsg([ct])); }   // мои устройства узнают, что сюда звонить им бесполезно
+  if (L.dev) (ct.devs ||= {})[L.dev] = { ...(ct.devs[L.dev] || {}), dev: L.dev, pub: t.dpub, cert: t.cert };
+  for (const g of groupsWith(u)) if (t.name && fresh) g.names[u] = t.name;
   save(); presence(u);
-  const gl = groupsWith(u).map(gWire); if (gl.length) send(u, { t: 'groups', list: gl });
-  for (const c of sharedChats(u)) { const ch = S.chats[c]; if (ch?.myRead) send(u, { t: 'read', chat: c, ts: ch.myRead }); }
-  send(u, { t: 'calls', live: myCall && window.kzRoom?.inRoom ? [myCall.code] : [] });
-  sendSync(u); flushQ(u);
+  const gl = groupsWith(u).map(gWire); if (gl.length) send(L, { t: 'groups', list: gl });
+  for (const c of sharedChats(u)) { const ch = S.chats[c]; if (ch?.myRead) send(L, { t: 'read', chat: c, ts: ch.myRead }); }
+  send(L, { t: 'calls', live: myCall && window.kzRoom?.inRoom ? [myCall.code] : [] });
+  if (hasDevs() || S.revs) send(L, devsMsg());
+  sendSync(L); flushQ(u);
 }
-async function sendSync(u) {
+// встретились два моих устройства: сверяем всё — профиль, контакты, группы, устройства, прочитанное и переписку
+function selfUp(L) {
+  (S.devSeen ||= {})[L.dev] = Date.now(); save();
+  send(L, profileMsg()); send(L, contactsMsg()); send(L, devsMsg());
+  const gl = Object.values(S.groups).filter(g => !g.gone && g.members.includes(myId)).map(gWire); if (gl.length) send(L, { t: 'groups', list: gl });
+  for (const ch of Object.values(S.chats)) if (ch.myRead) send(L, { t: 'read', chat: ch.id, ts: ch.myRead });
+  sendSync(L); flushQ(myId); presence(myId); renderDevs();
+}
+const myChats = () => Object.keys(S.chats).filter(c => isDm(c) ? members(c).includes(myId) : !!S.groups[c] && !S.groups[c].gone);
+const chatsFor = L => L.self ? myChats() : sharedChats(L.uid);
+async function sendSync(L) {
   const have = {};
-  for (const c of sharedChats(u)) have[c] = (await chatMsgs(c)).map(m => m.id);
-  send(u, { t: 'sync', have });
+  for (const c of chatsFor(L)) have[c] = (await chatMsgs(c)).map(m => m.id);
+  send(L, { t: 'sync', have });
 }
-async function onSync(u, d) {
+async function onSync(L, d) {
   const have = d.have && typeof d.have === 'object' ? d.have : {};
-  for (const c of sharedChats(u)) {
+  for (const c of chatsFor(L)) {
     const theirs = new Set([].concat(have[c] || []).slice(0, 2000));
-    for (const m of await chatMsgs(c)) if (!theirs.has(m.id)) { if (!await push(u, m)) return; await sleep(5); }
+    for (const m of await chatMsgs(c)) if (!theirs.has(m.id)) { if (!await push(L, m)) return; await sleep(5); }
   }
 }
 const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
-async function push(u, m) {
-  if (!isOn(u)) return false;
+// кому: id человека или одна связь; своим устройствам уходят ещё галочки и реакции
+async function push(x, m) {
+  const self = typeof x === 'object' ? x.self : x === myId;
+  if (typeof x === 'object' ? !(x.authed && x.c.open) : !isOn(x)) return false;
   let b = null;
   if (m.blob) { const bl = await blobGet(m.id); if (bl) b = await bl.arrayBuffer(); }
-  return send(u, { t: 'msg', m: wireMsg(m), b });
+  const w = wireMsg(m); if (self) { if (m.ack) w.ack = 1; if (m.rx) w.rx = m.rx; }
+  return send(x, { t: 'msg', m: w, b });
+}
+
+// ---------- мои устройства: профиль, контакты, прочитанное ----------
+const profileMsg = () => ({ t: 'profile', name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0 });
+function sendProfile() { const m = profileMsg(); for (const u of links.keys()) send(u, m); }   // собеседникам и моим устройствам
+function onProfile(L, d) {
+  const u = L.uid, n = clean(d.name, 40), pts = +d.pts || 0;
+  if (L.self) {   // имя или аватарку поменяли на другом моём устройстве
+    if (!S.me || !n || pts <= (S.me.pts || 0)) return;
+    S.me.name = n; S.me.avatar = cleanAvatar(d.avatar); S.me.frame = window.kzTheme?.cleanFrame(d.frame) || null; S.me.pts = pts; store.set('name', n);
+    for (const g of Object.values(S.groups)) if (g.names) g.names[myId] = n;
+    save(); renderMe(); renderList(); renderHead();
+    const m = profileMsg(); for (const x of links.keys()) if (x !== myId) send(x, m);   // и собеседникам, что на связи со мной здесь
+    return;
+  }
+  const ct = S.contacts[u]; if (ct && d.pts != null && pts < (ct.pts || 0)) return;   // устаревшее имя с другого устройства собеседника
+  if (ct) { if (n) ct.name = n; ct.avatar = cleanAvatar(d.avatar); ct.frame = window.kzTheme?.cleanFrame(d.frame) || null; if (pts) ct.pts = pts; }
+  for (const g of groupsWith(u)) if (n) g.names[u] = n;
+  save(); renderList(); renderHead();
+}
+const CT_STATES = ['ok', 'pending', 'req', 'member', 'blocked'];
+const ctWire = c => ({ id: c.id, name: c.name || '', alias: c.alias || '', state: c.state, avatar: c.avatar || '', frame: c.frame || null, added: c.added || 0, cts: c.cts || 0, pts: c.pts || 0, old: c.old, devs: c.devs || null, revs: c.revs || null });
+const contactsMsg = (list = Object.values(S.contacts)) => ({ t: 'contacts', list: list.filter(c => c?.id && c.id !== myId).map(ctWire) });
+// контакт изменили вручную (добавили, подписали, заблокировали) — сообщаем моим устройствам
+function ctChanged(ct) { if (!ct) return; ct.cts = Date.now(); save(); if (hasDevs()) send(myId, contactsMsg([ct])); }
+function onContacts(d) {
+  let ch = false;
+  for (const x of [].concat(d.list || []).slice(0, 3000)) {
+    const id = normId(x?.id); if (id.length !== 10 || id === myId || !CT_STATES.includes(x.state)) continue;
+    let ct = S.contacts[id];
+    if (!ct) { ct = S.contacts[id] = { id, name: clean(x.name, 40), alias: clean(x.alias, 40), state: x.state, avatar: cleanAvatar(x.avatar), frame: window.kzTheme?.cleanFrame(x.frame) || null, added: +x.added || Date.now(), cts: +x.cts || 0, pts: +x.pts || 0 }; ch = true; }
+    else {
+      if ((+x.cts || 0) > (ct.cts || 0)) { ct.alias = clean(x.alias, 40); ct.state = x.state; ct.cts = +x.cts; ch = true; if (x.state === 'blocked') closeLinks(id); }
+      if (x.name && ((+x.pts || 0) > (ct.pts || 0) || !ct.name)) { ct.name = clean(x.name, 40); ct.avatar = cleanAvatar(x.avatar); ct.frame = window.kzTheme?.cleanFrame(x.frame) || null; ct.pts = +x.pts || ct.pts || 0; ch = true; }
+    }
+    if (x.old != null && !isOn(id)) ct.old = !!x.old;
+    // устройства собеседника: подписи проверятся при встрече, а звонить на них можно уже сейчас
+    if (x.devs && typeof x.devs === 'object') for (const [dv, v] of Object.entries(x.devs).slice(0, 20)) if (/^[0-9a-z]{6}$/.test(dv) && v?.pub && v?.cert && !ct.devs?.[dv]) { (ct.devs ||= {})[dv] = { dev: dv, pub: cleanPub(v.pub), cert: String(v.cert) }; ch = true; }
+    if (Array.isArray(x.revs?.list) && x.revs.list.length > (ct.revs?.list.length || 0)) { ct.revs = { list: x.revs.list.map(String).slice(0, 200), sig: String(x.revs.sig || '') }; ch = true; }
+  }
+  if (ch) { save(); renderList(); renderHead(); }
+  setTimeout(dialAll, 300);
+}
+async function onRead(L, d) {
+  const c = String(d.chat || ''), ts = +d.ts || 0;
+  if (L.self && !d.by) {   // прочитал(а) на другом своём устройстве — здесь тоже прочитано
+    if (!/^(d:[0-9A-Z]{10}:[0-9A-Z]{10}|g:[\w-]{6,40})$/.test(c) || !members(c).includes(myId)) return;
+    const ch = ensureChat(c); if (ts <= (ch.myRead || 0)) return;
+    ch.myRead = ts;
+    ch.unread = !ch.last || ch.last.ts <= ts ? 0 : (await chatMsgs(c, 400)).filter(m => m.from !== myId && m.ts > ts).length;
+    save(); renderList(); if (!ch.unread) APP?.seen?.(c);
+    return;
+  }
+  const by = L.self ? normId(d.by) : L.uid;
+  if (!shares(c, by)) return;
+  const ch = S.chats[c]; if (!ch) return;   // отметка о прочтении не воскрешает удалённый чат
+  if (ts > (ch.seen[by] || 0)) { ch.seen[by] = ts; save(); ticksAll(c); renderList(); if (!L.self && hasDevs()) send(myId, { t: 'read', chat: c, ts, by }); }
+}
+
+// ---------- мои устройства: список, сертификаты, отвязка ----------
+const devList = () => Object.values(S.devs || {}).map(x => ({ dev: x.dev, pub: x.pub, cert: x.cert, name: x.name || '' }));
+const devsMsg = () => ({ t: 'devs', list: devList(), revs: S.revs || null, pname: myDev ? (S.pname || '') : devName() });
+let devsPaint = null;
+const renderDevs = () => { try { devsPaint?.(); } catch (e) {} };
+// пришёл список отвязанных устройств — он подписан ключом профиля
+async function onRevs(rv, self, u = myId, ppub = myPub) {
+  if (!rv || !Array.isArray(rv.list) || !await verify(ppub, String(rv.sig || ''), revStr(u, rv.list))) return false;
+  const list = rv.list.map(String).slice(0, 200).sort(), cur = self ? S.revs : S.contacts[u]?.revs;
+  if (list.length <= (cur?.list.length || 0)) return false;
+  const revs = { list, sig: String(rv.sig) };
+  if (self) {
+    if (myDev && list.includes(myDev)) { revokedMe(); return true; }
+    S.revs = revs; for (const dv of list) { delete S.devs?.[dv]; closeLinks(myId, dv); }
+  } else { const ct = S.contacts[u]; if (!ct) return false; ct.revs = revs; for (const dv of list) { delete ct.devs?.[dv]; closeLinks(u, dv); } }
+  save(); renderDevs(); return true;
+}
+async function onDevs(L, d) {
+  const u = L.uid, ppub = L.their.pub;
+  if (d.revs) await onRevs(d.revs, L.self, u, ppub);
+  if (wiping) return;
+  const ct = L.self ? null : S.contacts[u]; if (!L.self && !ct) return;
+  const devs = L.self ? (S.devs ||= {}) : (ct.devs ||= {}), rv = revSet(u);
+  for (const x of [].concat(d.list || []).slice(0, 20)) {
+    const dev = String(x?.dev || ''), p = cleanPub(x?.pub);
+    if (!/^[0-9a-z]{6}$/.test(dev) || rv.has(dev)) continue;
+    if (devs[dev]?.cert && devs[dev].cert === x.cert) { if (x.name) devs[dev].name = clean(x.name, 40); continue; }
+    if (await devIdOf(p) !== dev || !await verify(ppub, String(x.cert || ''), certStr(u, dev, p))) continue;
+    devs[dev] = { ...(devs[dev] || {}), dev, pub: p, cert: String(x.cert), name: clean(x.name, 40) };
+  }
+  if (L.self && myDev && d.pname) S.pname = clean(d.pname, 40);
+  save(); dial(u); renderDevs();
+}
+// основное устройство отвязывает другое: подписывает новый список отвязанных и рассылает его всем
+async function revokeDev(dev) {
+  if (myDev) return;
+  const list = [...new Set([...(S.revs?.list || []), dev])].sort();
+  S.revs = { list, sig: await sign(revStr(myId, list)) };
+  delete S.devs?.[dev]; save();
+  const m = devsMsg(); for (const u of links.keys()) send(u, m);
+  setTimeout(() => closeLinks(myId, dev), 1500);
+  jlog('[устройства] отвязано', dev); renderDevs();
+}
+// стереть с этого устройства всё: ключ, переписку, профиль — и снова показать первый экран
+async function wipeDevice(why) {
+  wiping = true; clearTimeout(saveT);
+  try { peer?.destroy(); } catch (e) {}
+  for (const n of ['kv', 'msgs', 'blobs']) await tx(n, 'readwrite', s => s.clear()).catch(() => {});
+  try { if (why) sessionStorage.setItem('kinozal-why', why); } catch (e) {}
+  location.hash = ''; location.reload();
+}
+function revokedMe() {
+  if (wiping) return;
+  jlog('[устройства] это устройство отвязали от профиля');
+  wipeDevice('Это устройство отвязали от профиля «' + (S.me?.name || '') + '» на основном устройстве — его данные здесь удалены. Можно создать новый профиль или войти снова.');
+}
+
+// ---------- вход в профиль с другого устройства: код из ID профиля и одноразового секрета ----------
+let linkSess = null;   // {secret, exp, tries, paint} — пока открыто окно «Подключить другое устройство»
+const linkMacStr = (nonce, dev, p) => 'link|' + nonce + '|' + dev + '|' + String(p.x) + '.' + String(p.y);
+async function hmac(secret, s) { const k = await crypto.subtle.importKey('raw', enc(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return b64(await crypto.subtle.sign('HMAC', k, enc(s))); }
+function parseLinkCode(s) { const m = String(s || '').match(/link=([0-9A-Za-z-]{16,24})/); const c = normId(m ? m[1] : s); return c.length === 16 ? { id: c.slice(0, 10), secret: c.slice(10) } : null; }
+// основное устройство: новое устройство постучалось с кодом
+function linkServe(c) {
+  const nonce = b64(rnd(18)); let done = false;
+  const bye = m => { try { c.send(m); } catch (e) {} setTimeout(() => { try { c.close(); } catch (e) {} }, 1500); };
+  c.on('open', () => {
+    if (myDev) return bye({ t: 'linkerr', e: 'notmain' });
+    if (!linkSess || Date.now() > linkSess.exp) return bye({ t: 'linkerr', e: 'nosess' });
+    c.send({ t: 'linkchal', nonce });
+  });
+  c.on('data', async d => {
+    if (done || d?.t !== 'linkreq') return; done = true;
+    const s = linkSess;
+    if (!s || Date.now() > s.exp) return bye({ t: 'linkerr', e: 'nosess' });
+    const dpub = cleanPub(d.dpub), dev = String(d.dev || ''), name = clean(d.name, 40) || 'Устройство';
+    const ok = /^[0-9a-z]{6}$/.test(dev) && dev === await devIdOf(dpub) && String(d.mac || '') === await hmac(s.secret, linkMacStr(nonce, dev, dpub));
+    if (!ok) { jlog('[устройства] неверный код'); if (++s.tries >= 5) { linkSess = null; s.paint?.('fail', 'Слишком много попыток с неверным кодом — открой это окно заново, будет новый код'); } else s.paint?.('bad'); return bye({ t: 'linkerr', e: 'code' }); }
+    if (revSet(myId).has(dev)) return bye({ t: 'linkerr', e: 'revoked' });
+    const cert = await sign(certStr(myId, dev, dpub));
+    (S.devs ||= {})[dev] = { dev, pub: dpub, cert, name, added: Date.now() };
+    linkSess = null; save();
+    c.send({ t: 'linkok', profile: myId, ppub: myPub, cert, me: { name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0 }, pname: devName(), devs: devList() });
+    setTimeout(() => { try { c.close(); } catch (e) {} }, 4000);
+    jlog('[устройства] подключено', dev, name);
+    s.paint?.('ok', name); toast('«' + name + '» подключено к профилю');
+    const m = devsMsg(); for (const u of links.keys()) send(u, m);   // собеседники узнают новое устройство
+    renderDevs();
+  });
+}
+// новое устройство: входит в профиль по коду; оба устройства должны быть в сети
+async function joinProfile(code, dname, status) {
+  const k = parseLinkCode(code); if (!k) throw new Error('Код — это 16 букв и цифр, например 7KQ2M-9XAB4-H3D8PQ');
+  if (typeof Peer === 'undefined') throw new Error('Нет связи с сервером — проверь интернет');
+  const dev = await devIdOf(keys.pub);
+  status('Подключаюсь к сети…');
+  const p = new Peer({ config: iceCfg(), debug: 0 });
+  let r;
+  try {
+    await new Promise((res, rej) => { p.on('open', res); p.on('error', e => rej(new Error('Нет связи с сервером — проверь интернет (' + (e.type || e) + ')'))); setTimeout(() => rej(new Error('Нет связи с сервером — проверь интернет')), 20000); });
+    status('Ищу устройство с профилем ' + fmtId(k.id) + '…');
+    r = await new Promise((res, rej) => {
+      const fail = t => { clearTimeout(to); rej(new Error(t)); };
+      const to = setTimeout(() => fail('Устройство с профилем не отвечает. Проверь, что на нём открыт Кинозал и окно «Подключить другое устройство».'), 30000);
+      p.on('error', e => fail(e.type === 'peer-unavailable' ? 'Устройство с профилем ' + fmtId(k.id) + ' сейчас не в сети. Открой на нём Кинозал: Профиль → «Мои устройства» → «Подключить другое устройство».' : 'Ошибка связи: ' + (e.type || e)));
+      const c = p.connect(pid(k.id), { reliable: true, metadata: { v: 1, link: 1 } });
+      c.on('data', async d => {
+        if (d?.t === 'linkchal') { status('Проверяю код…'); c.send({ t: 'linkreq', dev, dpub: keys.pub, name: dname, mac: await hmac(k.secret, linkMacStr(String(d.nonce || ''), dev, keys.pub)) }); }
+        else if (d?.t === 'linkok') { clearTimeout(to); res(d); }
+        else if (d?.t === 'linkerr') fail({
+          code: 'Код не подошёл — проверь его. Если ошибся несколько раз, открой окно подключения на основном устройстве заново.',
+          nosess: 'На основном устройстве не открыто окно подключения или код устарел. Открой там Профиль → «Мои устройства» → «Подключить другое устройство» и введи новый код.',
+          notmain: 'Это устройство само вошло в профиль с другого. Код нужно взять на основном устройстве — там, где профиль создан.',
+          revoked: 'Это устройство раньше отвязали от профиля — войти с ним снова нельзя.'
+        }[d.e] || 'Не получилось войти в профиль');
+      });
+      c.on('close', () => fail('Связь оборвалась — попробуй ещё раз'));
+    });
+  } finally { setTimeout(() => { try { p.destroy(); } catch (e) {} }, 300); }
+  status('Проверяю профиль…');
+  const ppub = cleanPub(r.ppub);
+  if (await idFromPub(ppub) !== k.id || !await verify(ppub, String(r.cert || ''), certStr(k.id, dev, keys.pub))) throw new Error('Ответ не похож на настоящий профиль — вход отменён');
+  const me = r.me || {}, devs = {};
+  for (const x of [].concat(r.devs || []).slice(0, 20)) { const p2 = cleanPub(x?.pub), dv = String(x?.dev || ''); if (/^[0-9a-z]{6}$/.test(dv) && await devIdOf(p2) === dv && await verify(ppub, String(x.cert || ''), certStr(k.id, dv, p2))) devs[dv] = { dev: dv, pub: p2, cert: String(x.cert), name: clean(x.name, 40) }; }
+  wiping = true; clearTimeout(saveT);   // дальше состояние пишем сами и перезапускаемся
+  await kvSet('ident', { profile: k.id, ppub, dev, cert: String(r.cert), name: clean(dname, 40) });
+  await kvSet('state', { me: { id: k.id, name: clean(me.name, 40) || 'Я', avatar: cleanAvatar(me.avatar), frame: window.kzTheme?.cleanFrame(me.frame) || null, pts: +me.pts || 0 }, contacts: {}, groups: {}, chats: {}, ended: {}, devs, pname: clean(r.pname, 40) });
+  if (me.name) store.set('name', clean(me.name, 40));
+  jlog('[устройства] вошёл в профиль', k.id, 'как', dev);
+  status('Готово! Загружаю переписку…');
+  await sleep(700); location.hash = ''; location.reload();
 }
 const KINDS = ['text', 'img', 'voice', 'circle', 'call', 'sys', 'file', 'plan'];
 const fileName = s => String(s || 'файл').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').trim().slice(0, 120) || 'файл';
@@ -343,20 +623,31 @@ function cleanMsg(x) {
   if (+x.open > m.ts && +x.open < m.ts + 400 * 864e5 && !['sys', 'call', 'plan'].includes(m.kind)) m.open = +x.open;   // капсула времени
   return m;
 }
-async function onMsg(u, d) {
-  const m = cleanMsg(d.m); if (!m) return;
-  if (isDm(m.chat)) { if (m.chat !== dmId(u) || (m.from !== u && m.from !== myId)) return; }
+function cleanRx(x) {   // реакции, которые принесло моё другое устройство
+  if (!x || typeof x !== 'object') return null;
+  const out = {}; for (const [u, v] of Object.entries(x).slice(0, 60)) { const id = normId(u); if (id.length === 10 && Array.isArray(v)) out[id] = [cleanEmoji(v[0]), +v[1] || 0]; }
+  return Object.keys(out).length ? out : null;
+}
+async function onMsg(L, d) {
+  const u = L.uid, m = cleanMsg(d.m); if (!m) return;
+  if (L.self) { const mem = members(m.chat); if (!mem.includes(myId) || !mem.includes(m.from)) return; }   // с моего устройства — любой мой чат
+  else if (isDm(m.chat)) { if (m.chat !== dmId(u) || (m.from !== u && m.from !== myId)) return; }
   else if (!shares(m.chat, u) || !members(m.chat).includes(m.from)) return;
-  if (S.gone?.[m.id] || m.ts <= (S.cleared?.[m.chat] || 0) || await msgGet(m.id)) { send(u, { t: 'ack', ids: [m.id] }); return; }
+  if (S.gone?.[m.id] || m.ts <= (S.cleared?.[m.chat] || 0) || await msgGet(m.id)) { if (!L.self) send(L, { t: 'ack', ids: [m.id] }); return; }
   if (m.blob) {
     const b = d.b instanceof ArrayBuffer ? d.b : ArrayBuffer.isView(d.b) ? d.b.buffer.slice(d.b.byteOffset, d.b.byteOffset + d.b.byteLength) : null;
     if (!b || !b.byteLength || b.byteLength > LIMIT) return;
     await blobPut(m.id, new Blob([b], { type: m.mime }));
   }
-  if (m.from === myId) m.ack = 1;
+  if (L.self) { if (d.m.ack) m.ack = 1; const rx = cleanRx(d.m.rx); if (rx) m.rx = rx; }
+  else if (m.from === myId) m.ack = 1;
   await msgPut(m);
-  send(u, { t: 'ack', ids: [m.id] });
+  if (!L.self) send(L, { t: 'ack', ids: [m.id] });
   arrived(m);
+  // пересылка между моими устройствами: чужое — моим другим устройствам (вдруг они не на связи с автором),
+  // моё с другого устройства — собеседникам, что на связи здесь (например, старому Кинозалу, который не пускает дополнительные устройства)
+  if (!L.self) { if (hasDevs()) push(myId, m); }
+  else if (m.from === myId) for (const x of members(m.chat)) if (x !== myId && isOn(x)) push(x, m);
 }
 // новое сообщение (своё или чужое) — в список, в открытый чат, в уведомления
 function arrived(m) {
@@ -380,7 +671,7 @@ function arrived(m) {
 
 // ---------- отправка ----------
 async function post(c, x, blob) {
-  if (isDm(c)) { const ct = S.contacts[dmPeer(c)]; if (ct && (ct.state === 'req' || ct.state === 'member')) { ct.state = 'ok'; save(); renderHead(); } }  // ответил — значит, свой
+  if (isDm(c)) { const ct = S.contacts[dmPeer(c)]; if (ct && (ct.state === 'req' || ct.state === 'member')) { ct.state = 'ok'; ctChanged(ct); renderHead(); } }  // ответил — значит, свой
   if (!['sys', 'call', 'plan'].includes(x.kind)) {
     if (replyTo?.chat === c) { x = { ...x, re: snip(replyTo) }; replyTo = null; }
     if (capsule?.chat === c) { if (capsule.ts > Date.now() + 5000) x = { ...x, open: capsule.ts }; capsule = null; }
@@ -390,7 +681,7 @@ async function post(c, x, blob) {
   const m = { id: uid(), chat: c, from: myId, ts: Date.now(), ...x };
   if (blob) { m.blob = 1; m.mime = blob.type; await blobPut(m.id, blob); }
   await msgPut(m); arrived(m);
-  for (const u of members(c)) if (u !== myId) { if (isOn(u)) push(u, m); else dial(u); }
+  for (const u of members(c)) if (u !== myId || hasDevs()) { if (isOn(u)) push(u, m); else dial(u); }   // и моим другим устройствам
   return m;
 }
 function markRead(c) {
@@ -415,7 +706,7 @@ function mergeGroup(x, from) {
   ensureChat(x.id); save(); renderList(); if (open === x.id) { renderHead(); }
   for (const u of mem) if (u !== myId && !isOn(u)) dial(u);
 }
-function pushGroup(g, extra = []) { const w = gWire(g); for (const u of new Set([...g.members, ...extra])) if (u !== myId) { if (isOn(u)) send(u, { t: 'groups', list: [w] }); else dial(u); } }
+function pushGroup(g, extra = []) { const w = gWire(g); for (const u of new Set([...g.members, ...extra])) if (u !== myId || hasDevs()) { if (isOn(u)) send(u, { t: 'groups', list: [w] }); else dial(u); } }
 async function createGroup(name, list) {
   const g = { id: 'g:' + uid(), name: clean(name, 60) || 'Группа', members: [myId, ...list], names: { [myId]: S.me.name }, owner: myId, ver: Date.now() };
   for (const u of list) g.names[u] = nameOf(u);
@@ -600,7 +891,7 @@ function renderHead() {
   const btn = (t, f, pri) => { const b = el('button', 'btn' + (pri ? ' pri' : ''), t); b.onclick = f; return b; };
   if (isDm(c)) {
     const u = dmPeer(c), ct = S.contacts[u];
-    if (ct?.state === 'req' || ct?.state === 'member') { bn.hidden = false; bn.append(el('span', '', ct.state === 'req' ? 'Этого человека нет в твоих контактах.' : 'Вы вместе в группе, но не в контактах.'), btn('Добавить в контакты', () => { ct.state = 'ok'; save(); renderHead(); }, 1)); if (ct.state === 'req') bn.append(btn('Заблокировать', () => block(u))); }
+    if (ct?.state === 'req' || ct?.state === 'member') { bn.hidden = false; bn.append(el('span', '', ct.state === 'req' ? 'Этого человека нет в твоих контактах.' : 'Вы вместе в группе, но не в контактах.'), btn('Добавить в контакты', () => { ct.state = 'ok'; ctChanged(ct); renderHead(); }, 1)); if (ct.state === 'req') bn.append(btn('Заблокировать', () => block(u))); }
     else if (ct?.state === 'blocked') { bn.hidden = false; bn.append(el('span', '', 'Ты заблокировал(а) этот контакт — сообщения от него не приходят.'), btn('Разблокировать', () => unblock(u), 1)); }
     else if (ct?.state === 'pending' && !isOn(u)) { bn.hidden = false; bn.append(el('span', '', 'Собеседник ещё не в сети. Напиши — сообщения уйдут, как только вы оба будете онлайн.')); }
     else if (!isOn(u) && S.chats[c]?.last?.from === myId && !S.chats[c]?.last?.ack) { /* без плашки: галочки и так покажут */ }
@@ -986,14 +1277,16 @@ async function setReact(m, e) {   // моя реакция; та же ещё р�
   if ((m.rx?.[myId]?.[0] || '') === e) e = '';
   const ts = Date.now(); (m.rx ||= {})[myId] = [e, ts];
   const d = await msgGet(m.id); if (!d) return; d.rx = m.rx; await msgPut(d); paintRx(m);
-  for (const u of members(m.chat)) if (u !== myId) sendOrQueue(u, { t: 'react', id: m.id, chat: m.chat, e, ts });
+  for (const u of members(m.chat)) if (u !== myId || hasDevs()) sendOrQueue(u, { t: 'react', id: m.id, chat: m.chat, e, ts });
 }
-async function onReact(u, d) {
+async function onReact(L, d) {
+  const u = L.self && d.by ? normId(d.by) : L.uid;   // с моего устройства: чья реакция — в by, без by — моя
   const m = await msgGet(String(d.id || '')); if (!m || !shares(m.chat, u)) return;
   const e = cleanEmoji(d.e), ts = +d.ts || 0; if (ts <= (m.rx?.[u]?.[1] || 0) || ts > Date.now() + 864e5) return;
   (m.rx ||= {})[u] = [e, ts]; await msgPut(m); paintRx(m);
+  if (!L.self && hasDevs()) send(myId, { t: 'react', id: m.id, chat: m.chat, e, ts, by: u });
   const viewing = open === m.chat && document.visibilityState === 'visible' && document.hasFocus() && !root.hidden;
-  if (e && m.from === myId && Date.now() - ts < 6e4 && !viewing) notify({ chat: m.chat, from: u, kind: 'text', text: e + ' — реакция на твоё сообщение' });
+  if (e && u !== myId && m.from === myId && Date.now() - ts < 6e4 && !viewing) notify({ chat: m.chat, from: u, kind: 'text', text: e + ' — реакция на твоё сообщение' });
 }
 function rxEl(m) {
   const w = el('div', 'rx'), by = {};
@@ -1025,14 +1318,16 @@ async function dropMsg(m) {
 async function dropForAll(m) {
   if (!confirm('Удалить сообщение у всех?')) return;
   const mem = members(m.chat); await dropMsg(m);
-  for (const u of mem) if (u !== myId) sendOrQueue(u, { t: 'del', id: m.id, chat: m.chat });
+  for (const u of mem) if (u !== myId || hasDevs()) sendOrQueue(u, { t: 'del', id: m.id, chat: m.chat });
 }
-async function onDel(u, d) {
+async function onDel(L, d) {
+  const u = L.self && d.by ? normId(d.by) : L.uid;   // с моего устройства: кто удалил — в by, без by — я
   const id = clean(d.id, 60); if (!id) return;
-  const m = await msgGet(id);
-  if (!m) { if (shares(String(d.chat || ''), u)) forget(id); return; }
-  if (m.from !== u || !shares(m.chat, u)) return;
-  await dropMsg(m);
+  const m = await msgGet(id), chat = String(d.chat || '');
+  if (!m) { if (shares(chat, u)) forget(id); }
+  else if (m.from !== u || !shares(m.chat, u)) return;
+  else await dropMsg(m);
+  if (!L.self && hasDevs()) send(myId, { t: 'del', id, chat, by: u });
 }
 
 // ---------- «тук-тук»: окно собеседника вздрагивает ----------
@@ -1168,7 +1463,7 @@ function addContact(id, alias) {   // вернёт текст ошибки ил�
   const ct = S.contacts[id];
   if (ct) { if (ct.state !== 'ok') ct.state = ct.state === 'blocked' ? 'pending' : 'ok'; if (alias) ct.alias = alias; }
   else S.contacts[id] = { id, name: '', alias: alias || '', state: 'pending', added: Date.now() };
-  save(); openChat(dmId(id)); dial(id); return '';
+  ctChanged(S.contacts[id]); openChat(dmId(id)); dial(id); return '';
 }
 function qrDlg() {
   modal((card, close) => {
@@ -1261,6 +1556,7 @@ async function startCall(c, kind) {
   await post(c, { kind: 'call', room: kind === 'cinema' ? 'cinema' : 'call', code });
 }
 async function joinCall(m) {
+  if (ringing?.code === m.code) send(myId, { t: 'ringoff', code: m.code });   // на других моих устройствах звонок больше не звенит
   stopRing(); markRead(m.chat);
   const R = window.kzRoom; if (!R) return;
   if (R.inRoom) { if (R.code === m.code) { R.show(); return; } toast('Сначала выйди из текущего звонка'); R.show(); return; }
@@ -1283,14 +1579,14 @@ function ring(m) {
   const bn = el('button', 'rb no', '✕'); bn.title = 'Отклонить'; const by = el('button', 'rb yes'); by.innerHTML = m.room === 'cinema' ? IC.film : IC.phone; by.title = 'Ответить';
   no.append(bn, el('div', 'rl', 'Отклонить')); yes.append(by, el('div', 'rl', 'Ответить'));
   row.append(no, yes); card.append(row); ov.append(card); document.body.append(ov);
-  bn.onclick = () => { send(m.from, { t: 'decline', code: m.code, chat: m.chat }); stopRing(); };
+  bn.onclick = () => { send(m.from, { t: 'decline', code: m.code, chat: m.chat }); send(myId, { t: 'ringoff', code: m.code }); stopRing(); };
   by.onclick = () => joinCall(m);
   try { ringAc = new AudioContext(); const loop = () => { if (!ringAc) return; const t = ringAc.currentTime + .05; tone(ringAc, 660, t, .35); tone(ringAc, 880, t + .38, .45); }; loop(); ringT = setInterval(loop, 2200); } catch (e) {}
   APP?.flash?.(true); notify(m, (m.room === 'cinema' ? 'Зовёт в кинозал' : 'Видеозвонок'));
   ringing.to = setTimeout(stopRing, 45000);
 }
 // ответить или отклонить из уведомления Android
-window.kzRing = { answer() { if (ringing) joinCall(ringing); }, decline() { if (ringing) { send(ringing.from, { t: 'decline', code: ringing.code, chat: ringing.chat }); stopRing(); } } };
+window.kzRing = { answer() { if (ringing) joinCall(ringing); }, decline() { if (ringing) { send(ringing.from, { t: 'decline', code: ringing.code, chat: ringing.chat }); send(myId, { t: 'ringoff', code: ringing.code }); stopRing(); } } };
 function stopRing() { if (ringing) APP?.stopRing?.(); clearInterval(ringT); ringT = 0; try { ringAc?.close(); } catch (e) {} ringAc = null; if (ringing) clearTimeout(ringing.to); ringing = null; document.querySelector('.mx-modal.ring')?.remove(); APP?.flash?.(false); }
 window.kzOnRoom = (ev, info) => {
   jlog('[зал]', ev, info?.code || '');
@@ -1342,21 +1638,116 @@ function avatarPicker(get, set) {
   };
   paint(); return [b, inp];
 }
-function helloDlg() {
+// первый экран: создать новый профиль или войти в свой с другого устройства (code — код из ссылки #link=…)
+function helloDlg(code) {
   const ov = el('div', 'mx-hello'), card = el('div', 'mx-card'); ov.append(card); document.body.append(ov);
+  let why = ''; try { why = sessionStorage.getItem('kinozal-why') || ''; sessionStorage.removeItem('kinozal-why'); } catch (e) {}
   let avatar = '';
-  card.innerHTML = IC.logo;
-  const [ap, inp] = avatarPicker(() => avatar, v => { avatar = v; });
-  const name = el('input'); name.type = 'text'; name.maxLength = 40; name.placeholder = 'Как тебя зовут?'; name.value = store.get('name', '');
-  const go = btnEl('Начать', 'pri', () => {
-    const n = clean(name.value, 40); if (!n) { name.focus(); return; }
-    S.me = { id: myId, name: n, avatar }; store.set('name', n); save();
-    ov.remove(); boot();
+  const create = () => {
+    card.textContent = ''; card.innerHTML = IC.logo;
+    const [ap, inp] = avatarPicker(() => avatar, v => { avatar = v; });
+    const name = el('input'); name.type = 'text'; name.maxLength = 40; name.placeholder = 'Как тебя зовут?'; name.value = store.get('name', '');
+    const go = btnEl('Создать новый профиль', 'pri', () => {
+      const n = clean(name.value, 40); if (!n) { name.focus(); return; }
+      S.me = { id: myId, name: n, avatar, pts: Date.now() }; store.set('name', n); save();
+      ov.remove(); boot();
+    });
+    name.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
+    card.append(el('h2', '', 'Добро пожаловать в Кинозал'), el('p', '', 'Мессенджер с голосовыми, кружочками и видеозвонками — а ещё можно смотреть кино вместе. Без регистрации: всё напрямую между вами.'));
+    if (why) card.append(el('p', 'err', why));
+    card.append(ap, inp, name, go, el('div', 'sep'), btnEl('🔗 Войти в профиль с другого устройства', '', () => join('')));
+    if (ANDROID_WEB) { const a = el('a', 'btn', '📲 Удобнее в приложении для Android — уведомления и звонки даже в фоне'); a.href = APK; a.rel = 'noopener'; a.style.textDecoration = 'none'; card.append(a); }
+    if (!TOUCH) setTimeout(() => name.focus(), 50);
+  };
+  const join = pre => {
+    card.textContent = ''; card.innerHTML = IC.logo;
+    const inp = el('input'); inp.type = 'text'; inp.placeholder = 'XXXXX-XXXXX-XXXXXX'; inp.maxLength = 200; inp.autocomplete = 'off'; inp.autocapitalize = 'characters'; inp.spellcheck = false;
+    inp.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase'; inp.value = pre || '';
+    const dn = el('input'); dn.type = 'text'; dn.maxLength = 40; dn.value = devName(); dn.placeholder = 'Как назвать это устройство';
+    const st = el('p'), err = el('div', 'err');
+    const back = btnEl('Назад', '', create);
+    const go = btnEl('Войти', 'pri', async () => {
+      err.textContent = ''; go.disabled = back.disabled = inp.disabled = dn.disabled = true;
+      try { await joinProfile(inp.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }); }
+      catch (e) { st.textContent = ''; err.textContent = e?.message || String(e); go.disabled = back.disabled = inp.disabled = dn.disabled = false; }
+    });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
+    const row = el('div', 'row'); row.style.justifyContent = 'center'; row.append(back, go);
+    card.append(el('h2', '', 'Вход в профиль'), el('p', '', 'На устройстве, где профиль уже есть, открой Профиль → «Мои устройства» → «Подключить другое устройство». Введи код оттуда — или наведи камеру телефона на QR-код. Оба устройства должны быть в сети.'),
+      el('label', '', 'Код подключения'), inp, el('label', '', 'Название этого устройства'), dn, st, err, row);
+    if (pre) go.click(); else if (!TOUCH) setTimeout(() => inp.focus(), 50);
+  };
+  code ? join(code) : create();
+}
+// профиль → мои устройства: список, подключить новое, отвязать, выйти из профиля на этом устройстве
+function devicesDlg() {
+  modal((card, close) => {
+    const list = el('div', 'mlist');
+    const ic = n => /^(Телефон|iPhone|Планшет)/.test(n || '') ? '📱' : '💻';
+    const item = (name, sub, on, btn) => {
+      const p = el('div', 'pick'), w = el('div', 'avwrap'), a = el('div', 'av'); a.style.setProperty('--s', '38px'); a.style.setProperty('--h', hash(name) % 360); a.textContent = ic(name);
+      w.append(a, el('i', 'dot')); if (on) w.classList.add('on');
+      const t = el('span'); t.append(document.createTextNode(name), el('small', '', sub)); p.append(w, t); if (btn) p.append(btn); list.append(p);
+    };
+    const st = d => isDevOn(myId, d) ? 'в сети' : seenText(S.devSeen?.[d]);
+    const paint = () => {
+      if (!card.isConnected) { if (devsPaint === paint) devsPaint = null; return; }
+      list.textContent = '';
+      if (myDev) item(S.pname || 'Основное устройство', 'основное · ' + st(''), isDevOn(myId, ''));
+      else item(devName(), 'это устройство · основное', true);
+      const rv = revSet(myId);
+      for (const x of Object.values(S.devs || {}).filter(x => !rv.has(x.dev)).sort((a, b) => (a.added || 0) - (b.added || 0))) {
+        const me = x.dev === myDev;
+        const b = !myDev ? btnEl('Отвязать', '', () => { if (confirm('Отвязать «' + (x.name || 'устройство') + '» от профиля? Переписка на нём удалится, войти с него снова можно будет только с новым кодом.')) revokeDev(x.dev); }) : null;
+        if (b) b.style.minHeight = '34px';
+        item(x.name || 'Устройство', me ? 'это устройство' : st(x.dev), me || isDevOn(myId, x.dev), b);
+      }
+    };
+    card.append(el('h2', '', 'Мои устройства'));
+    if (myDev) card.append(el('p', '', 'Это устройство вошло в профиль «' + (S.me?.name || '') + '» (ID ' + fmtId(myId) + '). Переписка, контакты и группы сверяются между твоими устройствами, когда они в сети одновременно. Новые устройства подключаются на основном — там, где профиль создан.'));
+    else card.append(el('p', '', 'Профиль можно открыть на телефоне или другом компьютере — переписка, контакты и группы будут одни и те же. Ключ профиля хранится на этом устройстве: не удаляй здесь данные Кинозала, иначе новые устройства подключить будет нельзя.'));
+    card.append(list);
+    if (!myDev) { const b = btnEl('＋ Подключить другое устройство', 'pri', () => { close(); linkDlg(); }); card.append(b); }
+    else card.append(btnEl('🚪 Выйти из профиля на этом устройстве', '', () => {
+      if (!confirm('Выйти из профиля на этом устройстве? Переписка, контакты и настройки профиля здесь удалятся. На других твоих устройствах всё останется, а войти сюда снова можно будет по новому коду.')) return;
+      close(); jlog('[устройства] выход из профиля на этом устройстве');
+      send(myId, { t: 'bye' });   // основное устройство уберёт меня из списка (если оно сейчас в сети)
+      setTimeout(() => wipeDevice('Ты вышел(-ла) из профиля на этом устройстве. Можно создать новый профиль или войти снова.'), 600);
+    }));
+    const row = el('div', 'row'); row.append(btnEl('Готово', '', close)); card.append(row);
+    devsPaint = paint; paint();
   });
-  name.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
-  card.append(el('h2', '', 'Добро пожаловать в Кинозал'), el('p', '', 'Мессенджер с голосовыми, кружочками и видеозвонками — а ещё можно смотреть кино вместе. Без регистрации: всё напрямую между вами.'), ap, inp, name, go);
-  if (ANDROID_WEB) { const a = el('a', 'btn', '📲 Удобнее в приложении для Android — уведомления и звонки даже в фоне'); a.href = APK; a.rel = 'noopener'; a.style.textDecoration = 'none'; card.append(a); }
-  if (!TOUCH) setTimeout(() => name.focus(), 50);
+}
+// основное устройство: показать одноразовый код и QR для входа с нового устройства
+function linkDlg() {
+  if (myDev) return;
+  modal((card, close) => {
+    card.style.justifyItems = 'center'; card.style.textAlign = 'center';
+    const secret = b32(rnd(4)).slice(0, 6), code = myId + secret, link = WEB + '#link=' + code;
+    const s = linkSess = { secret, exp: Date.now() + 10 * 6e4, tries: 0 };
+    const box = el('div', 'qrbox');
+    try { const q = qrcode(0, 'M'); q.addData(link); q.make(); box.innerHTML = q.createSvgTag({ cellSize: 6, margin: 3, scalable: true }); } catch (e) { box.textContent = link; }
+    const cd = el('div', 'idcard'), ct = el('div'); ct.append(el('span', 'lab', 'Код подключения'), el('code', '', fmtId(myId) + '-' + secret)); cd.append(ct, btnEl('Скопировать', '', () => navigator.clipboard.writeText(fmtId(myId) + '-' + secret).then(() => toast('Код скопирован')).catch(() => {})));
+    const stt = el('p'), err = el('div', 'err');
+    const left0 = () => Math.max(0, Math.round((s.exp - Date.now()) / 1000));
+    const wait = () => { stt.textContent = net === 'on' ? 'Жду новое устройство… Код действует ещё ' + fmtDur(left0()) + '.' : 'Нет связи с сетью — код заработает, как только Кинозал подключится.'; };
+    s.paint = (k, t) => {
+      if (k === 'ok') { clearInterval(tm); box.remove(); cd.remove(); err.textContent = ''; stt.textContent = '✅ «' + t + '» подключено к профилю. Переписка, контакты и группы перенесутся туда, пока оба устройства в сети.'; }
+      else if (k === 'bad') err.textContent = 'Кто-то ввёл неверный код — проверь, что он набран без ошибок.';
+      else if (k === 'fail') { clearInterval(tm); box.remove(); cd.remove(); stt.textContent = ''; err.textContent = t; }
+    };
+    const tm = setInterval(() => {
+      if (!card.isConnected) { clearInterval(tm); if (linkSess === s) linkSess = null; return; }
+      if (linkSess !== s) return;
+      if (Date.now() > s.exp) { clearInterval(tm); linkSess = null; box.remove(); cd.remove(); stt.textContent = 'Код устарел — открой это окно заново, будет новый.'; return; }
+      wait();
+    }, 1000);
+    wait();
+    const row = el('div', 'row'); row.style.justifyContent = 'center'; row.append(btnEl('Готово', 'pri', close));
+    card.append(el('h2', '', 'Подключить другое устройство'),
+      el('p', '', 'На новом устройстве открой Кинозал — программу, приложение для Android или сайт ' + WEB.replace(/^https:\/\//, '') + ' — и нажми «Войти в профиль с другого устройства». Введи этот код или наведи камеру телефона на QR-код. Не закрывай это окно, пока устройство не подключится.'),
+      box, cd, stt, err, row);
+  });
 }
 function addContactDlg() {
   modal((card, close) => {
@@ -1413,7 +1804,7 @@ function settingsDlg() {
     const [ap, inp] = avatarPicker(() => avatar, v => { avatar = v; });
     const name = el('input'); name.type = 'text'; name.maxLength = 40; name.value = S.me.name;
     const snd = el('label', 'switch'), sc = el('input'); sc.type = 'checkbox'; sc.checked = store.get('mxSound', '1') === '1'; snd.append(document.createTextNode('Звук уведомлений'), sc);
-    card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), el('div', 'sep'), snd);
+    card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), btnEl(myDev ? '📱 Мои устройства и выход из профиля' : '📱 Мои устройства — войти в профиль с телефона или другого компьютера', '', () => { close(); devicesDlg(); }), el('div', 'sep'), snd);
     let auto = null;
     if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode(ANDROID ? 'Работать в фоне — сообщения и звонки приходят, даже когда Кинозал свёрнут' : 'Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
     if (ANDROID) APP.info().then(i => {
@@ -1438,13 +1829,14 @@ function settingsDlg() {
     const row = el('div', 'row');
     row.append(btnEl('Отмена', '', close), btnEl('Сохранить', 'pri', () => {
       const n = clean(name.value, 40); if (!n) { name.focus(); return; }
+      if (n !== S.me.name || avatar !== (S.me.avatar || '')) S.me.pts = Date.now();   // свежее имя побеждает на всех моих устройствах
       S.me.name = n; S.me.avatar = avatar; store.set('name', n); store.set('mxSound', sc.checked ? '1' : '0');
       if (auto) APP.autostart(auto.checked);
       const tj = tu.value.trim() ? JSON.stringify({ url: tu.value.trim(), user: tn.value.trim(), pass: tp.value }) : '';
       if (tj !== (localStorage.getItem('kinozal-turn') || '')) { try { tj ? localStorage.setItem('kinozal-turn', tj) : localStorage.removeItem('kinozal-turn'); } catch (e) {} if (!window.kzRoom?.inRoom) startPeer(); }
       for (const g of Object.values(S.groups)) if (g.names) g.names[myId] = n;
       save(); renderMe(); renderList(); renderHead();
-      for (const u of links.keys()) send(u, { t: 'profile', name: n, avatar, frame: S.me.frame || null });
+      sendProfile();   // собеседникам и моим другим устройствам
       close();
     }));
     card.append(row);
@@ -1458,7 +1850,7 @@ function openTheme() {
     onFrame: f => {
       const was = JSON.stringify(S.me.frame || null); S.me.frame = f; save();
       renderMe(); renderList(); if (open) renderChat();
-      if (was !== JSON.stringify(f || null)) for (const u of links.keys()) send(u, { t: 'profile', name: S.me.name, avatar: S.me.avatar || '', frame: f || null });
+      if (was !== JSON.stringify(f || null)) { S.me.pts = Date.now(); save(); sendProfile(); }
     }
   });
 }
@@ -1499,7 +1891,7 @@ function infoDlg(c) {
       row.append(btnEl('📞 Позвонить', '', () => { close(); startCall(c, 'call'); }), btnEl('🎬 Кинозал', '', () => { close(); startCall(c, 'cinema'); }));
       card.append(row);
       const row2 = el('div', 'row'); row2.style.justifyContent = 'center';
-      row2.append(btnEl(ct.state === 'blocked' ? 'Разблокировать' : 'Заблокировать', '', () => { close(); ct.state === 'blocked' ? unblock(u) : block(u); }), btnEl('Готово', 'pri', () => { if (S.contacts[u]) { S.contacts[u].alias = clean(alias.value, 40); save(); renderList(); renderHead(); } close(); }));
+      row2.append(btnEl(ct.state === 'blocked' ? 'Разблокировать' : 'Заблокировать', '', () => { close(); ct.state === 'blocked' ? unblock(u) : block(u); }), btnEl('Готово', 'pri', () => { const ct2 = S.contacts[u]; if (ct2) { const a = clean(alias.value, 40); if (a !== (ct2.alias || '')) { ct2.alias = a; ctChanged(ct2); } renderList(); renderHead(); } close(); }));
       card.append(row2);
     } else {
       const g = S.groups[c]; if (!g) return close();
@@ -1554,7 +1946,7 @@ async function leaveGroup(c) {
   await post(c, { kind: 'sys', text: S.me.name + ' выходит из группы' });
   await sleep(400);
   const old = [...g.members]; g.members = g.members.filter(u => u !== myId); g.ver = Date.now();
-  const w = gWire(g); for (const u of old) if (u !== myId) send(u, { t: 'groups', list: [w] });
+  const w = gWire(g); for (const u of old) send(u, { t: 'groups', list: [w] });   // myId — мои другие устройства
   delete S.groups[c]; delete S.chats[c]; save(); await wipeChat(c);
   if (open === c) closeChat(); renderList();
 }
@@ -1589,7 +1981,7 @@ function removeChat(c) {
 async function dropChat(c, forgetContact) {
   await markCleared(c); await wipeChat(c);
   delete S.chats[c]; if (!isDm(c)) delete S.groups[c];
-  if (forgetContact) { const u = dmPeer(c); delete S.contacts[u]; links.get(u)?.c.close(); }
+  if (forgetContact) { const u = dmPeer(c); delete S.contacts[u]; closeLinks(u); }
   save(); if (open === c) closeChat(); renderList(); toast('Чат удалён');
 }
 // меню чата в списке: долгое нажатие на телефоне или правый клик на компьютере
@@ -1604,8 +1996,8 @@ function listMenu(c, x, y) {
   else add('🗑', 'Удалить чат', () => removeChat(c), 'danger');
   document.body.append(mn); mn.addEventListener('click', e => e.stopPropagation());
 }
-function block(u) { const ct = S.contacts[u] ||= { id: u, name: '', added: Date.now() }; ct.state = 'blocked'; save(); links.get(u)?.c.close(); renderList(); renderHead(); toast('Заблокировано'); }
-function unblock(u) { const ct = S.contacts[u]; if (ct) ct.state = 'ok'; save(); dial(u); renderList(); renderHead(); }
+function block(u) { const ct = S.contacts[u] ||= { id: u, name: '', added: Date.now() }; ct.state = 'blocked'; ctChanged(ct); closeLinks(u); renderList(); renderHead(); toast('Заблокировано'); }
+function unblock(u) { const ct = S.contacts[u]; if (ct) { ct.state = 'ok'; ctChanged(ct); } save(); dial(u); renderList(); renderHead(); }
 function chatMenu(c, anchor) {
   closeMenus();
   const r = anchor.getBoundingClientRect(), mn = el('div', 'menu fabmenu mx-pop');
@@ -1632,7 +2024,9 @@ function boot() {
     const h = location.hash.slice(1); if (!h) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     const a = h.match(/add=([0-9A-Za-z-]{10,13})/);
+    const lk = /link=/.test(h) && parseLinkCode(h);
     if (a) { const e = addContact(normId(a[1])); if (e) toast(e); else toast('Собеседник добавлен — напиши ему'); }
+    else if (lk) toast(lk.id === myId ? 'Это устройство уже в этом профиле' : 'Это устройство уже в профиле «' + (S.me?.name || '') + '». Чтобы войти в другой, сначала выйди из этого: Профиль → «Мои устройства»' + (myDev ? '' : ' (здесь профиль создан — выйти из него нельзя)'));
     else if (/^[A-Za-z0-9]{5}$/.test(h) && window.kzRoom && !window.kzRoom.busy) { toast('Подключаюсь к залу ' + h.toUpperCase() + '…'); window.kzRoom.join(h.toUpperCase(), S.me.name).then(ok => { if (!ok) toast('Зал с таким кодом не найден'); }); }
   };
   go(); window.addEventListener('hashchange', go);
@@ -1642,8 +2036,8 @@ function boot() {
     if (S.me && root.hidden && room?.hidden && !document.querySelector('.mx-hello')) { console.warn('[мессенджер] экран был пустым — показываю чаты'); root.hidden = false; renderList(); }
   }, 2000);
 }
-window.__mx = { get S() { return S; }, myId, links, openChat, post, get open() { return open; } }; // для диагностики
-if (S.me) boot(); else helloDlg();
+window.__mx = { get S() { return S; }, myId, myDev, myPeer, links, isOn, openChat, post, devicesDlg, linkDlg, get linkSess() { return linkSess; }, get open() { return open; } }; // для диагностики
+if (S.me) boot(); else helloDlg((location.hash.match(/link=([0-9A-Za-z-]{16,24})/) || [])[1] || '');
 })().catch(e => {
   // не оставляем пустой тёмный экран: показываем, что случилось, и кнопку перезапуска
   console.error('[мессенджер] не запустился: ' + (e?.stack || e));
