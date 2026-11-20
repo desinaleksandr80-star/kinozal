@@ -137,6 +137,7 @@ code{font:13px/1.5 ui-monospace,Consolas,monospace;background:#0b1012;border:1px
 .tile .lat{position:absolute;right:6px;top:6px;font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:8px;background:rgba(0,0,0,.55);color:#7ee2a8;font-variant-numeric:tabular-nums}
 .tile .lat.mid{color:#ffd166}.tile .lat.bad{color:#ff8a7a}
 .tile .lat:empty{display:none}
+.tile.muted .lat{right:40px}
 /* громкость каждого — появляется при наведении на плитку */
 .tvol{position:absolute;left:6px;right:6px;top:6px;display:flex;align-items:center;gap:6px;margin:0;padding:3px 8px;border-radius:9px;background:rgba(0,0,0,.66);color:var(--ink);font-size:12px;font-weight:700;opacity:0;transition:opacity .15s;z-index:3;cursor:default}
 .tvol input{flex:1;min-width:40px;height:16px}
@@ -254,6 +255,40 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 @keyframes kzTileIn{from{opacity:0;transform:scale(.88)}}
 @keyframes kzMsg{from{opacity:0;transform:translateY(8px)}}
 @keyframes kzNudge{0%,100%{transform:translate(-50%,-50%) scale(1)}50%{transform:translate(-50%,-50%) scale(1.06)}}
+/* действия на плитке: закрепить крупно, удалить из зала */
+.tact{position:absolute;right:6px;bottom:6px;display:flex;gap:5px;opacity:0;transform:translateY(4px);transition:opacity .18s,transform .18s;z-index:4}
+.tile:hover .tact,.tact:focus-within,.touch .tact{opacity:1;transform:none}
+.tact button{min-height:0;width:32px;height:32px;padding:0;display:grid;place-items:center;border-radius:50%;background:rgba(8,12,14,.72);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(6px);font-size:15px;line-height:1}
+.tact button:hover{background:rgba(30,40,44,.92);transform:scale(1.08)}
+.tact .kick:hover{background:#7a2318;border-color:#ff6b4a}
+.tile.pinned .tact .pin{background:var(--acc);border-color:var(--acc)}
+.tile .dev{font-size:.85em;margin-left:4px;opacity:.85}
+.room:not(.hallview) .tile.scr{display:none}
+.tile.scr video{object-fit:contain;background:#000}
+.tile.scr figcaption{color:#ffd7cc}
+.tile.scr.watching{box-shadow:0 0 0 3px var(--acc) inset}
+/* приоритет: один крупно, остальные полосой снизу */
+#spot{display:none}
+.callstage.spotting{display:flex;flex-direction:column;gap:10px}
+.callstage.spotting #spot{display:block;position:relative;flex:1 1 0;min-height:0}
+.callstage.spotting #spot .tile{position:absolute;inset:0;width:auto!important;height:auto;aspect-ratio:auto;border-radius:14px;animation:kzSpot .35s cubic-bezier(.2,.9,.25,1)}
+.callstage.spotting #spot .tile video{object-fit:contain;background:#000}
+.room.hallview .callstage.spotting #tiles{flex:none;height:clamp(84px,19%,150px);display:flex!important;justify-content:center;align-items:stretch;gap:10px;overflow-x:auto;overflow-y:hidden;scrollbar-width:thin}
+.room.hallview .callstage.spotting #tiles>.tile:not(.float){height:100%;width:auto;aspect-ratio:4/3;flex:none}
+.room.hallview .callstage.spotting #tiles>.tile .ava{font-size:30px}
+.room.hallview .tile{cursor:pointer}
+@keyframes kzSpot{from{opacity:0;transform:scale(.94)}}
+/* несколько показов экрана — переключатель, кого смотреть */
+.sharesw{position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:6px;padding:5px;border-radius:999px;background:rgba(8,12,14,.7);border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(8px);z-index:3;max-width:calc(100% - 24px);overflow-x:auto;transition:opacity .25s}
+.sharesw button{min-height:32px;padding:4px 14px;border-radius:999px;font-size:13px;white-space:nowrap;background:transparent;border:0;color:var(--mute)}
+.sharesw button.on{background:var(--acc);color:#1b0b06}
+.stage.idle .sharesw{opacity:0;pointer-events:none}
+.stage.sharing .shareTag{top:auto;bottom:70px}
+/* качество показа: разрешение, кадры, режим */
+.shareq{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.shareq select{min-height:40px;font-size:14px}
+.shareTip{margin-top:6px;padding:8px 10px;border-radius:10px;background:rgba(255,179,163,.1);border:1px solid rgba(255,179,163,.35);color:#ffd7cc}
+.pickhint{margin:0;font-size:13px;color:var(--mute)}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -286,9 +321,11 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
             <span id="shareNet"></span>
             <span id="shareAec"></span>
             <span class="warn" id="shareWarn"></span>
+            <span class="shareTip" id="shareTip" hidden>Зрители видят застывшую картинку — например, меню игры и курсор? Так бывает с играми на весь экран: их кадры идут мимо захвата Windows. Переключи игру в оконный режим без рамки (в Minecraft — нажми F11, чтобы выйти из полноэкранного, и разверни окно) — и картинка оживёт.</span>
             <div class="row"><button class="main" id="shareStop">Остановить показ</button><button id="pvBtn">Скрыть превью</button></div>
           </div>
           <div class="shareTag" id="shareTag"></div>
+          <div class="sharesw" id="shareSw" hidden role="group" aria-label="Чей экран смотреть"></div>
           <button class="main" id="shareUnmute" hidden>Включить звук</button>
         </div>
         <div class="subs" id="subs"></div>
@@ -324,11 +361,24 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
         <button class="main cine" id="fileBtn" hidden>Выбрать фильм</button>
         <button class="cine" id="ownBtn" hidden>У меня есть этот файл</button>
         <button id="shareBtn">Показать экран</button>
-        <select class="cine" id="shareQ" aria-label="Качество показа экрана">
-          <option value="motion">1080p · 60 к/с — игры и видео (до 30 Мбит/с)</option>
-          <option value="max">Родное разрешение · 60 к/с — максимум (до 40 Мбит/с)</option>
-          <option value="detail">Текст и код — чёткость, 30 к/с (до 20 Мбит/с)</option>
-        </select>
+        <span class="shareq cine" id="shareQ">
+          <select id="shareRes" aria-label="Разрешение показа экрана" title="Разрешение показа. Выше родного монитора не бывает">
+            <option value="native">Родное разрешение (до 4K)</option>
+            <option value="2160">4K · 2160p</option>
+            <option value="1440">2K · 1440p</option>
+            <option value="1080">Full HD · 1080p</option>
+            <option value="720">HD · 720p</option>
+          </select>
+          <select id="shareFps" aria-label="Кадров в секунду" title="Кадров в секунду. Больше, чем частота монитора, не получится">
+            <option value="15">15 к/с</option><option value="24">24 к/с</option><option value="30">30 к/с</option><option value="60">60 к/с</option>
+            <option value="75">75 к/с</option><option value="90">90 к/с</option><option value="120">120 к/с</option><option value="144">144 к/с</option>
+            <option value="165">165 к/с</option><option value="240">240 к/с</option>
+          </select>
+          <select id="shareHint" aria-label="Что показываешь">
+            <option value="motion">Игры и видео — плавность</option>
+            <option value="detail">Текст и код — чёткость</option>
+          </select>
+        </span>
         <input type="file" id="file" accept="video/*,.mkv,.avi,.mov,.m4v" hidden>
         <input type="file" id="subFile" accept=".srt,.vtt,.sub,text/vtt" hidden>
         <span class="grow cine" id="movieName"></span>
@@ -353,7 +403,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
     </div>
     <div class="callarea" id="callarea">
       <div class="callnote" id="callNote" hidden><span id="callNoteText"></span><button class="main" id="callNoteGo">Смотреть</button></div>
-      <div class="callstage" id="callStage"><div class="alone" id="alone" hidden>Пока здесь только ты · код зала <b id="aloneCode"></b></div></div>
+      <div class="callstage" id="callStage"><div id="spot" hidden></div><div class="alone" id="alone" hidden>Пока здесь только ты · код зала <b id="aloneCode"></b></div></div>
       <div class="fslog"></div>
       <form class="fsform"><input type="text" maxlength="500" placeholder="Сообщение в чат, Enter — отправить" autocomplete="off"></form>
     </div>
@@ -368,6 +418,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
           <select id="ecSel"><option value="all">Весь звук компьютера — эха нет даже с колонками</option><option value="voices">Только голоса собеседников</option></select>
           <label for="camSel">Камера</label>
           <select id="camSel"></select>
+          <label class="chk" style="margin-top:6px;font-size:14px"><input type="checkbox" id="startMuted"> Входить в зал с выключенными микрофоном и камерой</label>
           <p class="devnote" id="devNote"></p>
         </div>
         <div id="tiles"></div>
@@ -390,6 +441,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
     <div class="pickrow">
       <label class="chk"><input type="checkbox" id="pickAudio" checked> Звук компьютера</label>
       <span id="pickQ"></span>
+      <p class="pickhint" style="flex-basis:100%">🎮 Игру лучше держать в оконном режиме без рамки: из полноэкранного режима зрителям может прийти застывший кадр.</p>
       <span class="grow"></span>
       <button id="pickCancel">Отмена</button>
       <button class="main" id="pickGo" disabled>Показать</button>
@@ -446,6 +498,12 @@ let vol=+store.get('vol',1),callVol=+store.get('callVol',1);
 $('#vol').value=vol;$('#callVol').value=callVol;
 
 const rand=(n,abc='ABCDEFGHJKLMNPQRSTUVWXYZ23456789')=>Array.from({length:n},()=>abc[Math.floor(Math.random()*abc.length)]).join('');
+// постоянный номер этого устройства: перезашёл в зал (закрыл приложение и открыл снова) — ведущий
+// узнаёт его и сразу убирает старое, уже мёртвое подключение, а не держит «двойника»
+const DEVID=(()=>{let d=store.get('devid','');if(!/^[a-z0-9]{8}$/.test(d)){d=rand(8,'abcdefghijkmnpqrstuvwxyz23456789');store.set('devid',d);}return d;})();
+const DEVKIND=window.kzAndroid||TOUCHDEV?'phone':'pc';
+const kinds=new Map();      // id -> 'phone' | 'pc'
+const avState=new Map();    // id -> {mic,cam}: включены ли у собеседника микрофон и камера
 const clean=s=>String(s||'').trim().slice(0,24);
 const title=s=>String(s||'').trim().slice(0,200);
 const fmt=t=>{t=Math.max(0,Math.floor(t||0));const h=Math.floor(t/3600),m=Math.floor(t/60)%60,s=String(t%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+s:m+':'+s;};
@@ -595,27 +653,44 @@ async function openCam(){
     camErr=why(e,'Камера');return null;
   }
 }
+// Входим с выключенными микрофоном и камерой (можно отключить в «⚙ Микрофон и камера»): сначала осмотрелся — потом включил.
+// Микрофон открыт, но молчит (так видно, что он работает, и включается мгновенно), камера не открывается вовсе — лампочка не горит.
+const startMuted=()=>store.get('startMuted','1')==='1';
+$('#startMuted').checked=startMuted();
+$('#startMuted').onchange=e=>store.set('startMuted',e.target.checked?'1':'0');
+let camOff=false;   // камеру выключили кнопкой: устройство отпущено, вместо неё чёрный кадр
 async function initMedia(){
   micErr=camErr='';local=new MediaStream();
+  const quiet=startMuted();camOff=quiet;
   let a=null,v=null;
   // одним запросом (одно окно разрешения в браузере), а если не вышло — по отдельности
-  if(camId!=='off'){try{const s=await gum({audio:audioC(micId),video:videoC(camId)});a=s.getAudioTracks()[0];v=s.getVideoTracks()[0];}catch(e){}}
+  if(camId!=='off'&&!quiet){try{const s=await gum({audio:audioC(micId),video:videoC(camId)});a=s.getAudioTracks()[0];v=s.getVideoTracks()[0];}catch(e){}}
   if(!a)a=await openMic();
-  if(!v)v=await openCam();
+  if(!v&&!quiet)v=await openCam();
   micReal=!!a;camReal=!!v;
-  jlog('[микрофон]',a?JSON.stringify({ec:a.getSettings?.().echoCancellation,label:a.label}):'нет: '+micErr,'| камера:',v?v.label:'нет '+camErr);
+  if(a&&quiet)a.enabled=false;
+  jlog('[микрофон]',a?JSON.stringify({ec:a.getSettings?.().echoCancellation,label:a.label}):'нет: '+micErr,'| камера:',v?v.label:quiet?'выкл при входе':'нет '+camErr);
   local.addTrack(a||silentTrack()||blackTrack());local.addTrack(v||blackTrack());
   watchTrack(a);watchTrack(v);
   if(!micReal)toast(micErr);else if(!camReal&&camErr)toast(camErr+' — подключаюсь без камеры');
+  else if(quiet)setTimeout(()=>osd('Микрофон и камера выключены — включишь, когда будешь готов'),600);
   addTile('me',myName+' (ты)',local,true);syncBtns();monitorLocal();fillDevices();
   if(!micReal)$('#devs').hidden=false;
+}
+// камера: выключить — отпустить устройство; включить — открыть заново
+async function setCam(on){
+  if(!local)return;
+  if(!on){camOff=true;camReal=false;putTrack('video',blackTrack());syncBtns();osd('Камера выключена');return;}
+  camOff=false;if(camId==='off')camId='';
+  await switchCam(camId);
+  if(camReal)osd('Камера включена');
 }
 // подменяем дорожку в своём потоке и во всех идущих звонках
 function putTrack(kind,track){
   const old=kind==='audio'?local.getAudioTracks()[0]:local.getVideoTracks()[0];
   if(old===track)return;
   if(old&&track&&kind==='audio')track.enabled=old.fake?true:old.enabled;
-  if(old&&track&&kind==='video')track.enabled=old.fake?true:old.enabled;
+  if(old&&track&&kind==='video')track.enabled=old.fake||track.fake?true:old.enabled;
   if(old){local.removeTrack(old);old.stop();}
   local.addTrack(track);
   for(const c of camCalls.values()){
@@ -633,6 +708,7 @@ async function switchMic(id){
 }
 async function switchCam(id){
   camId=id;store.set('cam',id);camErr='';
+  if(camOff&&id!=='off'){syncBtns();fillDevices();return;}   // камера выключена кнопкой — новую выбрали, откроется при включении
   const t=await openCam();
   camReal=!!t;putTrack('video',t||blackTrack());watchTrack(t);
   syncBtns();fillDevices();
@@ -708,17 +784,36 @@ function syncBtns(){
   const mic=$('#micBtn'),cam=$('#camBtn');
   const aon=micReal&&!!a?.enabled,von=camReal&&!!v?.enabled;
   mic.textContent=!micReal?'Нет микрофона':aon?'Микрофон вкл':'Микрофон выкл';mic.classList.toggle('off',!aon);
-  cam.textContent=!camReal?'Нет камеры':von?'Камера вкл':'Камера выкл';cam.classList.toggle('off',!von);
+  cam.textContent=von?'Камера вкл':!camOff&&camErr?'Нет камеры':'Камера выкл';cam.classList.toggle('off',!von);
+  mic.dataset.on=aon?'1':'0';cam.dataset.on=von?'1':'0';
   const me=document.getElementById('tile-me');me?.classList.toggle('novideo',!von);me?.classList.toggle('muted',micReal&&!aon);
+  sendAv();
+}
+// всем в зале: включены ли у меня микрофон и камера — у них на плитке аватарка вместо чёрного кадра и значок 🔇
+let avSent='';
+function myAv(){const a=local?.getAudioTracks()[0],v=local?.getVideoTracks()[0];return{mic:micReal&&!!a?.enabled,cam:camReal&&!!v?.enabled};}
+function sendAv(force){
+  if(!inRoom||!local)return;
+  const s=myAv(),k=JSON.stringify(s);if(k===avSent&&!force)return;avSent=k;
+  if(isHost)broadcast({t:'av',id:peer?.id,...s});else if(hostConn?.open)hostConn.send({t:'av',...s});
+}
+function applyAv(id,d){
+  if(!id||id==='me')return;
+  const s={mic:d.mic!==false,cam:d.cam!==false};avState.set(id,s);
+  const t=document.getElementById('tile-'+id);if(!t)return;
+  t.classList.toggle('novideo',!s.cam);t.classList.toggle('muted',!s.mic);
+  if(pinned===id)applyPin();
 }
 function toggleMic(){
-  if(!micReal){$('#devs').hidden=false;fillDevices();switchMic(micId);return;}
+  if(!micReal){$('#devs').hidden=false;fillDevices();switchMic(micId).then(()=>{const a=local?.getAudioTracks()[0];if(a&&micReal){a.enabled=true;syncBtns();}});return;}
   const a=local.getAudioTracks()[0];a.enabled=!a.enabled;syncBtns();osd(a.enabled?'Микрофон включён':'Микрофон выключен');
 }
 $('#micBtn').onclick=toggleMic;
 $('#camBtn').onclick=()=>{
-  if(!camReal){$('#devs').hidden=false;if(camId==='off')camId='';switchCam(camId);return;}
-  const v=local.getVideoTracks()[0];v.enabled=!v.enabled;syncBtns();
+  const v=local?.getVideoTracks()[0];
+  if(camReal&&v?.enabled){setCam(false);return;}
+  if(camReal&&v){v.enabled=true;syncBtns();return;}
+  setCam(true).then(()=>{if(!camReal){$('#devs').hidden=false;fillDevices();}});
 };
 
 // ---------- голоса: у каждого своя громкость ----------
@@ -773,6 +868,7 @@ function addTile(id,name,stream,mine){
       r.ondblclick=()=>setPeerVol(id,1);
       t.append(l);$('#tiles').appendChild(t);
     }
+    tileActs(t,id,mine);
   }
   const v=t.querySelector('video');
   if(!v._ar){v._ar=1;v.addEventListener('resize',()=>{t.classList.toggle('port',v.videoHeight>v.videoWidth*1.15);layoutGrid();});}
@@ -780,17 +876,41 @@ function addTile(id,name,stream,mine){
   if(mine)v.muted=true;else attachVoice(id,stream,v);
   setName(t,name);
   t.classList.toggle('novideo',!stream.getVideoTracks().length||!!stream.blank);
-  if(!mine){syncVolUi(t,peerVol(id));t.querySelector('.tvol').setAttribute('aria-label','Громкость: '+name);}
+  if(!mine){syncVolUi(t,peerVol(id));t.querySelector('.tvol').setAttribute('aria-label','Громкость: '+name);if(avState.has(id))applyAv(id,avState.get(id));}
   count();refreshPip();
 }
+// кнопки на плитке: 📌 смотреть крупно (остальные — полосой), ✕ удалить из зала (может только тот, кто открыл зал)
+function tileActs(t,id,mine){
+  const box=document.createElement('div');box.className='tact';
+  const pb=document.createElement('button');pb.type='button';pb.className='pin';pb.textContent='📌';pb.title='Смотреть крупно';pb.setAttribute('aria-label','Смотреть крупно');
+  pb.onclick=e=>{e.stopPropagation();if(view!=='hall'){setView('hall');pinned=null;}pin(id);};
+  box.append(pb);
+  if(!mine&&!id.startsWith('scr-')){
+    const kb=document.createElement('button');kb.type='button';kb.className='kick';kb.textContent='✕';kb.title='Удалить из зала';kb.setAttribute('aria-label','Удалить из зала');kb.hidden=!isHost;
+    kb.onclick=e=>{e.stopPropagation();const n=names.get(id)||'этого участника';if(confirm('Удалить «'+n+'» из зала? Вернуться в этот зал он уже не сможет.'))kickGuest(id);};
+    box.append(kb);
+  }
+  t.append(box);
+  // в «Только зале» клик по камере — сделать её главной (ещё клик — вернуть сетку)
+  t.addEventListener('click',e=>{if(view!=='hall'||e.target.closest('.tvol,.tact,.rz')||t.classList.contains('float'))return;pin(id);});
+}
 function setName(t,name){
-  t.querySelector('figcaption').textContent=name;t.querySelector('.ava').textContent=(name.trim()[0]||'?').toUpperCase();
-  const id=t.id.slice(5),ver=vers.get(id);if(!t.classList.contains('mine'))t.title=name+(ver?' · Кинозал '+ver:'');
+  const id=t.id.slice(5),cap=t.querySelector('figcaption');cap.textContent=name;
+  const k=kinds.get(id)||(t.classList.contains('mine')?DEVKIND:'');
+  if(k==='phone'){const d=document.createElement('span');d.className='dev';d.textContent='📱';d.title='С телефона';cap.append(d);}
+  t.querySelector('.ava').textContent=(name.replace(/^📺\s*/,'').trim()[0]||'?').toUpperCase();
+  const ver=vers.get(id);if(!t.classList.contains('mine'))t.title=name+(ver?' · Кинозал '+ver:'');
 }
 function rename(id){const t=document.getElementById('tile-'+id);if(t&&names.get(id)){setName(t,names.get(id));if(!t.classList.contains('mine')){setPeerVol(id,peerVol(id));}}}
-function dropTile(id){document.getElementById('tile-'+id)?.remove();dropVoice(id);meters.get(id)?.src?.disconnect();meters.delete(id);count();refreshPip();}
+function dropTile(id){
+  document.getElementById('tile-'+id)?.remove();dropVoice(id);meters.get(id)?.src?.disconnect();meters.delete(id);avState.delete(id);
+  if(pinned===id){pinned=null;applyPin();}
+  count();refreshPip();
+}
+const people=()=>document.querySelectorAll('#tiles .tile:not(.scr),#spot .tile:not(.scr)').length;
 function count(){
-  const n=$('#tiles').children.length;$('#peopleTitle').textContent='В зале: '+n;
+  $('#peopleTitle').textContent='В зале: '+people();
+  document.querySelectorAll('.tact .kick').forEach(b=>b.hidden=!isHost);
   syncMineFloat();
 }
 $('#callVol').oninput=e=>{
@@ -975,10 +1095,33 @@ function setView(v){
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   $('#room').classList.toggle('hallview',v==='hall');$('#room').classList.remove('sheet');
   $('#viewCine').classList.toggle('on',v!=='hall');$('#viewHall').classList.toggle('on',v==='hall');
-  if(v==='hall'){$('#callStage').prepend($('#tiles'));$('#callarea').insertBefore($('#ctrls'),$('#callarea .fslog'));}
+  if(v==='hall'){$('#callStage').append($('#tiles'));$('#callarea').insertBefore($('#ctrls'),$('#callarea .fslog'));}
   else{$('#peoplePanel').insertBefore($('#tiles'),$('#cvolRow'));$('.left').insertBefore($('#ctrls'),$('#help'));}
+  applyPin();
   document.querySelectorAll('#tiles video').forEach(x=>x.play().catch(()=>{}));
   syncMineFloat();refreshPip();updCallNote();
+}
+// ---------- приоритет: кого смотреть крупно ----------
+// Как в Discord: закреплённый — на всю сцену, остальные полосой снизу. Закрепить можно и чужой показ экрана.
+let pinned=null;
+function pin(id){
+  pinned=pinned===id?null:id;
+  if(pinned?.startsWith('scr-')){const e=shares.get(pinned.slice(4));if(e&&e!==shareIn){shareIn=e;renderShare();}}
+  applyPin();
+  const n=pinned&&(names.get(pinned)||(pinned==='me'?'Ты':document.querySelector('#tile-'+CSS.escape(pinned)+' figcaption')?.textContent));
+  osd(pinned?'Крупно: '+n+' · ещё клик — вернуть сетку':'Все камеры одинаково');
+}
+function applyPin(){
+  const box=$('#spot'),tl=$('#tiles');
+  let t=pinned?document.getElementById('tile-'+pinned):null;
+  if(pinned&&!t)pinned=null;
+  if(view!=='hall'||people()+document.querySelectorAll('.tile.scr').length<2)t=null;
+  for(const x of [...box.children])if(x!==t){x.classList.remove('pinned');if(x.classList.contains('mine'))tl.prepend(x);else tl.append(x);x.querySelector('video')?.play().catch(()=>{});}
+  if(t&&t.parentNode!==box){if(t._fl){t._fl.destroy();t._fl=null;}box.append(t);t.querySelector('video')?.play().catch(()=>{});}
+  document.querySelectorAll('.tile.pinned').forEach(x=>{if(x!==t)x.classList.remove('pinned');});
+  t?.classList.add('pinned');
+  box.hidden=!t;$('#callStage').classList.toggle('spotting',!!t);
+  syncMineFloat();
 }
 $('#viewCine').onclick=()=>setView('cinema');
 $('#viewHall').onclick=()=>setView('hall');
@@ -986,9 +1129,9 @@ $('#callNoteGo').onclick=()=>setView('cinema');
 $('#hallFs').onclick=()=>toggleFs();
 // своя камера в зале — маленькое окошко поверх, когда есть кто-то ещё
 function syncMineFloat(){
-  const me=$('#tile-me'),n=$('#tiles').children.length;
+  const me=$('#tile-me'),n=people();
   if(me){
-    const want=view==='hall'&&n>1;
+    const want=view==='hall'&&n>1&&me.parentNode===$('#tiles')&&!$('#callStage').classList.contains('spotting');
     if(want&&!me._fl)me._fl=floaty(me,'me-hall',$('#callStage'),{x:.77,y:.73,w:.21});
     else if(!want&&me._fl){me._fl.destroy();me._fl=null;}
   }
@@ -997,7 +1140,7 @@ function syncMineFloat(){
 }
 // раскладка плиток: столько столбцов, чтобы камеры были как можно крупнее
 function layoutGrid(){
-  if(view!=='hall')return;
+  if(view!=='hall'||$('#callStage').classList.contains('spotting'))return;
   const box=$('#callStage'),tl=$('#tiles');
   const n=[...tl.children].filter(t=>!t.classList.contains('float')).length||1;tl.classList.toggle('solo',n===1);
   const W=box.clientWidth-20,H=box.clientHeight-20,gap=10;if(W<=0||H<=0)return;
@@ -1012,7 +1155,9 @@ new ResizeObserver(layoutGrid).observe($('#callStage'));
 // в зале видно, что на экране что-то идёт
 function updCallNote(){
   let t='';
-  if(shareIn)t='📺 '+shareIn.name+' показывает экран';
+  const live=[...shares.values()].filter(x=>x.stream);
+  if(live.length>1)t='📺 Экран показывают: '+live.map(x=>x.name).join(', ');
+  else if(live.length)t='📺 '+live[0].name+' показывает экран';
   else if(shareOut)t='📺 Ты показываешь экран';
   else if(movie&&(mode==='host'||mode==='local'||movieCalls.has('host')))t='🎬 Идёт фильм «'+movie.title+'»';
   const show=view==='hall'&&!!t;
@@ -1085,7 +1230,7 @@ function tune(c,o){
 }
 function callCam(id){
   if(camCalls.has(id))return;
-  wireCam(peer.call(id,local,{metadata:{kind:'cam',name:myName,ver:myVer}}));
+  wireCam(peer.call(id,local,{metadata:{kind:'cam',name:myName,ver:myVer,devkind:DEVKIND,av:myAv()}}));
 }
 // ---------- задержка ----------
 // Просим приёмники держать минимальный буфер: в живом разговоре и показе экрана важнее быстро, чем гладко.
@@ -1158,7 +1303,7 @@ setInterval(async()=>{
   const list=[];
   for(const[id,c]of camCalls)list.push(['камера',id,c]);
   if(shareOut)for(const[id,c]of shareOut.calls)list.push(['показ→',id,c]);
-  if(shareIn)list.push(['показ←',shareIn.from,shareIn.call]);
+  for(const[id,e]of shares)list.push(['показ←',id,e.call]);
   for(const[id,c]of movieCalls)list.push(id==='host'?['фильм←',c.peer,c]:['фильм→',id,c]);
   if(!list.length)return;
   const parts=[];
@@ -1185,6 +1330,8 @@ function onCall(c){
     return;
   }
   if(m.name)names.set(c.peer,clean(m.name));
+  if(m.devkind)kinds.set(c.peer,m.devkind==='phone'?'phone':'pc');
+  if(m.av&&typeof m.av==='object')applyAv(c.peer,m.av);
   if(!isHost&&c.peer!==hostConn?.peer)noteVer(c.peer,m.ver);
   camCalls.get(c.peer)?.close();
   c.answer(local);wireCam(c);
@@ -1360,19 +1507,33 @@ function sysExcludesOwnAudio(track){
 
 // ---------- показ экрана ----------
 // лимиты битрейта: сколько реально уйдёт, зависит от картинки (статичный экран весит мало) и от скорости отдачи
-const PRESETS={
-  motion:{w:1920,h:1080,fps:60,bitrate:30000000,hint:'motion'},
-  max:{fps:60,bitrate:40000000,hint:'motion'},
-  detail:{fps:30,bitrate:20000000,hint:'detail'}
-};
 const roster=new Set();      // у гостя: кто ещё в зале (включая ведущего)
 let shareOut=null;           // я показываю: {stream,calls,p,prev,pv}
-let shareIn=null;            // мне показывают: {call,from,name}
+// Показывать экран могут несколько человек сразу — каждый смотрит, чей хочет (переключатель на экране,
+// а в «Только зале» показы — отдельные плитки, их можно закрепить крупно).
+const shares=new Map();      // мне показывают: id -> {call,from,name,stream,frames}
+let shareIn=null;            // чей показ сейчас на экране (один из shares) или null
 const shareVid=$('#shareVid');
 const isApp=!!window.kinozalApp;
 if(isApp){document.documentElement.classList.add('app');$('#pickQ').append($('#shareQ'));$('#copyBtn').textContent='Скопировать код';}
-$('#shareQ').value=PRESETS[store.get('shareQ','motion')]?store.get('shareQ','motion'):'motion';
-$('#shareQ').onchange=e=>store.set('shareQ',e.target.value);
+if(TOUCHDEV)document.documentElement.classList.add('touch');
+// качество показа — сам выбираешь разрешение и кадры (старый выбор из списка пресетов переносим)
+{
+  const old=store.get('shareQ','');
+  const def=old==='max'?['native','60','motion']:old==='detail'?['native','30','detail']:['1080','60','motion'];
+  $('#shareRes').value=store.get('shareRes',def[0]);if(!$('#shareRes').value)$('#shareRes').value='1080';
+  $('#shareFps').value=store.get('shareFps',def[1]);if(!$('#shareFps').value)$('#shareFps').value='60';
+  $('#shareHint').value=store.get('shareHint',def[2]);if(!$('#shareHint').value)$('#shareHint').value='motion';
+  for(const k of ['shareRes','shareFps','shareHint'])$('#'+k).onchange=e=>store.set(k,e.target.value);
+}
+// битрейт растёт с числом точек и кадров: 1080p60 — 30 Мбит/с, 4K60 и 1440p144 упираются в 80
+function sharePreset(){
+  const r=$('#shareRes').value,fps=Math.max(5,Math.min(240,+$('#shareFps').value||60)),hint=$('#shareHint').value==='detail'?'detail':'motion';
+  const h=+r||0,dpr=devicePixelRatio||1,nw=Math.round(window.screen.width*dpr),nh=Math.round(window.screen.height*dpr);
+  const px=h?Math.min(nw*nh,h*h*16/9):nw*nh;
+  const bitrate=Math.round(Math.max(4e6,Math.min(80e6,(hint==='detail'?20e6:30e6)*(px/2073600)*Math.pow(fps/60,.6))));
+  return{h,fps,bitrate,hint};
+}
 $('#pickAudio').checked=store.get('pickAudio','1')==='1';
 $('#pickAudio').onchange=e=>store.set('pickAudio',e.target.checked?'1':'0');
 if(!navigator.mediaDevices?.getDisplayMedia||window.kzAndroid){$('#shareBtn').hidden=true;$('#shareQ').hidden=true;}
@@ -1380,8 +1541,8 @@ $('#shareBtn').onclick=()=>shareOut?stopShare():startShare();
 $('#shareStop').onclick=()=>stopShare();
 $('#pvBtn').onclick=()=>{
   if(!shareOut)return;shareOut.pv=!shareOut.pv;
-  shareVid.srcObject=shareOut.pv?shareOut.stream:null;if(shareOut.pv)shareVid.play().catch(()=>{});
-  $('#pvOff').hidden=shareOut.pv;$('#pvBtn').textContent=shareOut.pv?'Скрыть превью':'Показать превью';
+  $('#pvBtn').textContent=shareOut.pv?'Скрыть превью':'Показать превью';
+  if(!shareIn)renderShare();
 };
 
 window.__kz={get shareOut(){return shareOut;},get shareIn(){return shareIn;},get voiceBus(){return voiceBus;},get voices(){return voices;},get actx(){return actx;},get camCalls(){return camCalls;}}; // для диагностики
@@ -1430,9 +1591,10 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('#picker').hidde
 
 async function doShare(){
   if(!inRoom)return;
-  const key=$('#shareQ').value,p=PRESETS[key]||PRESETS.motion;
+  const p=sharePreset();
   const video={frameRate:{ideal:p.fps,max:p.fps}};
-  if(p.w){video.width={max:p.w};video.height={max:p.h};}
+  if(p.h){video.height={max:p.h};video.width={max:p.h*4};}   // ширину не режем: широкий монитор остаётся широким
+  jlog('[показ] качество:',JSON.stringify(p));
   let s;
   try{
     s=await navigator.mediaDevices.getDisplayMedia({
@@ -1457,19 +1619,17 @@ async function doShare(){
   }
   jlog('[показ] звук компьютера:',aec||'выкл',JSON.stringify(at?.getSettings?.()||{}),'| Windows',osInfo?.release||'?');
   if(!inRoom){guard?.stop();s.getTracks().forEach(t=>t.stop());return;}
-  if(shareIn){const c=shareIn.call;shareIn=null;c.close();}
   if(movie&&isPlaying())userCtl('pause');
-  shareOut={stream:send,raw:s,guard,aec,calls:new Map(),p,prev:null,pv:true};
+  shareOut={stream:send,raw:s,guard,aec,calls:new Map(),p,prev:null,pv:true,slow:0};
   for(const id of roomPeers())callShare(id);
   shareMsg(true);
-  // превью: показывающий видит то же, что уходит зрителям
-  shareVid.srcObject=s;shareVid.muted=true;shareVid.play().catch(()=>{});
-  $('#pvOff').hidden=true;$('#pvBtn').textContent='Скрыть превью';
-  $('#share').hidden=false;$('#shareMe').hidden=false;$('#shareTag').textContent='';$('#shareUnmute').hidden=true;
+  // превью: показывающий видит то же, что уходит зрителям (чужие показы при этом не обрываются — переключатель сверху)
+  shareIn=null;
+  $('#pvBtn').textContent='Скрыть превью';$('#shareTip').hidden=true;
   $('#shareWarn').textContent=s.getAudioTracks().length?'':isApp?'Звук компьютера выключен':'Без звука — в окне выбора не была отмечена галочка «Поделиться звуком»';
-  stage.classList.add('sharing');
+  renderShare();
   store.set('sharingNow',String(Date.now()));
-  $('#shareBtn').textContent='Остановить показ';$('#shareBtn').classList.add('off');$('#shareQ').disabled=true;
+  $('#shareBtn').textContent='Остановить показ';$('#shareBtn').classList.add('off');$('#shareQ').querySelectorAll('select').forEach(x=>x.disabled=true);
   sys('Ты показываешь экран');
   shareStats();
 }
@@ -1493,30 +1653,81 @@ function stopShare(silent){
   try{localStorage.removeItem('kinozal-sharingNow');}catch(e){}
   o.calls.forEach(c=>c.close());o.guard?.stop();o.raw.getTracks().forEach(t=>t.stop());
   if(!silent){shareMsg(false);sys('Показ экрана остановлен');}
-  $('#shareBtn').textContent='Показать экран';$('#shareBtn').classList.remove('off');$('#shareQ').disabled=false;
-  if(!shareIn)hideShare();
+  $('#shareBtn').textContent='Показать экран';$('#shareBtn').classList.remove('off');$('#shareQ').querySelectorAll('select').forEach(x=>x.disabled=false);
+  renderShare();
 }
 function onShareCall(c,m){
-  if(shareOut)stopShare();   // показывает тот, кто начал последним
-  const old=shareIn;
-  shareIn={call:c,from:c.peer,name:clean(m.name)||names.get(c.peer)||'Кто-то',frames:0};
-  old?.call.close();
+  const from=c.peer;
+  shares.get(from)?.call.close();
+  const e={call:c,from,name:clean(m.name)||names.get(from)||'Кто-то',stream:null,frames:0};
+  shares.set(from,e);
   c.answer(undefined,{sdpTransform:hq});
-  c.on('stream',s=>{if(shareIn?.call===c){lowLatency(c);showShare(s);}});
-  const end=()=>{if(shareIn?.call===c){shareIn=null;hideShare();}};
+  c.on('stream',s=>{
+    if(shares.get(from)!==e||e.stream===s)return;   // поток приходит событием дважды (звук + видео)
+    lowLatency(c);e.stream=s;
+    if(!shareIn&&!shareOut)shareIn=e;                // никого не смотрел — показываем новый; иначе переключится сам, кнопкой сверху
+    else toast('📺 '+e.name+' тоже показывает экран — переключиться можно кнопкой сверху');
+    renderShare();
+  });
+  const end=()=>{if(shares.get(from)===e)dropShare(from);};
   c.on('close',end);c.on('error',end);
 }
-function endShareFrom(id){if(shareIn?.from===id){const c=shareIn.call;shareIn=null;c.close();hideShare();}}
-function showShare(s){
-  if(shareVid.srcObject===s)return;   // поток приходит событием дважды (звук + видео)
-  shareVid.srcObject=s;shareVid.muted=false;shareVid.volume=vol;
-  $('#share').hidden=false;$('#shareMe').hidden=true;$('#pvOff').hidden=true;stage.classList.add('sharing');
-  $('#shareTag').textContent=shareIn.name+' показывает экран';
-  shareVid.play().then(()=>$('#shareUnmute').hidden=true).catch(e=>{if(e.name!=='NotAllowedError')return;shareVid.muted=true;shareVid.play().catch(()=>{});$('#shareUnmute').hidden=false;});
+function dropShare(id){
+  const e=shares.get(id);if(!e)return;
+  shares.delete(id);try{e.call.close();}catch(er){}
+  if(shareIn===e)shareIn=null;
+  renderShare();
+}
+function endShareFrom(id){dropShare(id);}
+const nextShare=()=>[...shares.values()].reverse().find(x=>x.stream)||null;
+// что сейчас на экране: выбранный чужой показ, свой (превью) или ничего
+function renderShare(){
+  if(shareIn&&(shares.get(shareIn.from)!==shareIn||!shareIn.stream))shareIn=null;
+  if(!shareIn&&!shareOut)shareIn=nextShare();
+  const e=shareIn;
+  if(e){
+    if(shareVid.srcObject!==e.stream){
+      shareVid.srcObject=e.stream;shareVid.muted=false;shareVid.volume=vol;
+      shareVid.play().then(()=>$('#shareUnmute').hidden=true).catch(er=>{if(er.name!=='NotAllowedError')return;shareVid.muted=true;shareVid.play().catch(()=>{});$('#shareUnmute').hidden=false;});
+    }
+    $('#share').hidden=false;$('#shareMe').hidden=true;$('#pvOff').hidden=true;stage.classList.add('sharing');
+    $('#shareTag').textContent=e.name+' показывает экран';
+  }else if(shareOut){
+    const want=shareOut.pv?shareOut.raw:null;
+    if(shareVid.srcObject!==want){shareVid.srcObject=want;shareVid.muted=true;if(want)shareVid.play().catch(()=>{});}
+    $('#share').hidden=false;$('#shareMe').hidden=false;$('#pvOff').hidden=shareOut.pv;$('#shareTag').textContent='';$('#shareUnmute').hidden=true;
+    stage.classList.add('sharing');
+  }else hideShare();
+  // переключатель: несколько показов (или свой + чужой)
+  const sw=$('#shareSw'),list=[...shares.values()].filter(x=>x.stream);
+  sw.textContent='';
+  if(list.length+(shareOut?1:0)>1){
+    const add=(t,on,f)=>{const b=document.createElement('button');b.type='button';b.textContent=t;b.className=on?'on':'';b.onclick=ev=>{ev.stopPropagation();f();};sw.append(b);};
+    if(shareOut)add('🖥 Мой экран',!shareIn,()=>{shareIn=null;renderShare();});
+    for(const x of list)add('📺 '+x.name,shareIn===x,()=>{shareIn=x;renderShare();});
+    sw.hidden=false;
+  }else sw.hidden=true;
+  syncScreenTiles();updCallNote();
 }
 function hideShare(){
-  shareVid.srcObject=null;$('#share').hidden=true;$('#shareMe').hidden=true;$('#pvOff').hidden=true;$('#shareUnmute').hidden=true;
+  shareVid.srcObject=null;$('#share').hidden=true;$('#shareMe').hidden=true;$('#pvOff').hidden=true;$('#shareUnmute').hidden=true;$('#shareSw').hidden=true;
   stage.classList.remove('sharing');
+}
+// в «Только зале» каждый чужой показ — своя плитка (без звука: звук идёт с экрана кинозала)
+function syncScreenTiles(){
+  const want=new Map([...shares.values()].filter(x=>x.stream).map(x=>['scr-'+x.from,x]));
+  document.querySelectorAll('.tile.scr').forEach(t=>{if(!want.has(t.id.slice(5)))dropTile(t.id.slice(5));});
+  for(const[id,x]of want){
+    let t=document.getElementById('tile-'+id);
+    if(!t){
+      t=document.createElement('figure');t.className='tile scr';t.id='tile-'+id;
+      t.innerHTML='<video autoplay playsinline muted></video><span class="ava"></span><figcaption></figcaption>';
+      $('#tiles').append(t);tileActs(t,id,false);
+    }
+    const v=t.querySelector('video');v.muted=true;if(v.srcObject!==x.stream){v.srcObject=x.stream;v.play().catch(()=>{});}
+    setName(t,'📺 '+x.name);t.classList.toggle('watching',shareIn===x);
+  }
+  count();
 }
 $('#shareUnmute').onclick=()=>{shareVid.muted=false;shareVid.play().catch(()=>{});$('#shareUnmute').hidden=true;};
 shareVid.addEventListener('dblclick',toggleFs);
@@ -1541,10 +1752,14 @@ async function shareStats(o=shareOut){
         if(r.frameHeight)line='Уходит зрителям: '+r.frameWidth+'×'+r.frameHeight+(r.framesPerSecond?' · '+Math.round(r.framesPerSecond)+' к/с':'')+rate+' (лимит '+Math.round(o.p.bitrate/1e6)+')';
         if(r.encoderImplementation&&!o.encLogged){o.encLogged=1;jlog('[показ] кодировщик:',r.encoderImplementation,r.powerEfficientEncoder?'(видеокарта)':'(процессор)',r.frameWidth+'x'+r.frameHeight);}
         if(r.qualityLimitationReason==='bandwidth')warn='Качество режет интернет — не хватает скорости отдачи';
-        else if(r.qualityLimitationReason==='cpu')warn='Качество режет процессор — закрой лишнее или выбери «1080p · 60 к/с»';
+        else if(r.qualityLimitationReason==='cpu')warn='Качество режет процессор — закрой лишнее или поставь меньше разрешение или кадров';
+        o.fpsOut=r.framesPerSecond??0;
       });
     }catch(e){}
+    // кадров почти нет, а показываем игру — скорее всего, она на весь экран и захват застыл: подскажем
+    if(c.peerConnection?.connectionState==='connected'&&o.fpsOut!=null)o.slow=o.fpsOut<4&&o.p.hint==='motion'?o.slow+1:Math.max(0,o.slow-1);
   }
+  $('#shareTip').hidden=!(o.slow>=3);
   if(o.stream.getAudioTracks().length||warn)$('#shareWarn').textContent=warn;
   const ae=$('#shareAec'),g=o.guard;
   ae.className=o.aec==='none'?'warn':'ok';
@@ -1555,7 +1770,7 @@ async function shareStats(o=shareOut){
   setTimeout(()=>shareStats(o),2000);
 }
 setInterval(()=>{
-  if(!shareIn||!shareVid.srcObject||!shareVid.getVideoPlaybackQuality)return;
+  if(!shareIn||shareVid.srcObject!==shareIn.stream||!shareVid.getVideoPlaybackQuality)return;
   const f=shareVid.getVideoPlaybackQuality().totalVideoFrames,fps=f-shareIn.frames;shareIn.frames=f;
   $('#shareTag').textContent=shareIn.name+' показывает экран'+(shareVid.videoHeight?' · '+shareVid.videoWidth+'×'+shareVid.videoHeight+' · '+fps+' к/с':'');
 },1000);
@@ -1756,22 +1971,55 @@ function stopMovie(){
   movieStream?.getTracks().forEach(t=>t.stop());movieStream=null;
   if(screen.getAttribute('src'))screen.pause();
 }
+// ---------- ведущий: призраки и удаление из зала ----------
+// Телефон смахнули из недавних — его подключение у ведущего может «висеть» ещё долго, и в зале остаётся
+// застывший двойник. Поэтому: (1) тот же телефон зашёл заново — старое подключение убираем сразу;
+// (2) гости шлют ping раз в 3 с — кто молчит 20 с и чья связь уже не «connected» (или молчит 2 минуты) — вышел.
+const kicked=new Set();     // номера устройств и peer id, которых удалили из этого зала
+function dropGuest(id,silent){
+  const g=guests.get(id);if(!g)return;
+  guests.delete(id);try{g.conn.close();}catch(e){}
+  movieCalls.get(id)?.close();movieCalls.delete(id);camCalls.get(id)?.close();camCalls.delete(id);dropTile(id);
+  shareOut?.calls.get(id)?.close();endShareFrom(id);
+  broadcast({t:'left',id});if(!silent)sys(g.name+' вышел');
+}
+function kickGuest(id){
+  const g=guests.get(id);if(!isHost||!g)return;
+  if(g.dev)kicked.add(g.dev);kicked.add(id);
+  g.kicked=true;try{g.conn.send({t:'kicked'});}catch(e){}
+  jlog('[зал] удалён из зала:',g.name);sys(g.name+' удалён из зала');
+  setTimeout(()=>dropGuest(id,true),400);
+}
+setInterval(()=>{
+  if(!isHost||!inRoom)return;
+  const now=Date.now();
+  for(const[id,g]of guests){
+    const quiet=now-(g.seen||0),st=g.conn.peerConnection?.connectionState;
+    if(quiet>120000||(quiet>20000&&st!=='connected')){jlog('[зал] пропал без выхода:',g.name,Math.round(quiet/1000)+' с',st||'');dropGuest(id);}
+  }
+},5000);
 function onGuestConn(c){
   c.on('open',()=>{
     const name=clean(c.metadata?.name)||'Гость';
+    const dev=String(c.metadata?.dev||'').slice(0,16),kind=c.metadata?.kind==='phone'?'phone':'pc';
+    if(kicked.has(c.peer)||(dev&&kicked.has(dev))){try{c.send({t:'kicked'});}catch(e){}setTimeout(()=>{try{c.close();}catch(e){}},600);return;}
+    // тот же человек с того же устройства перезашёл — прошлое подключение уже мёртвое
+    if(dev)for(const[id,g]of guests)if(id!==c.peer&&g.dev===dev){jlog('[зал] перезашёл:',g.name,'— убираю старое подключение');dropGuest(id,true);}
     const back=guests.has(c.peer);
     const ver=String(c.metadata?.ver||'').slice(0,20);
-    const others=[...guests].filter(([id])=>id!==c.peer).map(([id,g])=>({id,name:g.name,ver:g.ver}));
-    guests.set(c.peer,{conn:c,name,ver,local:!!c.metadata?.local});names.set(c.peer,name);rename(c.peer);
-    c.send({t:'welcome',host:myName,ver:myVer,kind:roomKind,peers:others,movie:mode==='host'?movie:null,state:mode==='host'?hostState():null,subs:subs.cues.length?{cues:subs.cues,name:subs.name}:null});
-    if(!back){broadcast({t:'joined',id:c.peer,name,ver},c.peer);sys(name+' зашёл в зал');}
+    const others=[...guests].filter(([id])=>id!==c.peer).map(([id,g])=>({id,name:g.name,ver:g.ver,kind:g.kind,av:avState.get(id)||null}));
+    guests.set(c.peer,{conn:c,name,ver,dev,kind,seen:Date.now(),local:!!c.metadata?.local});names.set(c.peer,name);kinds.set(c.peer,kind);rename(c.peer);
+    c.send({t:'welcome',host:myName,ver:myVer,hostKind:DEVKIND,av:myAv(),kind:roomKind,peers:others,movie:mode==='host'?movie:null,state:mode==='host'?hostState():null,subs:subs.cues.length?{cues:subs.cues,name:subs.name}:null});
+    if(!back){broadcast({t:'joined',id:c.peer,name,ver,kind},c.peer);sys(name+' зашёл в зал');}
     noteVer(c.peer,ver);
     if(movieStream)callMovie(c.peer);
     if(shareOut)callShare(c.peer);
   });
   c.on('data',d=>{
     const g=guests.get(c.peer);if(!g||g.conn!==c||!d)return;
+    g.seen=Date.now();
     switch(d.t){
+      case 'av':applyAv(c.peer,d);broadcast({t:'av',id:c.peer,mic:d.mic!==false,cam:d.cam!==false},c.peer);break;
       case 'chat':{const text=String(d.text||'').slice(0,500);if(!text)return;addMsg(g.name,text);broadcast({t:'chat',name:g.name,text},c.peer);break;}
       case 'fx':{const e=fxClean(d.e);if(!e)return;showFx(e,g.name);broadcast({t:'fx',e,name:g.name},c.peer);break;}
       case 'img':{const b=addImg(g.name,d.b,d.mime);if(b)broadcast({t:'img',name:g.name,mime:String(d.mime),b},c.peer);break;}
@@ -1794,12 +2042,7 @@ function onGuestConn(c){
       }
     }
   });
-  const bye=()=>{
-    const g=guests.get(c.peer);if(!g||g.conn!==c)return;
-    guests.delete(c.peer);movieCalls.get(c.peer)?.close();camCalls.get(c.peer)?.close();dropTile(c.peer);
-    shareOut?.calls.get(c.peer)?.close();endShareFrom(c.peer);
-    broadcast({t:'left',id:c.peer});sys(g.name+' вышел');
-  };
+  const bye=()=>{const g=guests.get(c.peer);if(!g||g.conn!==c)return;dropGuest(c.peer,g.kicked);};
   c.on('close',bye);c.on('error',bye);
 }
 function makePeer(id){
@@ -1853,17 +2096,17 @@ async function joinRoom(){
 function connectHost(){
   const p=peer;if(!p||p.destroyed)return null;
   const hid=PREFIX+code;
-  const c=p.connect(hid,{metadata:{name:myName,local:mode==='local',ver:myVer},reliable:true});
+  const c=p.connect(hid,{metadata:{name:myName,local:mode==='local',ver:myVer,dev:DEVID,kind:DEVKIND},reliable:true});
   hostConn=c;
   c.on('open',()=>{
     if(hostConn!==c)return;
     clearTimeout(joinTimer);clearTimeout(retryTimer);
-    const again=inRoom;retries=0;
+    const again=inRoom;retries=0;hostSeen=Date.now();
     if(!again)enterRoom();else{sys('Связь с залом восстановлена');camCalls.get(hid)?.close();camCalls.delete(hid);}
-    callCam(hid);
+    callCam(hid);sendAv(true);
     if(again&&shareOut)callShare(hid);
   });
-  c.on('data',d=>{if(hostConn===c)onGuestData(d);});
+  c.on('data',d=>{if(hostConn===c){hostSeen=Date.now();onGuestData(d);}});
   const lost=()=>{if(hostConn!==c||!inRoom||leaving||hostGone)return;hostConn=null;lostHost();};
   c.on('close',lost);c.on('error',lost);
   return c;
@@ -1879,7 +2122,26 @@ function lostHost(){
     retryTimer=setTimeout(()=>{if(hostConn===c&&!c?.open){hostConn=null;lostHost();}},7000);
   },2500);
 }
-setInterval(()=>{if(!isHost&&hostConn?.open)hostConn.send({t:'ping',a:performance.now()});},3000);
+let hostSeen=0;
+setInterval(()=>{
+  if(isHost||!hostConn?.open)return;
+  hostConn.send({t:'ping',a:performance.now()});
+  // ведущий молчит (на ping отвечает pong) и связь с ним уже не живая — переподключаемся, а не ждём вечно
+  if(Date.now()-hostSeen>25000&&hostConn.peerConnection?.connectionState!=='connected'){jlog('[зал] ведущий не отвечает — переподключаюсь');try{hostConn.close();}catch(e){}}
+},3000);
+// камера собеседника, связь с которым умерла, но не закрылась, — убираем (иначе застывшая плитка-двойник)
+const deadSince=new Map();
+setInterval(()=>{
+  if(!inRoom)return;
+  const now=Date.now();
+  for(const[id,c]of camCalls){
+    const st=c.peerConnection?.connectionState;
+    if(st==='failed'||st==='closed'||(st==='disconnected'&&now-(deadSince.get(c)||(deadSince.set(c,now),now))>15000)){jlog('[зал] камера отвалилась:',names.get(id)||id,st);c.close();camCalls.delete(id);dropTile(id);
+      // с ведущим или с тем, у кого ID больше, звоним заново сами (второй дождётся звонка)
+      if(!isHost&&(id===hostConn?.peer&&hostConn.open||roster.has(id)&&peer&&peer.id<id))setTimeout(()=>{if(inRoom&&!camCalls.has(id))callCam(id);},1500);
+    }else if(st!=='disconnected')deadSince.delete(c);
+  }
+},5000);
 
 function setMovie(m){
   const t=title(m.title);
@@ -1892,9 +2154,12 @@ function setMovie(m){
 function onGuestData(d){
   switch(d?.t){
     case 'welcome':
-      names.set(hostConn.peer,clean(d.host)||'Ведущий');rename(hostConn.peer);
+      names.set(hostConn.peer,clean(d.host)||'Ведущий');kinds.set(hostConn.peer,d.hostKind==='phone'?'phone':'pc');rename(hostConn.peer);
+      if(d.av)applyAv(hostConn.peer,d.av);
+      // кого больше нет в зале (призраки после переподключения) — убираем
+      {const ids=new Set([hostConn.peer,...(d.peers||[]).map(p=>p.id)]);for(const id of [...roster])if(!ids.has(id)){camCalls.get(id)?.close();camCalls.delete(id);dropTile(id);endShareFrom(id);}}
       roster.clear();roster.add(hostConn.peer);
-      (d.peers||[]).forEach(p=>{roster.add(p.id);names.set(p.id,clean(p.name));rename(p.id);callCam(p.id);noteVer(p.id,p.ver);});
+      (d.peers||[]).forEach(p=>{roster.add(p.id);names.set(p.id,clean(p.name));if(p.kind)kinds.set(p.id,p.kind==='phone'?'phone':'pc');rename(p.id);if(p.av)applyAv(p.id,p.av);callCam(p.id);noteVer(p.id,p.ver);});
       if(!retries){sys('Ты в зале у '+(clean(d.host)||'ведущего'));if(d.kind==='call')setView('hall');}
       noteVer(hostConn.peer,d.ver);
       if(d.state)st={...d.state,recv:performance.now()};
@@ -1902,7 +2167,11 @@ function onGuestData(d){
       if(d.subs)setSubs(cleanCues(d.subs.cues),String(d.subs.name||'').slice(0,120));
       if(mode==='local')syncLocal();
       break;
-    case 'joined':roster.add(d.id);names.set(d.id,clean(d.name));rename(d.id);sys(clean(d.name)+' зашёл в зал');noteVer(d.id,d.ver);if(shareOut)callShare(d.id);break;
+    case 'av':applyAv(String(d.id||''),d);break;
+    case 'kicked':
+      jlog('[зал] меня удалили из зала');hostGone=true;leaving=true;
+      toast('Тебя удалили из зала');stopShare(true);stopMovie();reset();break;
+    case 'joined':roster.add(d.id);names.set(d.id,clean(d.name));if(d.kind)kinds.set(d.id,d.kind==='phone'?'phone':'pc');rename(d.id);sys(clean(d.name)+' зашёл в зал');noteVer(d.id,d.ver);if(shareOut)callShare(d.id);break;
     case 'left':roster.delete(d.id);camCalls.get(d.id)?.close();dropTile(d.id);shareOut?.calls.get(d.id)?.close();endShareFrom(d.id);sys((names.get(d.id)||'Гость')+' вышел');break;
     case 'share':sys((clean(d.name)||'Кто-то')+(d.on?' показывает экран':' закончил показ экрана'));if(!d.on)endShareFrom(d.from);break;
     case 'chat':addMsg(clean(d.name),String(d.text||'').slice(0,500));break;
@@ -1992,7 +2261,8 @@ function reset(){
   clearTimeout(joinTimer);clearTimeout(retryTimer);
   const p=peer;peer=null;
   if(p){p._bye=true;setTimeout(()=>{try{p.destroy();}catch(e){}},isHost?300:0);}
-  stopShare(true);if(shareIn){const sc=shareIn.call;shareIn=null;sc.close();}hideShare();roster.clear();
+  stopShare(true);for(const e of shares.values())try{e.call.close();}catch(er){}shares.clear();shareIn=null;hideShare();roster.clear();
+  pinned=null;applyPin();kinds.clear();avState.clear();avSent='';kicked.clear();
   hostConn=null;inRoom=false;mode='none';movie=null;st=null;movieStream=null;offerHidden='';
   const loc=local;local=null;loc?.getTracks().forEach(t=>t.stop());
   meters.forEach(m=>m.src?.disconnect());meters.clear();$('#devs').hidden=true;micReal=camReal=false;
