@@ -527,6 +527,15 @@ function setupFiles() {
     let to = path.join(dir, nm); for (let i = 1; fs.existsSync(to); i++) to = path.join(dir, base + ' (' + i + ')' + ext);
     await fsp.writeFile(to, Buffer.from(data.buffer, data.byteOffset, data.byteLength)); return to;
   });
+  // RAW с диска (полученный или свой отправленный): встроенная картинка и данные снимка
+  const kzRaw = require('./rawprev.js');
+  ipcMain.handle('kz:fpreview', async (e, p) => {
+    p = String(p || ''); if (!allowed(p)) return null;
+    const st = await fsp.stat(p).catch(() => null); if (!st || !st.isFile() || st.size > 400e6) return null;
+    const u = new Uint8Array(await fsp.readFile(p)), pr = kzRaw.preview(u); if (!pr) return null;
+    const info = kzRaw.info(u, pr.jpeg);
+    return { jpeg: Buffer.from(pr.jpeg), w: pr.w, h: pr.h, orient: info.orient || 1, ex: kzRaw.summary(info) };
+  });
   ipcMain.handle('kz:fexists', (e, p) => { p = String(p || ''); return allowed(p) && fs.existsSync(p); });
   // что-то поменяли в «Полученных» (в том числе через обычный проводник) — раздел «Файлы» перерисуется
   let watcher = null, watchT = 0;
