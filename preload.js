@@ -21,7 +21,16 @@ const files = {
   dirRead: (id, off, len) => ipcRenderer.invoke('kz:dread', id, off, len),
   dirOpen: (id, blk, man, size) => ipcRenderer.invoke('kz:dopen', id, blk, man, size),
   dirWrite: (id, off, data) => ipcRenderer.invoke('kz:dwrite', id, off, data),
-  dirDone: (id, name) => ipcRenderer.invoke('kz:ddone', id, name)
+  dirDone: (id, name) => ipcRenderer.invoke('kz:ddone', id, name),
+  // раздел «Файлы»
+  list: p => ipcRenderer.invoke('kz:flist', p || ''),
+  search: q => ipcRenderer.invoke('kz:fsearch', q),
+  openPath: p => ipcRenderer.invoke('kz:fopenp', p),
+  trash: p => ipcRenderer.invoke('kz:ftrash', p),
+  save: (name, data) => ipcRenderer.invoke('kz:fsave', name, data),
+  exists: p => ipcRenderer.invoke('kz:fexists', p),
+  add: p => ipcRenderer.invoke('kz:fadd', p),
+  watch: cb => { ipcRenderer.removeAllListeners('kz:fchanged'); ipcRenderer.on('kz:fchanged', () => cb()); return ipcRenderer.invoke('kz:fwatch'); }
 };
 
 contextBridge.exposeInMainWorld('kinozalApp', {

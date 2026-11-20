@@ -49,6 +49,7 @@ const IC = {
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5l1-4.2L15.8 5a2.1 2.1 0 0 1 3 0l.2.2a2.1 2.1 0 0 1 0 3L8.7 18.5z"/><path d="M13.6 7.2l3.2 3.2"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
@@ -636,9 +637,10 @@ function cleanMsg(x) {
     m.mime = /^[\w.+-]+\/[\w.+-]+$/.test(String(x.mime || '')) ? String(x.mime) : 'application/octet-stream';
     m.name = fileName(x.name); m.size = Math.max(0, +x.size || 0);
     // большой файл в сообщение не вложен: его скачивают напрямую с устройства отправителя (dev), кусками
-    if (x.big) { m.big = 1; m.dev = /^[0-9a-z]{6}$/.test(String(x.dev || '')) ? String(x.dev) : ''; if (!m.size || m.size > 1e13) return null; }
-    if (m.big && x.dir) { m.dir = 1; m.n = Math.max(1, Math.min(50000, x.n | 0)); }   // папка целиком: n файлов, size — сумма
-    else m.blob = 1;
+    if (x.big) {
+      m.big = 1; m.dev = /^[0-9a-z]{6}$/.test(String(x.dev || '')) ? String(x.dev) : ''; if (!m.size || m.size > 1e13) return null;
+      if (x.dir) { m.dir = 1; m.n = Math.max(1, Math.min(50000, x.n | 0)); }   // папка целиком: n файлов, size — сумма
+    } else m.blob = 1;
   }
   if (m.kind === 'call') { m.code = clean(x.code, 8).toUpperCase(); m.room = x.room === 'cinema' ? 'cinema' : 'call'; if (!/^[A-Z0-9]{5}$/.test(m.code)) return null; }
   if (m.kind === 'plan') { m.at = +x.at || 0; m.room = x.room === 'call' ? 'call' : 'cinema'; m.text = clean(x.text, 80); if (m.at < m.ts - 864e5 || m.at > m.ts + 400 * 864e5) return null; }
@@ -743,7 +745,7 @@ async function createGroup(name, list) {
 const root = el('div'); root.id = 'mx'; root.hidden = true;
 root.innerHTML = `
 <aside class="mx-side">
-  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
+  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxFiles" title="Файлы: передачи, полученное, отправленное">${IC.folder}<b hidden></b></button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
   <div class="mx-sec"><span>Чаты</span><button class="ib lay" id="mxLay" title="Список чатов: ширина, сторона, компактный вид">${IC.dots}</button></div>
   <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
@@ -758,6 +760,7 @@ document.body.append(root);
 setNet(net);
 $('#mxQ').oninput = () => { renderList(); clearTimeout(globalFind.t); globalFind.t = setTimeout(globalFind, 220); };
 $('#mxAdd').onclick = () => addContactDlg();
+$('#mxFiles').onclick = () => filesOpen ? closeFiles() : openFiles();
 $('#mxTheme').onclick = () => openTheme();
 $('#mxMe').onclick = $('#mxProf').onclick = () => settingsDlg();
 $('#mxCine').onclick = () => codeDlg('cinema');
@@ -892,6 +895,7 @@ function blobUrl(id) { return urls.get(id); }
 async function mediaUrl(m) { if (urls.has(m.id)) return urls.get(m.id); const b = await blobGet(m.id); if (!b) return ''; const u = URL.createObjectURL(b); urls.set(m.id, u); return u; }
 function freeUrls() { stopVoice(); for (const u of urls.values()) URL.revokeObjectURL(u); urls.clear(); }
 function showEmpty() {
+  filesOpen = false;
   const main = $('#mxMain'); main.textContent = ''; root.classList.remove('chat-open');
   const e = el('div', 'mx-empty');
   e.innerHTML = IC.logo;
@@ -914,6 +918,7 @@ async function copyInvite() {
 }
 async function openChat(c) {
   if (!S.chats[c] && !isDm(c) && !S.groups[c]) return;
+  filesOpen = false;
   ensureChat(c);
   if (open !== c) { freeUrls(); open = c; enterChat = true; }
   root.classList.add('chat-open');
@@ -1177,13 +1182,24 @@ function fileEl(m) {
   t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
   w.append(ic, t);
   if (m.big) {
-    w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'bar'); bar.append(el('i')); t.append(bar);
+    w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'xbar'); bar.append(el('i')); t.append(bar);
     // режим скорости — переключается прямо во время передачи
     const md = el('span', 'xmode'); md.setAttribute('role', 'button'); md.tabIndex = 0; t.append(md);
     md.onclick = e => { e.preventDefault(); e.stopPropagation(); const soft = !xSoft(); setXMode(soft ? 'soft' : 'max'); toast(soft ? '🐢 Щадящий режим: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' (настраивается в профиле)' : '⚡ Максимальная скорость'); };
     xFill(w, m); w.onclick = e => { e.preventDefault(); xClick(m); }; return w; }
   w.title = 'Сохранить';
-  w.onclick = async e => { e.preventDefault(); if (!riskOk(m)) return; const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
+  w.onclick = async e => {
+    e.preventDefault();
+    if (DISK) {   // программа для Windows: в «Полученные» — там его видно в разделе «Файлы», вместе с тем, кто прислал
+      const d = S.dl[m.id];
+      if (d?.path && await APP.files.exists(d.path)) { APP.files.show(d.path); return; }
+      if (!riskOk(m)) return;
+      const b = await blobGet(m.id); if (!b) return;
+      try { const p = await APP.files.save(m.name, new Uint8Array(await b.arrayBuffer())); S.dl[m.id] = { st: 'done', got: m.size, path: p }; save(); APP.files.show(p); toast('«' + m.name + '» сохранён в «Загрузки → Кинозал → Полученные»'); }
+      catch (er) { toast('Не получилось сохранить: ' + errText(er)); }
+      return;
+    }
+    if (!riskOk(m)) return; const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
   return w;
 }
 async function sendFiles(c, files) {
@@ -1516,7 +1532,7 @@ function xLine(m) {
   }
 }
 function xFill(w, m) {
-  const s = xLine(m), sp = $('.t span', w), bar = $('.bar', w);
+  const s = xLine(m), sp = $('.t span', w), bar = $('.xbar', w);
   sp.textContent = s.txt; w.title = s.go ? 'Пауза' : '';
   bar.hidden = s.p == null; if (s.p != null) bar.firstChild.style.width = Math.min(100, s.p * 100).toFixed(1) + '%';
   w.classList.toggle('go', !!s.go);
@@ -1534,7 +1550,214 @@ function xPaint(id) {
     for (const w of ws) xFill(w, m);
   }, 150));
 }
-const sendAny = (c, files) => { files = [...files]; const im = files.filter(f => /^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)); const ot = files.filter(f => !im.includes(f)); if (im.length) sendImages(c, im); if (ot.length) sendFiles(c, ot); };
+
+// ---------- раздел «Файлы»: передачи со всех чатов, полученное, отправленное ----------
+// Не проводник по всему диску: только то, что прошло через Кинозал, — с тем, кто прислал и из какого чата.
+let filesOpen = false, fTab = store.get('fTab', 'live'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
+const FICON = { img: '🖼', video: '🎬', audio: '🎵', arc: '🗜', doc: '📄', exe: '⚙️', dir: '📁' };
+const fKind = n => /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(n) ? 'img' : /\.(mp4|webm|mkv|mov|m4v|avi)$/i.test(n) ? 'video' : /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n) ? 'audio' : /\.(zip|rar|7z|tar|gz|jar|mrpack)$/i.test(n) ? 'arc' : RISKY.test(n) ? 'exe' : 'doc';
+const fileUrl = p => 'file:///' + String(p).replace(/\\/g, '/').split('/').map((s, i) => i === 0 && /^[A-Za-z]:$/.test(s) ? s : encodeURIComponent(s)).join('/');
+const fDate = ts => { const d = new Date(ts), now = new Date(); return d.toDateString() === now.toDateString() ? d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('ru', { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) }); };
+const errText = e => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+// что сейчас передаётся: качаю (в том числе жду и на паузе) и отдаю
+async function liveItems() {
+  const rx = [], tx = [];
+  for (const [id, d] of Object.entries(S.dl)) if (['go', 'wait', 'pause', 'err'].includes(d.st)) { const m = dls.get(id)?.m || await msgGet(id); if (m?.big) rx.push(m); }
+  const seen = new Set(); for (const o of ups.values()) if (!seen.has(o.m.id)) { seen.add(o.m.id); tx.push(o.m); }
+  return { rx, tx };
+}
+const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).size;
+function openFiles(tab) {
+  if (open) { freeUrls(); open = null; find = null; }
+  filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
+  if (!DISK && fTab === 'recv') fTab = 'live';
+  root.classList.add('chat-open'); renderList(); renderFiles();
+  APP?.files?.watch?.(() => { if (filesOpen && fTab === 'recv') renderFiles(); });
+}
+function closeFiles() { filesOpen = false; showEmpty(); }
+// строка с карточкой сообщения (она сама обновляет прогресс) и подписью: кто, где, когда
+function msgRow(m, extra) {
+  const r = el('div', 'frow msg'), meta = el('div', 'fmeta');
+  const mine = m.from === myId, where = chatTitle(m.chat);
+  meta.append(el('span', '', (mine ? 'ты → ' + where : nameOf(m.from) + (isDm(m.chat) ? '' : ' · ' + where)) + ' · ' + fDate(m.ts)));
+  const go = el('button', 'lnk', 'к сообщению'); go.onclick = async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); }; meta.append(go);
+  for (const b of extra || []) meta.append(b);
+  r.append(fileEl(m), meta); return r;
+}
+const lnk = (t, f, cls) => { const b = el('button', 'lnk' + (cls ? ' ' + cls : ''), t); b.onclick = e => { e.stopPropagation(); f(); }; return b; };
+async function renderFiles() {
+  if (!filesOpen) return;
+  const gen = ++fGen, main = $('#mxMain');
+  const sec = el('section', 'mx-files'), head = el('header', 'mx-chead'), tabs = el('div', 'ftabs'), bar = el('div', 'fbar'), list = el('div', 'flist');
+  const back = el('button', 'ib back'); back.innerHTML = IC.back; back.title = 'К чатам'; back.onclick = closeFiles;
+  const n = liveCount();
+  for (const [k, t] of [['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Полученные']] : []), ['sent', 'Отправленные']]) {
+    const b = el('button', 'ftab' + (fTab === k ? ' on' : ''), t); b.onclick = () => { fTab = k; store.set('fTab', k); fPath = ''; fQ = ''; renderFiles(); }; tabs.append(b);
+  }
+  head.append(back, el('h2', '', 'Файлы'), tabs);
+  sec.append(head, bar, list);
+  if (fTab === 'live') await fillLive(bar, list);
+  else if (fTab === 'recv') await fillRecv(bar, list, gen);
+  else await fillSent(bar, list);
+  if (gen !== fGen || !filesOpen) return;
+  const keep = $('.mx-files .flist')?.scrollTop || 0, hadFocus = document.activeElement?.classList.contains('fq');
+  main.textContent = ''; main.append(sec); list.scrollTop = keep;
+  if (hadFocus) { const q = $('.fq', sec); q?.focus(); q?.setSelectionRange(q.value.length, q.value.length); }
+}
+function emptyEl(icon, t, s) { const e = el('div', 'fempty'); e.append(el('div', 'big', icon), el('b', '', t), el('span', '', s)); return e; }
+
+// --- передачи ---
+async function fillLive(bar, list) {
+  const seg = el('div', 'seg');
+  for (const [v, t] of Object.entries(XMODES)) { const b = el('button', 'btn' + (xMode() === v ? ' on' : ''), t); b.onclick = () => { setXMode(v); renderFiles(); }; seg.append(b); }
+  const all = el('div', 'fall');
+  all.append(lnk('⏸ всё на паузу', () => { for (const x of [...dls.values()]) xDrop(x, 'pause'); for (const d of Object.values(S.dl)) if (d.st === 'wait') d.st = 'pause'; save(); renderFiles(); }),
+    lnk('▶ продолжить всё', async () => { for (const [id, d] of Object.entries(S.dl)) if (['pause', 'err', 'wait'].includes(d.st) && !dls.has(id)) { const m = await msgGet(id); if (m) xStart(m); } setTimeout(renderFiles, 300); }));
+  bar.append(seg, all);
+  bar.append(el('p', 'fhint', xSoft() ? '🐢 Сейчас щадящий: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' — лимиты в профиле.' : '⚡ Сейчас без ограничений.' + (xMode() === 'auto' ? ' В звонке или зале Кинозала станет щадящим.' : '')));
+  const { rx, tx } = await liveItems();
+  if (!rx.length && !tx.length) { list.append(emptyEl('📭', 'Сейчас ничего не передаётся', 'Большие файлы и папки, которые качаешь или отдаёшь, появятся здесь — из всех чатов сразу. Отправить: скрепка в чате или перетащи файл в окно.')); return; }
+  if (rx.length) { list.append(el('h3', '', 'Качаю')); for (const m of rx.sort((a, b) => b.ts - a.ts)) list.append(msgRow(m)); }
+  if (tx.length) { list.append(el('h3', '', 'Отдаю')); for (const m of tx) list.append(msgRow(m)); }
+}
+// пока раздел открыт на «Передачах» — следим, не началось ли или не закончилось что-то
+let liveKey = '';
+setInterval(async () => {
+  const n = liveCount(), b = $('#mxFiles b'); if (b) { b.textContent = n || ''; b.hidden = !n; }
+  if (!filesOpen || fTab !== 'live') return;
+  const { rx, tx } = await liveItems(), k = rx.map(m => m.id + S.dl[m.id]?.st).join() + '|' + tx.map(m => m.id).join();
+  if (k !== liveKey) { liveKey = k; renderFiles(); }
+}, 1500);
+
+// --- полученные (только программа для Windows) ---
+function recvIndex() {   // путь на диске → сообщение, из которого он пришёл
+  const ix = new Map(); for (const [id, d] of Object.entries(S.dl)) if (d.st === 'done' && d.path) ix.set(d.path.toLowerCase(), id); return ix;
+}
+async function fillRecv(bar, list, gen) {
+  const q = el('input', 'fq'); q.type = 'search'; q.placeholder = 'Поиск по полученному'; q.value = fQ;
+  q.oninput = () => { fQ = q.value; clearTimeout(q.t); q.t = setTimeout(renderFiles, 250); };
+  const sort = el('select', 'fsort');
+  for (const [v, t] of [['date', 'Сначала новые'], ['name', 'По имени'], ['size', 'По размеру']]) { const o = el('option', '', t); o.value = v; o.selected = fSort === v; sort.append(o); }
+  sort.onchange = () => { fSort = sort.value; store.set('fSort', fSort); renderFiles(); };
+  const row = el('div', 'frowbar'); row.append(q, sort, lnk('📂 в проводнике', () => fPath ? APP.files.show(fPath) : APP.files.dir()));
+  bar.append(row);
+  let r, items;
+  try {
+    if (fQ.trim()) { items = await APP.files.search(fQ.trim()); r = null; }
+    else { r = await APP.files.list(fPath); items = r.items; }
+  } catch (e) { list.append(emptyEl('⚠️', 'Не получилось прочитать папку', errText(e))); return; }
+  if (gen !== fGen) return;
+  // хлебные крошки: Полученные › папка › папка
+  if (r) {
+    const crumbs = el('div', 'fcrumbs'), rel = r.path.slice(r.root.length).split(/[\\/]/).filter(Boolean);
+    const step = (t, p) => crumbs.append(lnk(t, () => { fPath = p; renderFiles(); }));
+    step('Полученные', ''); let acc = r.root;
+    for (const s of rel) { acc += '\\' + s; crumbs.append(el('span', '', '›')); step(s, acc); }
+    bar.append(crumbs); fPath = r.path === r.root ? '' : r.path;
+  } else bar.append(el('div', 'fcrumbs', 'Найдено: ' + items.length + (items.length >= 300 ? '+' : '')));
+  const cmp = { date: (a, b) => b.mtime - a.mtime, name: (a, b) => a.name.localeCompare(b.name, 'ru', { numeric: true }), size: (a, b) => b.size - a.size }[fSort];
+  items.sort((a, b) => (b.dir - a.dir) * (fSort === 'name' ? 1 : 0) || cmp(a, b));
+  if (!items.length) {
+    list.append(fQ.trim() ? emptyEl('🔍', 'Ничего не нашлось', 'Ищу по именам файлов и папок во всех полученных.') : emptyEl('📥', fPath ? 'Папка пуста' : 'Пока ничего не получено', 'Сюда попадает всё, что скачано из чатов: большие файлы, папки целиком, а ещё файлы из переписки после «сохранить».'));
+    return;
+  }
+  const ix = recvIndex(), msgs = new Map();
+  for (const it of items) { const id = ix.get(it.path.toLowerCase()); if (id && !msgs.has(id)) msgs.set(id, await msgGet(id)); }
+  for (const it of items) list.append(recvRow(it, msgs.get(ix.get(it.path.toLowerCase()))));
+}
+function recvRow(it, m) {
+  const r = el('div', 'frow file'), k = it.dir ? 'dir' : fKind(it.name);
+  const ic = el('span', 'fic ' + k, FICON[k]), t = el('div', 't'), acts = el('div', 'facts');
+  t.append(el('b', '', it.name));
+  const info = [it.dir ? (it.approx ? '≈ ' : '') + fmtSize(it.size) + ' · ' + it.count + ' ' + plural(it.count, 'объект', 'объекта', 'объектов') : fmtSize(it.size), fDate(it.mtime)];
+  if (it.where) info.push('в «' + (it.where || 'Полученные') + '»');
+  if (m) info.push('от ' + (m.from === myId ? 'тебя' : nameOf(m.from)) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat)));
+  t.append(el('span', '', info.join(' · ')));
+  if (k === 'img') { const th = el('img', 'fthumb'); th.loading = 'lazy'; th.src = fileUrl(it.path); th.alt = ''; ic.textContent = ''; ic.append(th); }
+  const open1 = () => it.dir ? (fQ = '', fPath = it.path, renderFiles()) : ['img', 'video', 'audio'].includes(k) ? preview(it, k) : openOnDisk(it);
+  acts.append(
+    ...(it.dir ? [] : [lnk('Открыть', () => openOnDisk(it))]),
+    lnk('В проводнике', () => APP.files.show(it.path)),
+    lnk('Переслать', () => pickChat('Кому переслать «' + it.name + '»?', c => fwdPath(c, it))),
+    ...(m ? [lnk('К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); })] : []),
+    lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del'));
+  r.append(ic, t, acts); r.onclick = e => { if (!e.target.closest('button')) open1(); };
+  r.title = it.dir ? 'Открыть папку' : ['img', 'video', 'audio'].includes(k) ? 'Посмотреть' : 'Открыть';
+  return r;
+}
+async function openOnDisk(it) {
+  if (RISKY.test(it.name) && !confirm('«' + it.name + '» — программа или скрипт. Запускай, только если доверяешь тому, кто прислал. Запустить?')) return;
+  const e = await APP.files.openPath(it.path); if (e) toast('Не открылось: ' + e);
+}
+function preview(it, k) {
+  modal((card, close) => {
+    card.classList.add('fprev');
+    const m = k === 'img' ? el('img') : el(k === 'video' ? 'video' : 'audio');
+    m.src = fileUrl(it.path); if (k !== 'img') { m.controls = true; m.autoplay = true; }
+    m.onerror = () => m.replaceWith(el('p', 'fhint', 'Кинозал не умеет показывать такой формат — нажми «Открыть», и он откроется в программе Windows.'));
+    const row = el('div', 'row'); row.append(btnEl('В проводнике', '', () => APP.files.show(it.path)), btnEl('Открыть', '', () => { openOnDisk(it); close(); }), btnEl('Закрыть', 'pri', close));
+    card.append(el('h2', '', it.name), m, row);
+  }, 'wide');
+}
+
+// --- отправленные: что я раздаю (большие файлы и папки) ---
+async function fillSent(bar, list) {
+  const ids = [...new Set([...Object.keys(S.src), ...srcMem.keys()])], ms = [];
+  for (const id of ids) { const m = await msgGet(id); if (m) ms.push(m); else { delete S.src[id]; srcMem.delete(id); } }
+  bar.append(el('p', 'fhint', 'Большие файлы и папки скачивают напрямую с этого ' + (DISK ? 'компьютера, пока Кинозал открыт' : 'устройства, пока открыта вкладка') + '. «Больше не раздавать» — их больше нельзя будет скачать (то, что уже скачали, останется у людей).'));
+  if (!ms.length) { list.append(emptyEl('📤', 'Ты пока ничего не раздаёшь', 'Отправь в чат файл больше 25 МБ или папку целиком — он появится здесь.')); return; }
+  for (const m of ms.sort((a, b) => b.ts - a.ts)) {
+    const p = S.src[m.id], extra = [];
+    if (DISK && p) extra.push(lnk('в проводнике', () => APP.files.show(p)));
+    extra.push(lnk('переслать', () => pickChat('Кому переслать «' + m.name + '»?', c => fwdSent(c, m))));
+    extra.push(lnk('больше не раздавать', () => {
+      if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
+      for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
+      delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
+    }, 'del'));
+    list.append(msgRow(m, extra));
+  }
+}
+
+// --- переслать: выбрать чат ---
+function pickChat(title, cb) {
+  modal((card, close) => {
+    const q = el('input'); q.type = 'text'; q.placeholder = 'Поиск'; const box = el('div', 'fpick');
+    const paint = () => {
+      box.textContent = '';
+      const cs = myChats().filter(c => !q.value.trim() || chatTitle(c).toLowerCase().includes(q.value.trim().toLowerCase())).sort((a, b) => (S.chats[b]?.last?.ts || 0) - (S.chats[a]?.last?.ts || 0));
+      for (const c of cs.slice(0, 50)) { const b = el('button', 'fpc'); b.append(avEl(c, 36), el('span', '', chatTitle(c))); b.onclick = () => { close(); cb(c); }; box.append(b); }
+      if (!cs.length) box.append(el('p', '', 'Нет таких чатов'));
+    };
+    q.oninput = paint; paint();
+    card.append(el('h2', '', title), q, box, btnEl('Отмена', '', close));
+  });
+}
+// переслать полученное с диска: папку — как папку, большое — напрямую, небольшое — прямо в переписку
+async function fwdPath(c, it) {
+  try {
+    if (it.dir) await sendDir(c, it.path);
+    else if (it.size <= LIMIT) {
+      if (!await APP.files.add(it.path)) throw new Error('файл недоступен');
+      const parts = []; for (let o = 0; o < it.size; o += 8 << 20) parts.push(await APP.files.read(it.path, o, Math.min(8 << 20, it.size - o)));
+      await post(c, { kind: 'file', name: fileName(it.name), size: it.size }, new Blob(parts, { type: 'application/octet-stream' }));
+      toast('Отправлено в «' + chatTitle(c) + '»');
+    } else await sendPathBig(c, it.path, it.name, it.size);
+  } catch (e) { toast('Не получилось переслать: ' + errText(e)); return; }
+  filesOpen = false; openChat(c);
+}
+async function fwdSent(c, m) {
+  const p = S.src[m.id], f = srcMem.get(m.id);
+  if (m.dir) await sendDir(c, p); else if (f) await sendBig(c, f); else if (p) await sendPathBig(c, p, m.name, m.size);
+  filesOpen = false; openChat(c);
+}
+async function sendPathBig(c, p, name, size) {
+  if (!await APP.files.add(p)) throw new Error('файл недоступен');
+  const id = uid(); S.src[id] = p; save();
+  await post(c, { id, kind: 'file', big: 1, dev: myDev || '', name: fileName(name), size, mime: 'application/octet-stream' });
+  toast('«' + name + '» скачают напрямую с этого компьютера, пока Кинозал открыт');
+}
+const sendAny =(c, files) => { files = [...files]; const im = files.filter(f => /^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)); const ot = files.filter(f => !im.includes(f)); if (im.length) sendImages(c, im); if (ot.length) sendFiles(c, ot); };
 // приглашение в звонок / кинозал
 function callEl(m) {
   const w = el('div', 'callcard'); w.dataset.code = m.code;
@@ -2169,6 +2392,7 @@ function backable() {
   if (document.querySelector('.mx-modal:not(.ring):not(.out)')) return 'modal';
   if (S.me && !document.getElementById('room')?.hidden) return 'room';
   if (open && narrow()) return 'chat';
+  if (filesOpen && narrow()) return 'files';
   return '';
 }
 function goBack() {
@@ -2178,6 +2402,7 @@ function goBack() {
   else if (b === 'modal') [...document.querySelectorAll('.mx-modal:not(.ring):not(.out)')].pop()?.remove();
   else if (b === 'room') window.kzRoom?.hide();
   else if (b === 'chat') closeChat();
+  else if (b === 'files') closeFiles();
   return !!b;
 }
 window.kzBack = goBack;   // приложение для Android спрашивает напрямую; false — закрывать нечего, сворачиваемся

@@ -475,4 +475,71 @@ function setupFiles() {
     return true;
   });
   ipcMain.handle('kz:fdir', () => { fs.mkdirSync(recvDir(), { recursive: true }); shell.openPath(recvDir()); return recvDir(); });
+
+  // ---------- раздел «Файлы»: что лежит в «Полученных», поиск, открыть, в корзину, слежение ----------
+  const hidden = n => n === '.докачка' || n.startsWith('~$') || n === 'desktop.ini' || n === 'Thumbs.db';
+  const inRecv = p => { const r = recvDir(); return p === r || inside(p, r); };
+  async function dirSize(p, budget) {   // размер папки; на огромных — приблизительно (не больше budget записей)
+    let s = 0;
+    for (const en of await fsp.readdir(p, { withFileTypes: true }).catch(() => [])) {
+      if (budget.n-- <= 0) { budget.cut = true; break; }
+      const f = path.join(p, en.name);
+      if (en.isDirectory()) s += await dirSize(f, budget); else if (en.isFile()) s += (await fsp.stat(f).catch(() => ({ size: 0 }))).size;
+    }
+    return s;
+  }
+  async function item(p, name) {
+    const st = await fsp.stat(p).catch(() => null); if (!st) return null;
+    const it = { name, path: p, dir: st.isDirectory(), mtime: st.mtimeMs, size: st.size };
+    if (it.dir) { const b = { n: 20000 }; it.size = await dirSize(p, b); it.approx = !!b.cut; it.count = (await fsp.readdir(p).catch(() => [])).filter(n => !hidden(n)).length; }
+    return it;
+  }
+  ipcMain.handle('kz:flist', async (e, p) => {
+    const root = recvDir(); await fsp.mkdir(root, { recursive: true });
+    p = p ? String(p) : root; if (!inRecv(p)) p = root;
+    const items = [];
+    for (const n of await fsp.readdir(p).catch(() => [])) { if (hidden(n)) continue; const it = await item(path.join(p, n), n); if (it) items.push(it); }
+    return { root, path: p, items };
+  });
+  ipcMain.handle('kz:fsearch', async (e, q) => {
+    q = String(q || '').toLowerCase().trim(); const root = recvDir(), out = []; if (!q) return out;
+    let budget = 50000;
+    async function go(d) {
+      for (const en of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) {
+        if (out.length >= 300 || budget-- <= 0) return; if (hidden(en.name)) continue;
+        const f = path.join(d, en.name);
+        if (en.name.toLowerCase().includes(q)) { const it = await item(f, en.name); if (it) { it.where = path.relative(root, d); out.push(it); } }
+        if (en.isDirectory()) await go(f);
+      }
+    }
+    await go(root); return out;
+  });
+  const allowed = p => inRecv(p) || sends.has(p) || [...sends].some(s => inside(p, s));
+  ipcMain.handle('kz:fopenp', async (e, p) => { p = String(p || ''); if (!allowed(p) || !fs.existsSync(p)) return 'нет такого файла'; return shell.openPath(p); });
+  ipcMain.handle('kz:ftrash', async (e, p) => {
+    p = String(p || ''); if (!inRecv(p) || p === recvDir()) return false;   // удаляем только полученное и только в корзину
+    await shell.trashItem(p); log('[файлы] в корзину', p); return true;
+  });
+  // небольшой файл из чата (он хранится в переписке) — сохранить в «Полученные», чтобы он был в разделе «Файлы»
+  ipcMain.handle('kz:fsave', async (e, name, data) => {
+    const dir = recvDir(); await fsp.mkdir(dir, { recursive: true });
+    const nm = safeName(name), ext = path.extname(nm), base = ext ? nm.slice(0, -ext.length) : nm;
+    let to = path.join(dir, nm); for (let i = 1; fs.existsSync(to); i++) to = path.join(dir, base + ' (' + i + ')' + ext);
+    await fsp.writeFile(to, Buffer.from(data.buffer, data.byteOffset, data.byteLength)); return to;
+  });
+  ipcMain.handle('kz:fexists', (e, p) => { p = String(p || ''); return allowed(p) && fs.existsSync(p); });
+  // что-то поменяли в «Полученных» (в том числе через обычный проводник) — раздел «Файлы» перерисуется
+  let watcher = null, watchT = 0;
+  ipcMain.handle('kz:fwatch', () => {
+    if (watcher) return true;
+    try {
+      fs.mkdirSync(recvDir(), { recursive: true });
+      watcher = fs.watch(recvDir(), { recursive: true }, (ev, f) => {
+        if (String(f || '').startsWith('.докачка')) return;
+        clearTimeout(watchT); watchT = setTimeout(() => { if (win && !win.isDestroyed()) win.webContents.send('kz:fchanged'); }, 400);
+      });
+      watcher.on('error', () => { watcher = null; });
+    } catch (er) { watcher = null; return false; }
+    return true;
+  });
 }
