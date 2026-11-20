@@ -559,11 +559,16 @@ html.wall-all #mx>.mx-side{z-index:2}
 .kvtop .t b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kvtop .t span{font-size:13px;opacity:.75}.kvtop .t .ex{opacity:.9}
 .kvtop .acts{display:flex;gap:8px;flex:none}
-.kvstage{display:grid;place-items:center;overflow:hidden;padding:12px;cursor:zoom-in}
-.kvstage img{max-width:100%;max-height:100%;object-fit:contain;user-select:none}
+.kvstage{position:relative;display:grid;place-items:center;overflow:hidden;cursor:zoom-in;touch-action:none;user-select:none}
+.kvstage img{position:absolute;left:0;top:0;max-width:none;max-height:none;transform-origin:0 0;will-change:transform;user-select:none;-webkit-user-drag:none}
+.kvstage.zoomed{cursor:zoom-out}
+.kvstage.pannable{cursor:grab}.kvstage.pannable.drag{cursor:grabbing}
 .kvstage video{max-width:100%;max-height:100%}
-.kvstage.full{display:block;overflow:auto;padding:0;cursor:zoom-out}
-.kvstage.full img{max-width:none;max-height:none}
+.kvzoom{display:flex;gap:6px;flex:none}
+.kvzoom .btn{min-height:38px!important;padding:6px 12px;min-width:44px}
+.filecard .ic.thumb{overflow:hidden;background:#fff;padding:0}
+.filecard .ic.thumb img{width:100%;height:100%;object-fit:cover;object-position:top}
+.filecard .t .pages{display:block;font-size:12px;opacity:.7}
 .kvstage .fhint{color:#ddd}
 @media (max-width:760px){.kvtop{flex-wrap:wrap}.kvtop .acts{width:100%}.kvtop .acts .btn{flex:1}}
 /* библиотека файлов и маршруты */

@@ -1110,7 +1110,8 @@ function msgMenu(m, e) {
   if (m.from === myId) add('🧨', 'Удалить у всех', () => dropForAll(m), 'danger');
   document.body.append(mn); mn.addEventListener('click', ev => ev.stopPropagation());
 }
-async function photo(m) { const u = await mediaUrl(m); if (!u) return; $('#lbImg').src = u; const a = $('#lbSave'); a.href = u; a.download = 'kinozal-foto-' + new Date(m.ts).toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.' + (m.mime === 'image/jpeg' ? 'jpg' : m.mime.split('/')[1]); $('#lb').hidden = false; }
+// фото из чата — в то же окно просмотра, с приближением и перемещением
+async function photo(m) { const u = await mediaUrl(m); if (!u) return; const b = await blobGet(m.id); viewer({ src: u, photo: true, m: { ...m, name: fileNameOf(m), size: b?.size || 0 } }); }
 
 // голосовые: одна общая «вертушка» на все сообщения
 const player = { a: new Audio(), id: null, speed: +store.get('mxSpeed', 1) || 1 };
@@ -1184,6 +1185,11 @@ const riskOk = m => !RISKY.test(m.name || '') || confirm('«' + m.name + '» —
 // файл с картинкой: превью (или сам оригинал, если он в переписке) над карточкой, по клику — просмотр в полный размер
 function fileEl(m) {
   const card = fileCard(m);
+  if (m.th && /\.pdf$/i.test(m.name || '')) {   // PDF: большая картинка титульного листа не нужна — маленькая вместо значка
+    const ic = $('.ic', card); ic.textContent = ''; ic.classList.add('thumb'); const i = el('img'); i.src = m.th; i.alt = ''; ic.append(i);
+    if (m.ex) $('.t span', card).after(el('span', 'pages', m.ex));
+    return card;
+  }
   if (!m.th && !(m.blob && viewable(m))) return card;
   const box = el('div', 'fwrap'), md = el('div', 'fmedia'), img = el('img');
   img.alt = m.name; img.decoding = 'async';
@@ -1202,7 +1208,7 @@ function fileCard(m) {
   const w = el('a', 'filecard'); w.href = '#';
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
   const ic = el('span', 'ic' + (m.dir ? ' dir' : ''), m.dir ? '📁' : ext || '📄'), t = el('div', 't');
-  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
+  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + (!m.big && canView(m) ? ' · открыть' : ' · сохранить'))); hilite(t.firstChild, findQ());
   w.append(ic, t);
   if (m.big) {
     w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'xbar'); bar.append(el('i')); t.append(bar);
@@ -1521,7 +1527,7 @@ async function openOriginal(m) {
 function viewer(o) {
   const m = o.m, ov = el('div', 'kzview'), top = el('div', 'kvtop'), stage = el('div', 'kvstage'), t = el('div', 't');
   const tif = /\.tiff?$/i.test(m.name || '') && !o.full;   // TIFF без полной расшифровки: видна только встроенная миниатюра
-  t.append(el('b', '', m.name), el('span', '', [fmtSize(m.size), m.w && m.h && !tif ? m.w + '×' + m.h : '', tif ? 'TIFF — показана встроенная миниатюра, сам файл не тронут' : o.raw ? 'RAW — оригинал не тронут' : o.video ? '' : o.full ? 'полный размер, раскодирован здесь' : 'оригинал'].filter(Boolean).join(' · ')));
+  t.append(el('b', '', m.name), el('span', '', [fmtSize(m.size), m.w && m.h && !tif ? m.w + '×' + m.h : '', tif ? 'TIFF — показана встроенная миниатюра, сам файл не тронут' : o.raw ? 'RAW — оригинал не тронут' : o.video ? '' : o.photo ? 'фото из чата' : o.full ? 'полный размер, раскодирован здесь' : 'оригинал'].filter(Boolean).join(' · ')));
   if (o.ex) t.append(el('span', 'ex', o.ex));
   if (o.preview) t.append(el('span', 'ex', 'Это превью — оригинал появится после скачивания'));
   const acts = el('div', 'acts'), urls = o.own ? [o.src] : [];
@@ -1536,16 +1542,72 @@ function viewer(o) {
   let media;
   if (o.video) { media = el('video'); media.controls = true; media.autoplay = true; media.src = o.src; media.onerror = () => media.replaceWith(el('p', 'fhint', 'Такое видео Кинозал не показывает — сохрани и открой в проигрывателе.')); }
   else {
-    media = el('img'); media.alt = m.name; media.draggable = false;
+    media = el('img'); media.alt = m.name || ''; media.draggable = false;
     if (o.orient > 1 && !o.preview) {   // RAW, снятый «вертикально»: поворачиваем картинку
       dataOr(o.src).then(b => bitmapOf(b, true)).then(async bm => { const cv = oriented(bm, o.orient); bm.close?.(); const b = await new Promise(r => cv.toBlob(r, 'image/jpeg', .95)); const u = URL.createObjectURL(b); urls.push(u); media.src = u; }).catch(() => { media.src = o.src; });
     } else media.src = o.src;
-    stage.title = 'Клик — 100%, ещё клик — по размеру окна';
-    stage.onclick = e => { if (e.target !== media) { close(); return; } const r = media.getBoundingClientRect(), fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height; stage.classList.toggle('full'); if (stage.classList.contains('full')) { stage.scrollLeft = media.naturalWidth * fx - stage.clientWidth / 2; stage.scrollTop = media.naturalHeight * fy - stage.clientHeight / 2; } };
+    zoomable(stage, media, top, close);
   }
   stage.append(media); ov.append(top, stage); document.body.append(ov);
-  const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
+  const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } else stage.zoomKey?.(e); };
   document.addEventListener('keydown', key, true);
+}
+// приближение и перемещение: колесо — к точке под курсором, клик — «по окну ↔ 100%» (маленькие — ×2),
+// зажатая кнопка мыши — тащить, двумя пальцами — щипок; кнопки − 100% + и клавиши + − 0
+function zoomable(stage, img, top, close) {
+  let fit = 1, s = 1, x = 0, y = 0, ready = false;
+  const bar = el('div', 'kvzoom'), pct = el('button', 'btn', '—');
+  const zb = (t, f, title) => { const b = el('button', 'btn', t); b.title = title; b.onclick = e => { e.stopPropagation(); f(); }; return b; };
+  pct.title = 'По размеру окна / 100 %'; pct.onclick = e => { e.stopPropagation(); toggle(); };
+  bar.append(zb('−', () => zoomAt(s / 1.4), 'Отдалить (−)'), pct, zb('+', () => zoomAt(s * 1.4), 'Приблизить (+)'));
+  top.querySelector('.acts')?.before(bar);
+  const W = () => stage.clientWidth, H = () => stage.clientHeight, nw = () => img.naturalWidth || 1, nh = () => img.naturalHeight || 1;
+  const maxS = () => Math.max(fit * 8, 4), minS = () => Math.min(fit, 1) * .5;
+  function clamp() {   // картинка не уезжает за край: меньше окна — по центру, больше — край не отходит от края окна
+    const w = nw() * s, h = nh() * s;
+    x = w <= W() ? (W() - w) / 2 : Math.min(0, Math.max(W() - w, x));
+    y = h <= H() ? (H() - h) / 2 : Math.min(0, Math.max(H() - h, y));
+  }
+  function apply(anim) {
+    clamp(); img.style.transition = anim ? 'transform .18s ease-out' : 'none';
+    img.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+    pct.textContent = Math.round(s * 100) + ' %';
+    stage.classList.toggle('zoomed', s > fit * 1.01); stage.classList.toggle('pannable', nw() * s > W() + 1 || nh() * s > H() + 1);
+  }
+  function zoomAt(ns, cx = W() / 2, cy = H() / 2, anim = true) {   // точка (cx, cy) окна остаётся на месте
+    ns = Math.max(minS(), Math.min(maxS(), ns));
+    x = cx - (cx - x) * ns / s; y = cy - (cy - y) * ns / s; s = ns; apply(anim);
+  }
+  const toggle = (cx, cy) => zoomAt(s > fit * 1.01 ? fit : Math.max(1, fit * 2), cx, cy);
+  function reset() { if (!img.naturalWidth) return; fit = Math.min(1, W() / nw(), H() / nh()); s = fit; x = 0; y = 0; ready = true; apply(false); }
+  img.addEventListener('load', reset); if (img.complete) reset();
+  const ro = new ResizeObserver(() => { if (!ready) return; const was = s <= fit * 1.01; fit = Math.min(1, W() / nw(), H() / nh()); if (was) s = fit; apply(false); }); ro.observe(stage);
+  stage.addEventListener('wheel', e => { e.preventDefault(); const r = stage.getBoundingClientRect(); zoomAt(s * Math.pow(1.0018, -e.deltaY * (e.deltaMode ? 33 : 1)), e.clientX - r.left, e.clientY - r.top, false); }, { passive: false });
+  // мышь и пальцы
+  const pts = new Map(); let moved = 0, last = null, pinch = null;
+  stage.addEventListener('pointerdown', e => {
+    if (e.button > 0) return; stage.setPointerCapture(e.pointerId); pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    moved = 0; last = { x: e.clientX, y: e.clientY };
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s }; }
+    stage.classList.add('drag');
+  });
+  stage.addEventListener('pointermove', e => {
+    if (!pts.has(e.pointerId)) return; pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    const r = stage.getBoundingClientRect();
+    if (pts.size === 2 && pinch) { const [a, b] = [...pts.values()]; zoomAt(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top, false); moved = 99; return; }
+    const dx = e.clientX - last.x, dy = e.clientY - last.y; last = { x: e.clientX, y: e.clientY }; moved += Math.abs(dx) + Math.abs(dy);
+    x += dx; y += dy; apply(false);
+  });
+  const up = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; if (!pts.size) stage.classList.remove('drag'); if (pts.size === 1) last = [...pts.values()][0]; };
+  stage.addEventListener('pointerup', up); stage.addEventListener('pointercancel', up);
+  stage.addEventListener('click', e => {
+    if (moved > 5) return;   // это было перетаскивание, а не клик
+    const r = img.getBoundingClientRect();
+    if (s <= fit * 1.01 && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) { close(); return; }   // мимо картинки — закрыть
+    const sr = stage.getBoundingClientRect(); toggle(e.clientX - sr.left, e.clientY - sr.top);
+  });
+  stage.zoomKey = e => { if (e.key === '+' || e.key === '=') zoomAt(s * 1.4); else if (e.key === '-' || e.key === '_') zoomAt(s / 1.4); else if (e.key === '0') zoomAt(fit); };
+  stage.title = 'Колесо — приблизить к курсору · клик — 100 % / по окну · тяни — двигать';
 }
 const dataOr = src => fetch(src).then(r => r.blob());
 async function sendFiles(c, files) {
