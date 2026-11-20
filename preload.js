@@ -29,6 +29,7 @@ const files = {
   trash: p => ipcRenderer.invoke('kz:ftrash', p),
   save: (name, data) => ipcRenderer.invoke('kz:fsave', name, data),
   exists: p => ipcRenderer.invoke('kz:fexists', p),
+  rawPreview: p => ipcRenderer.invoke('kz:fpreview', p),
   add: p => ipcRenderer.invoke('kz:fadd', p),
   watch: cb => { ipcRenderer.removeAllListeners('kz:fchanged'); ipcRenderer.on('kz:fchanged', () => cb()); return ipcRenderer.invoke('kz:fwatch'); }
 };
