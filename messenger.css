@@ -184,6 +184,22 @@
 .filecard .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .filecard .t span{font-size:13px;opacity:.75}
 .filecard:hover .t span{text-decoration:underline}
+.filecard.big .t{flex:1}
+.filecard .bar{display:block;height:4px;margin-top:7px;border-radius:3px;background:rgba(127,127,127,.25);overflow:hidden}
+.filecard .bar[hidden]{display:none}
+.filecard .bar>i{display:block;height:100%;width:0;border-radius:inherit;background:var(--acc);transition:width .3s var(--ease-out)}
+.m.mine .filecard .bar>i{background:currentColor}
+.filecard .xmode{display:inline-block;margin-top:6px;padding:2px 9px;border-radius:999px;font-size:12px!important;font-weight:700;opacity:1!important;background:rgba(127,127,127,.18);cursor:pointer;user-select:none}
+.filecard .xmode[hidden]{display:none}
+.filecard .xmode:hover{background:rgba(127,127,127,.3);text-decoration:none!important}
+.xspeed{display:grid;gap:8px}
+.xspeed .seg{display:flex;gap:6px;flex-wrap:wrap}
+.xspeed .seg button{flex:1;min-width:90px;padding-inline:8px;white-space:nowrap}
+.xspeed .seg button.on{background:var(--acc);color:#fff;border-color:transparent}
+.xspeed label.rng{display:grid;gap:4px;font-size:14px}
+.xspeed input[type=range]{width:100%;accent-color:var(--acc)}
+.filecard.go .ic{animation:fcpulse 1.6s ease-in-out infinite}
+@keyframes fcpulse{50%{opacity:.55}}
 .m.mine .callcard .btn{background:var(--mineInk);color:var(--mine1);border-color:transparent}
 
 .mx-down{position:absolute;right:22px;bottom:86px;width:44px;height:44px;border-radius:50%;border:1px solid var(--line2);background:var(--card);color:var(--ink);display:grid;place-items:center;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.4);z-index:2}

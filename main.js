@@ -258,9 +258,75 @@ app.whenReady().then(() => {
     return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
   });
 
+  setupFiles();
   createWindow();
   setupTray();
   setupUpdates();
 });
 
 app.on('window-all-closed', () => app.quit());
+
+// ---------- большие файлы: читаем отправляемое с диска и пишем полученное сразу на диск ----------
+// Полученное — в «Загрузки\Кинозал\Полученные». Пока файл качается, он лежит там же
+// в скрытой папке .докачка как <id сообщения>.part: после обрыва или перезапуска докачивается с того же места.
+// Читать странице можно только файлы, которые человек сам выбрал для отправки (список в userData\sends.json).
+function setupFiles() {
+  const fsp = fs.promises;
+  const tag = prof ? '-' + prof.split('=')[1].replace(/[^\w-]/g, '') : '';   // у тестовых копий — свои папки
+  const recvDir = () => path.join(app.getPath('downloads'), 'Кинозал', 'Полученные' + tag);   // не «Документы»: их часто синхронизирует OneDrive
+  const partDir = () => path.join(recvDir(), '.докачка');
+  const sendsFile = () => path.join(app.getPath('userData'), 'sends.json');
+  let sends = new Set();
+  try { sends = new Set(JSON.parse(fs.readFileSync(sendsFile(), 'utf8'))); } catch (e) {}
+  const saveSends = () => { try { fs.writeFileSync(sendsFile(), JSON.stringify([...sends].slice(-2000))); } catch (e) {} };
+  const okId = id => /^[\w-]{1,60}$/.test(String(id || ''));
+  const partOf = id => path.join(partDir(), id + '.part');
+  const inside = (p, dir) => { const r = path.relative(dir, p); return !!r && !r.startsWith('..') && !path.isAbsolute(r); };
+  const open = new Map();   // id -> FileHandle недокачанного файла
+  const handle = async id => { let h = open.get(id); if (!h) { await fsp.mkdir(partDir(), { recursive: true }); h = await fsp.open(partOf(id), 'r+').catch(() => fsp.open(partOf(id), 'w+')); open.set(id, h); } return h; };
+  const shut = async id => { const h = open.get(id); open.delete(id); if (h) await h.close().catch(() => {}); };
+  const safeName = s => (String(s || 'файл').replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 120)) || 'файл';
+
+  // отправка: страница отдаёт путь файла, выбранного человеком, — запоминаем, что его можно читать
+  ipcMain.handle('kz:fadd', (e, p) => { p = String(p || ''); if (!path.isAbsolute(p)) return false; try { if (!fs.statSync(p).isFile()) return false; } catch (er) { return false; } sends.add(p); saveSends(); return true; });
+  ipcMain.handle('kz:fstat', async (e, p) => { p = String(p || ''); if (!sends.has(p) && !inside(p, recvDir())) return null; try { const s = await fsp.stat(p); return { size: s.size, mtime: s.mtimeMs }; } catch (er) { return null; } });
+  ipcMain.handle('kz:fread', async (e, p, off, len) => {
+    p = String(p || ''); if (!sends.has(p)) throw new Error('нет доступа к файлу');
+    off = Math.max(0, +off || 0); len = Math.max(0, Math.min(8 << 20, +len || 0));
+    const h = await fsp.open(p, 'r');
+    try { const b = Buffer.alloc(len); const { bytesRead } = await h.read(b, 0, len, off); return bytesRead === len ? b : b.subarray(0, bytesRead); } finally { await h.close(); }
+  });
+  // приём: сколько уже скачано (обрезаем до целых кусков), запись куска, готово, удалить
+  ipcMain.handle('kz:fopen', async (e, id, blk) => {
+    if (!okId(id)) throw new Error('плохой id');
+    blk = Math.max(1, +blk || 1);
+    const h = await handle(id); const { size } = await h.stat(); const have = Math.floor(size / blk) * blk;
+    if (have !== size) await h.truncate(have);
+    return have;
+  });
+  ipcMain.handle('kz:fwrite', async (e, id, off, data) => {
+    if (!okId(id)) throw new Error('плохой id');
+    const h = await handle(id), b = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+    let done = 0; while (done < b.length) { const { bytesWritten } = await h.write(b, done, b.length - done, (+off || 0) + done); done += bytesWritten; }
+    return true;
+  });
+  ipcMain.handle('kz:fdone', async (e, id, name) => {
+    if (!okId(id)) throw new Error('плохой id');
+    await shut(id);
+    const dir = recvDir(); await fsp.mkdir(dir, { recursive: true });
+    const nm = safeName(name), ext = path.extname(nm), base = ext ? nm.slice(0, -ext.length) : nm;
+    let to = path.join(dir, nm);
+    for (let i = 1; fs.existsSync(to); i++) to = path.join(dir, base + ' (' + i + ')' + ext);
+    await fsp.rename(partOf(id), to);
+    log('[файлы] получен', to);
+    return to;
+  });
+  ipcMain.handle('kz:fdrop', async (e, id) => { if (!okId(id)) return false; await shut(id); await fsp.rm(partOf(id), { force: true }).catch(() => {}); return true; });
+  ipcMain.handle('kz:fshow', (e, p) => {
+    p = String(p || '');
+    if (!sends.has(p) && !inside(p, recvDir())) return false;
+    if (fs.existsSync(p)) shell.showItemInFolder(p); else { fs.mkdirSync(recvDir(), { recursive: true }); shell.openPath(recvDir()); }
+    return true;
+  });
+  ipcMain.handle('kz:fdir', () => { fs.mkdirSync(recvDir(), { recursive: true }); shell.openPath(recvDir()); return recvDir(); });
+}

@@ -88,16 +88,21 @@ function wipeChat(chat) {
   return new Promise((res, rej) => {
     const t = db.transaction(['msgs', 'blobs'], 'readwrite'), bl = t.objectStore('blobs');
     const r = t.objectStore('msgs').index('chat').openCursor(IDBKeyRange.bound([chat, -Infinity], [chat, Infinity]));
-    r.onsuccess = () => { const c = r.result; if (c) { bl.delete(c.value.id); c.delete(); c.continue(); } };
+    r.onsuccess = () => { const c = r.result; if (c) { xGone(c.value.id); bl.delete(c.value.id); bl.delete(partsKey(c.value.id)); c.delete(); c.continue(); } };
     t.oncomplete = res; t.onerror = () => rej(t.error);
   });
 }
-const delMsg = id => new Promise(res => { const t = db.transaction(['msgs', 'blobs'], 'readwrite'); t.objectStore('msgs').delete(id); t.objectStore('blobs').delete(id); t.oncomplete = res; t.onerror = res; });
+const partsKey = id => IDBKeyRange.bound(id + ':', id + ':￿');   // куски большого файла, пока он качается в браузере
+const delMsg = id => new Promise(res => { xGone(id); const t = db.transaction(['msgs', 'blobs'], 'readwrite'); t.objectStore('msgs').delete(id); t.objectStore('blobs').delete(id); t.objectStore('blobs').delete(partsKey(id)); t.oncomplete = res; t.onerror = res; });
 
 // состояние: я, контакты, группы, чаты (сами сообщения — отдельно, в msgs)
 let S = await kvGet('state') || null;
 if (!S) S = { me: null, contacts: {}, groups: {}, chats: {}, ended: {} };
 S.ended ||= {};
+// большие файлы: что качаю (S.dl: id → {st, got, path}), откуда читаю отправленное (S.src: id → путь на диске)
+S.dl ||= {}; S.src ||= {};
+for (const d of Object.values(S.dl)) if (d.st === 'go') d.st = 'wait';   // программу закрыли посреди закачки — докачаем
+const dls = new Map(), ups = new Map(), expect = new Map(), srcMem = new Map();
 let saveT = 0, wiping = false;
 function save() { if (wiping) return; clearTimeout(saveT); saveT = setTimeout(() => kvSet('state', S).catch(e => console.warn('save', e)), 250); }
 
@@ -231,6 +236,7 @@ function startPeer() {
   p.on('open', () => { if (peer !== p) return; idTaken = 0; setNet('on'); dialAll(); });
   p.on('connection', c => {
     if (c.metadata?.link === 1) { linkServe(c); return; }   // новое устройство входит в мой профиль по коду
+    if (c.metadata?.xfer) { xIncoming(c); return; }          // отправитель большого файла, который я попросил
     const x = parsePeer(c.peer);
     if (!x || (x.u === myId && x.dev === myDev) || S.contacts[x.u]?.state === 'blocked') { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }
     wire(c, false, x.u, x.dev);
@@ -264,7 +270,7 @@ function dial(u) {
 async function dialAll() { for (const u of dialList()) { dial(u); await sleep(120); } }
 setInterval(dialAll, 40000);
 window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
-const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
+const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
 function wire(c, outgoing, u, dev = '') {
   const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, dev, self: u === myId, peer: peerOf(u, dev), their: null, q: Promise.resolve() };
   c.on('open', () => { c.send(helloMsg(L.nonce)); });
@@ -275,6 +281,7 @@ function wire(c, outgoing, u, dev = '') {
     if (m?.get(dev) === L) {
       m.delete(dev); if (!m.size) links.delete(u);
       jlog('[связь] нет с', L.peer);
+      for (const x of [...dls.values()]) if (x.L === L) xDrop(x, 'wait');   // докачаем, когда связь вернётся
       if (L.self) { (S.devSeen ||= {})[dev] = Date.now(); save(); renderDevs(); }
       else if (!isOn(u) && S.contacts[u]) { S.contacts[u].seen = Date.now(); save(); }
       presence(u);
@@ -315,7 +322,7 @@ async function onData(L, d) {
   if (d.t === 'proof') {
     if (!L.their || L.authed) return;
     if (!await verify(L.their.dpub || L.their.pub, d.sig, L.nonce + '|' + L.uid)) { console.warn('подпись не сошлась', L.uid); L.c.close(); return; }
-    L.authed = true; return linkUp(L);
+    L.authed = true; L.at = Date.now(); return linkUp(L);
   }
   if (d.t === 'revoked' && L.self && myDev) return onRevs(d.revs, true);   // меня отвязали, пока я был не в сети
   if (!L.authed) return;
@@ -354,14 +361,18 @@ async function onData(L, d) {
     case 'devs': return onDevs(L, d);
     case 'contacts': if (L.self) onContacts(d); return;
     case 'bye': if (L.self && L.dev && !myDev) revokeDev(L.dev); return;   // моё устройство вышло из профиля — его ключ стёрт, убираем из списка
+    case 'xget': return xServe(L, d);
+    case 'xno': return xNo(L, d);
   }
 }
 function linkUp(L) {
   const u = L.uid; let lm = links.get(u); const ex = lm?.get(L.dev);
   if (ex && ex !== L && ex.authed && ex.c.open) {
-    // двое позвонили друг другу одновременно — оставляем соединение того, чей адрес в сети меньше
+    // двое позвонили друг другу одновременно — оставляем соединение того, чей адрес в сети меньше.
+    // Если же старому соединению больше 10 с, собеседник перезапустился (упал, выключили свет), а старое
+    // просто ещё не заметило, что мертво, — оставляем новое, иначе связи не будет, пока WebRTC не похоронит старое
     const exO = ex.outgoing ? myPeer : L.peer, myO = L.outgoing ? myPeer : L.peer;
-    if (exO < myO) { setTimeout(() => L.c.close(), 300); return; }
+    if (Date.now() - (ex.at || 0) < 10000 && exO < myO) { setTimeout(() => L.c.close(), 300); return; }
     setTimeout(() => ex.c.close(), 300);
   }
   if (!lm) links.set(u, lm = new Map());
@@ -380,7 +391,7 @@ function linkUp(L) {
   for (const c of sharedChats(u)) { const ch = S.chats[c]; if (ch?.myRead) send(L, { t: 'read', chat: c, ts: ch.myRead }); }
   send(L, { t: 'calls', live: myCall && window.kzRoom?.inRoom ? [myCall.code] : [] });
   if (hasDevs() || S.revs) send(L, devsMsg());
-  sendSync(L); flushQ(u);
+  sendSync(L); flushQ(u); xResume(L);
 }
 // встретились два моих устройства: сверяем всё — профиль, контакты, группы, устройства, прочитанное и переписку
 function selfUp(L) {
@@ -388,7 +399,7 @@ function selfUp(L) {
   send(L, profileMsg()); send(L, contactsMsg()); send(L, devsMsg());
   const gl = Object.values(S.groups).filter(g => !g.gone && g.members.includes(myId)).map(gWire); if (gl.length) send(L, { t: 'groups', list: gl });
   for (const ch of Object.values(S.chats)) if (ch.myRead) send(L, { t: 'read', chat: ch.id, ts: ch.myRead });
-  sendSync(L); flushQ(myId); presence(myId); renderDevs();
+  sendSync(L); flushQ(myId); presence(myId); renderDevs(); xResume(L);
 }
 const myChats = () => Object.keys(S.chats).filter(c => isDm(c) ? members(c).includes(myId) : !!S.groups[c] && !S.groups[c].gone);
 const chatsFor = L => L.self ? myChats() : sharedChats(L.uid);
@@ -404,13 +415,13 @@ async function onSync(L, d) {
     for (const m of await chatMsgs(c)) if (!theirs.has(m.id)) { if (!await push(L, m)) return; await sleep(5); }
   }
 }
-const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
+const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, big: m.big, dev: m.big ? m.dev || '' : undefined, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
 // кому: id человека или одна связь; своим устройствам уходят ещё галочки и реакции
 async function push(x, m) {
   const self = typeof x === 'object' ? x.self : x === myId;
   if (typeof x === 'object' ? !(x.authed && x.c.open) : !isOn(x)) return false;
   let b = null;
-  if (m.blob) { const bl = await blobGet(m.id); if (bl) b = await bl.arrayBuffer(); }
+  if (m.blob && !m.big) { const bl = await blobGet(m.id); if (bl) b = await bl.arrayBuffer(); }
   const w = wireMsg(m); if (self) { if (m.ack) w.ack = 1; if (m.rx) w.rx = m.rx; }
   return send(x, { t: 'msg', m: w, b });
 }
@@ -620,8 +631,11 @@ function cleanMsg(x) {
     if (x.w) m.w = x.w | 0; if (x.h) m.h = x.h | 0;
   }
   if (m.kind === 'file') {
-    m.blob = 1; m.mime = /^[\w.+-]+\/[\w.+-]+$/.test(String(x.mime || '')) ? String(x.mime) : 'application/octet-stream';
+    m.mime = /^[\w.+-]+\/[\w.+-]+$/.test(String(x.mime || '')) ? String(x.mime) : 'application/octet-stream';
     m.name = fileName(x.name); m.size = Math.max(0, +x.size || 0);
+    // большой файл в сообщение не вложен: его скачивают напрямую с устройства отправителя (dev), кусками
+    if (x.big) { m.big = 1; m.dev = /^[0-9a-z]{6}$/.test(String(x.dev || '')) ? String(x.dev) : ''; if (!m.size || m.size > 1e13) return null; }
+    else m.blob = 1;
   }
   if (m.kind === 'call') { m.code = clean(x.code, 8).toUpperCase(); m.room = x.room === 'cinema' ? 'cinema' : 'call'; if (!/^[A-Z0-9]{5}$/.test(m.code)) return null; }
   if (m.kind === 'plan') { m.at = +x.at || 0; m.room = x.room === 'call' ? 'call' : 'cinema'; m.text = clean(x.text, 80); if (m.at < m.ts - 864e5 || m.at > m.ts + 400 * 864e5) return null; }
@@ -1150,22 +1164,325 @@ function circleEl(m) {
   return w;
 }
 // документ: имя, размер, по клику — сохранить
-const fmtSize = n => n < 1024 ? n + ' Б' : n < 1048576 ? Math.round(n / 1024) + ' КБ' : (n / 1048576).toFixed(1).replace('.', ',') + ' МБ';
+const fmtSize = n => n < 1024 ? n + ' Б' : n < 1048576 ? Math.round(n / 1024) + ' КБ' : n < 1073741824 ? (n / 1048576).toFixed(1).replace('.', ',') + ' МБ' : (n / 1073741824).toFixed(2).replace('.', ',') + ' ГБ';
+const RISKY = /\.(exe|msi|bat|cmd|com|scr|pif|ps1|vbs|vbe|js|jse|wsf|hta|jar|lnk|reg|cpl)$/i;
+const riskOk = m => !RISKY.test(m.name || '') || confirm('«' + m.name + '» — это программа или скрипт. Запускай её, только если доверяешь ' + (m.from === myId ? 'источнику' : nameOf(m.from)) + '. Скачать?');
 function fileEl(m) {
-  const w = el('a', 'filecard'); w.href = '#'; w.title = 'Сохранить';
+  const w = el('a', 'filecard'); w.href = '#';
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
   const ic = el('span', 'ic', ext || '📄'), t = el('div', 't');
   t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
   w.append(ic, t);
-  w.onclick = async e => { e.preventDefault(); const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
+  if (m.big) {
+    w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'bar'); bar.append(el('i')); t.append(bar);
+    // режим скорости — переключается прямо во время передачи
+    const md = el('span', 'xmode'); md.setAttribute('role', 'button'); md.tabIndex = 0; t.append(md);
+    md.onclick = e => { e.preventDefault(); e.stopPropagation(); const soft = !xSoft(); setXMode(soft ? 'soft' : 'max'); toast(soft ? '🐢 Щадящий режим: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' (настраивается в профиле)' : '⚡ Максимальная скорость'); };
+    xFill(w, m); w.onclick = e => { e.preventDefault(); xClick(m); }; return w; }
+  w.title = 'Сохранить';
+  w.onclick = async e => { e.preventDefault(); if (!riskOk(m)) return; const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
   return w;
 }
 async function sendFiles(c, files) {
   for (const f of [...files].slice(0, 10)) {
-    if (f.size > LIMIT) { toast('«' + f.name + '» больше 25 МБ — такой файл не отправить'); continue; }
     if (!f.size) continue;
-    await post(c, { kind: 'file', name: fileName(f.name), size: f.size }, f.type ? f : new Blob([f], { type: 'application/octet-stream' }));
+    if (f.size <= LIMIT) { await post(c, { kind: 'file', name: fileName(f.name), size: f.size }, f.type ? f : new Blob([f], { type: 'application/octet-stream' })); continue; }
+    await sendBig(c, f);
   }
+}
+
+// ---------- большие файлы: кусками напрямую с устройства отправителя, с докачкой ----------
+// В сообщении только имя и размер. Получатель нажимает «Скачать» и просит файл по обычной связи (xget),
+// отправитель открывает к нему отдельное соединение (своё WebRTC, чтобы не тормозить переписку) и шлёт
+// куски по 4 МБ, к каждому — SHA-256. Получатель проверяет кусок, пишет на диск и подтверждает; в пути
+// не больше WIN неподтверждённых кусков. После обрыва или перезапуска продолжаем с последнего целого куска.
+const BLK = 4 << 20, FRAME = 64 << 10, WIN = 6;
+const DISK = !!APP?.files;   // программа для Windows: читаем и пишем прямо на диск; в браузере — память и IndexedDB
+const sha = async b => b64(await crypto.subtle.digest('SHA-256', b));
+const devKey = d => d || '';
+const isMineSrc = m => m.from === myId && devKey(m.dev) === devKey(myDev);
+const srcLink = m => { const L = links.get(m.from)?.get(devKey(m.dev)); return L?.authed && L.c.open ? L : null; };
+function xGone(id) {   // сообщение удалили — бросаем закачку и недокачанный файл
+  const x = dls.get(id); if (x) xDrop(x, 'pause');
+  for (const [k, o] of ups) if (o.m.id === id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
+  if (S.dl[id] && S.dl[id].st !== 'done') APP?.files?.drop(id).catch(() => {});
+  delete S.dl[id]; delete S.src[id]; srcMem.delete(id); save();
+}
+async function sendBig(c, f) {
+  let path = '';
+  if (DISK) path = await APP.files.pathOf(f);
+  const id = uid();
+  if (path) S.src[id] = path; else srcMem.set(id, f);
+  save();
+  const old = members(c).filter(u => u !== myId && linksOf(u).some(L => !L.their?.caps.includes('xfer')));
+  await post(c, { id, kind: 'file', big: 1, dev: myDev || '', name: fileName(f.name), size: f.size, mime: /^[\w.+-]+\/[\w.+-]+$/.test(f.type) ? f.type : 'application/octet-stream' });
+  if (old.length) toast('У ' + old.map(nameOf).join(', ') + ' старая версия Кинозала — большой файл скачается после обновления');
+  else toast(path ? '«' + f.name + '» скачают напрямую с этого компьютера, пока Кинозал открыт' : '«' + f.name + '» скачают напрямую отсюда — не закрывай вкладку, пока не скачают');
+}
+async function srcOf(m) {
+  const f = srcMem.get(m.id); if (f) return f.size === m.size ? { file: f } : null;
+  const p = S.src[m.id]; if (!p || !DISK) return null;
+  const st = await APP.files.stat(p); return st && st.size === m.size ? { path: p } : null;
+}
+async function readSrc(src, off, len) {
+  if (src.file) return new Uint8Array(await src.file.slice(off, off + len).arrayBuffer());
+  const b = await APP.files.read(src.path, off, len); return b instanceof Uint8Array ? b : new Uint8Array(b);
+}
+// скорость за последние секунды
+function speed(o, bytes) {
+  const now = Date.now(), s = o.sp ||= []; s.push([now, bytes]);
+  while (s.length > 2 && now - s[0][0] > 4000) s.shift();
+  const dt = (now - s[0][0]) / 1000; o.rate = dt > 0.3 ? (bytes - s[0][1]) / dt : o.rate || 0;
+}
+// режимы скорости: «максимум» — без ограничений; «щадящий» — не больше заданного, чтобы не мешать звонку или фильму;
+// «авто» — щадящий, пока я в звонке или зале Кинозала. Отдачу ограничивает отправитель (токен-бакет на все отдачи сразу),
+// скачивание — тоже отправитель, по просьбе получателя (cap): так лишнее даже не идёт по сети.
+const MB = 1 << 20;
+const XMODES = { max: '⚡ Максимум', soft: '🐢 Щадящий', auto: '🤖 Авто' };
+const xMode = () => XMODES[store.get('xmode', 'auto')] ? store.get('xmode', 'auto') : 'auto';
+const xLim = k => Math.max(0.25, Math.min(100, +store.get(k, k === 'xup' ? '2' : '5') || 2));   // МБ/с
+const xSoft = () => xMode() === 'soft' || (xMode() === 'auto' && !!window.kzRoom?.inRoom);
+const upRate = () => xSoft() ? xLim('xup') * MB : Infinity;
+const downRate = () => xSoft() ? xLim('xdown') * MB : Infinity;
+const upB = { tok: 0, t: 0 };
+const fmtRate = v => String(v).replace('.', ',') + ' МБ/с (' + Math.round(v * 8.39) + ' Мбит/с)';
+async function takeFrom(b, rate, n) {   // ждём, пока «ведро» наберёт n байт; скорость перечитываем каждый раз — переключение на ходу
+  for (;;) {
+    const now = performance.now();
+    if (!isFinite(rate())) { b.tok = 0; b.t = now; return; }
+    const r = rate(); b.tok = Math.min(r * 0.25 + n, b.tok + (now - (b.t || now)) / 1000 * r); b.t = now;
+    if (b.tok >= n) { b.tok -= n; return; }
+    await sleep(Math.min(200, Math.max(4, (n - b.tok) / r * 1000)));
+  }
+}
+// получатель сообщает отправителям, сколько можно слать: лимит скачивания делится на все текущие закачки
+function xCaps() {
+  const live = [...dls.values()].filter(x => x.c?.open), r = downRate(), bps = isFinite(r) ? Math.round(r / Math.max(1, live.length)) : 0;
+  for (const x of live) if (x.cap !== bps) { x.cap = bps; try { x.c.send(JSON.stringify({ t: 'cap', bps })); } catch (e) {} }
+}
+let xSoftWas = null;
+setInterval(() => {   // зашёл в звонок или вышел, сменил режим — пересчитываем и перерисовываем
+  const k = xSoft() + '|' + xLim('xup') + '|' + xLim('xdown');
+  if (k === xSoftWas) return; xSoftWas = k; xCaps();
+  for (const id of new Set([...dls.keys(), ...[...ups.values()].map(o => o.m.id)])) xPaint(id);
+}, 1500);
+function setXMode(v) { store.set('xmode', v); xSoftWas = null; xCaps(); for (const id of new Set([...dls.keys(), ...[...ups.values()].map(o => o.m.id)])) xPaint(id); }
+const fmtEta = s =>s < 60 ? Math.max(1, Math.round(s)) + ' с' : s < 3600 ? Math.round(s / 60) + ' мин' : Math.floor(s / 3600) + ' ч ' + Math.round(s % 3600 / 60) + ' мин';
+
+// --- получатель ---
+async function xStart(m) {
+  if (dls.has(m.id) || isMineSrc(m)) return;
+  const d = S.dl[m.id] ||= { st: 'wait', got: 0 };
+  if (d.st === 'done') return;
+  delete d.why;
+  const L = srcLink(m);
+  if (!L) { d.st = 'wait'; save(); xPaint(m.id); dial(m.from); return; }
+  if (!L.their?.caps.includes('xfer')) { d.st = 'err'; d.why = 'у отправителя старая версия Кинозала'; save(); xPaint(m.id); return; }
+  const x = { m, L, got: 0, tok: uid(), c: null, parts: [], plen: 0, q: Promise.resolve(), bad: 0 };
+  dls.set(m.id, x);
+  try { x.got = DISK ? await APP.files.open(m.id, BLK) : Math.floor(Math.min(d.got || 0, m.size) / BLK) * BLK; }
+  catch (e) { return xDrop(x, 'err', 'не получилось создать файл на диске'); }
+  if (dls.get(m.id) !== x) return;
+  d.st = 'go'; d.got = x.got; save(); xPaint(m.id);
+  if (x.got >= m.size) return xFinish(x);
+  expect.set(x.tok, x);
+  send(L, { t: 'xget', id: m.id, from: x.got, tok: x.tok });
+  x.to = setTimeout(() => { if (dls.get(m.id) === x && !x.c?.open) xDrop(x, 'wait'); }, 15000);
+  jlog('[файлы] качаю', m.name, fmtSize(m.size), 'с', fmtSize(x.got));
+}
+function xIncoming(c) {
+  const x = expect.get(String(c.metadata.xfer || ''));
+  if (!x || c.peer !== x.L.peer) { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }
+  expect.delete(x.tok); x.c = c; x.last = Date.now();
+  const lost = () => { if (dls.get(x.m.id) === x) xDrop(x, 'wait'); };
+  // отправитель пропал без «до свидания» (выключили компьютер, пропал интернет) — WebRTC заметит это только секунд через 30
+  x.dog = setInterval(() => { if (dls.get(x.m.id) !== x) clearInterval(x.dog); else if (Date.now() - x.last > 15000) { jlog('[файлы] данные не идут 15 с — переподключаюсь'); lost(); } else xPaint(x.m.id); }, 3000);
+  c.on('data', d => { x.last = Date.now(); x.q =x.q.then(() => xData(x, d)).catch(e => { console.error(e); if (dls.get(x.m.id) === x) xDrop(x, 'err', 'не получилось записать: ' + (e?.message || e)); }); });
+  c.on('close', () => { lost(); xCaps(); }); c.on('error', lost);
+  const opened = () => xCaps();   // сразу говорим отправителю свой лимит
+  if (c.open) opened(); else c.on('open', opened);
+}
+function joinParts(parts, n) { const u = new Uint8Array(n); let o = 0; for (const p of parts) { u.set(new Uint8Array(p), o); o += p.byteLength; } return u; }
+async function xData(x, d) {
+  if (dls.get(x.m.id) !== x) return;
+  const m = x.m;
+  if (typeof d === 'string') {
+    let j; try { j = JSON.parse(d); } catch (e) { return; }
+    if (j.t === 'no') return xDrop(x, j.why === 'gone' ? 'gone' : 'err', j.why === 'gone' ? '' : 'отправитель не смог прочитать файл');
+    if (j.t !== 'h') return;
+    const i = x.got / BLK, buf = joinParts(x.parts, x.plen); x.parts = []; x.plen = 0;
+    if (j.i !== i || buf.byteLength !== Math.min(BLK, m.size - x.got) || await sha(buf) !== j.h) {
+      jlog('[файлы] кусок', i, 'не сошёлся — прошу заново');
+      if (++x.bad > 5) return xDrop(x, 'err', 'файл приходит с ошибками');
+      xDrop(x, 'wait'); setTimeout(() => xStart(m), 1000); return;
+    }
+    if (DISK) await APP.files.write(m.id, x.got, buf); else await blobPut(m.id + ':' + i, new Blob([buf]));
+    if (dls.get(m.id) !== x) return;
+    x.got += buf.byteLength; S.dl[m.id].got = x.got; save(); speed(x, x.got);
+    try { x.c.send(JSON.stringify({ t: 'ok', i })); } catch (e) {}
+    xPaint(m.id);
+    if (x.got >= m.size) return xFinish(x);
+    return;
+  }
+  const b = d instanceof ArrayBuffer ? d : ArrayBuffer.isView(d) ? d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength) : null;
+  if (!b) return;
+  x.parts.push(b); x.plen += b.byteLength;
+  if (x.plen > BLK) { x.parts = []; x.plen = 0; xDrop(x, 'wait'); setTimeout(() => xStart(m), 1000); }
+}
+async function xFinish(x) {
+  const m = x.m, d = S.dl[m.id];
+  dls.delete(m.id); clearInterval(x.dog); try { x.c?.close(); } catch (e) {}
+  if (!d) return;
+  try {
+    if (DISK) d.path = await APP.files.done(m.id, m.name);
+    else {
+      const parts = []; for (let i = 0; i * BLK < m.size; i++) { const p = await blobGet(m.id + ':' + i); if (!p) throw new Error('нет куска ' + i); parts.push(p); }
+      await blobPut(m.id, new Blob(parts, { type: m.mime })); await tx('blobs', 'readwrite', s => s.delete(partsKey(m.id)));
+    }
+    d.st = 'done'; d.got = m.size; delete d.why; save(); xPaint(m.id);
+    jlog('[файлы] скачан', m.name, fmtSize(m.size));
+    toast('«' + m.name + '» скачан' + (DISK ? ' — он в «Загрузки → Кинозал → Полученные»' : ''));
+  } catch (e) { d.st = 'err'; d.why = 'не получилось сохранить: ' + (e?.message || e); save(); xPaint(m.id); }
+}
+// закачка остановилась: пауза, ждём отправителя (сама продолжится) или ошибка
+function xDrop(x, st, why) {
+  const m = x.m; if (dls.get(m.id) === x) dls.delete(m.id);
+  expect.delete(x.tok); clearTimeout(x.to); clearInterval(x.dog);
+  if (x.c) { if (st === 'pause') try { x.c.send(JSON.stringify({ t: 'stop' })); } catch (e) {} setTimeout(() => { try { x.c.close(); } catch (e) {} }, 50); }
+  const d = S.dl[m.id];
+  if (d && d.st !== 'done') { d.st = st; if (why) d.why = why; else delete d.why; save(); }
+  xPaint(m.id);
+  if (st === 'wait') setTimeout(() => { if (S.dl[m.id]?.st === 'wait' && !dls.has(m.id) && srcLink(m)) xStart(m); }, 5000);
+}
+function xNo(L, d) {
+  const id = clean(d.id, 60), x = dls.get(id); if (!x || x.L !== L) return;
+  xDrop(x, d.why === 'gone' || d.why === 'nofile' ? 'gone' : 'err', d.why === 'gone' || d.why === 'nofile' ? '' : 'отправитель не может отдать файл');
+}
+// связь с отправителем появилась — докачиваем всё, что ждало
+async function xResume(L) {
+  // попытка, начатая по старой, уже мёртвой связи, ещё ждёт ответа — бросаем её и просим заново по новой
+  for (const x of [...dls.values()]) if (x.L !== L && x.L.uid === L.uid && x.L.dev === L.dev && !x.c?.open) xDrop(x, 'wait');
+  for (const [id, d] of Object.entries(S.dl)) {
+    if (d.st !== 'wait' || dls.has(id)) continue;
+    const m = await msgGet(id); if (!m) { delete S.dl[id]; continue; }
+    if (srcLink(m) === L) xStart(m);
+  }
+}
+function xClick(m) {
+  if (isMineSrc(m)) { if (DISK && S.src[m.id]) APP.files.show(S.src[m.id]); return; }
+  const d = S.dl[m.id];
+  if (d?.st === 'done') {
+    if (DISK) { APP.files.show(d.path); return; }
+    mediaUrl(m).then(u => { if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); });
+    return;
+  }
+  if (d?.st === 'go') { const x = dls.get(m.id); if (x) xDrop(x, 'pause'); else { d.st = 'pause'; save(); xPaint(m.id); } return; }
+  if (d?.st === 'wait') { d.st = 'pause'; save(); xPaint(m.id); return; }
+  if (!d && !riskOk(m)) return;
+  xStart(m);
+}
+
+// --- отправитель ---
+async function xServe(L, d) {
+  const id = clean(d.id, 60), tok = clean(d.tok, 60), from = Math.max(0, +d.from || 0);
+  const no = why => send(L, { t: 'xno', id, why });
+  const m = await msgGet(id);
+  if (!m || !m.big || !isMineSrc(m)) return no('nofile');
+  if (!L.self && !members(m.chat).includes(L.uid)) return;
+  if (!tok || from % BLK || from >= m.size) return no('bad');
+  const src = await srcOf(m); if (!src) return no('gone');
+  if (!peer || net !== 'on') return no('net');
+  const c = peer.connect(L.peer, { reliable: true, serialization: 'raw', metadata: { v: 1, xfer: tok } });
+  const k = id + '|' + tok, o = { m, c, next: from / BLK, done: from / BLK, sent: from, closed: false, wake: null, last: Date.now(), cap: Infinity, rb: { tok: 0, t: 0 } };
+  ups.set(k, o); xPaint(id);
+  const fin = () => { if (o.closed) return; o.closed = true; ups.delete(k); o.wake?.(); xPaint(id); };
+  c.on('close', fin); c.on('error', fin);
+  c.on('data', s => {
+    if (typeof s !== 'string') return;
+    let j; try { j = JSON.parse(s); } catch (e) { return; }
+    if (j.t === 'ok') { o.last = Date.now(); o.done =Math.max(o.done, (j.i | 0) + 1); o.sent = Math.min(m.size, o.done * BLK); speed(o, o.sent); o.wake?.(); xPaint(id); if (o.sent >= m.size) jlog('[файлы] отдал', m.name, 'для', L.peer); }
+    else if (j.t === 'cap') o.cap = +j.bps > 0 ? +j.bps : Infinity;
+    else if (j.t === 'stop') { try { c.close(); } catch (e) {} fin(); }
+  });
+  c.on('open', () => pump(o, src).catch(e => {
+    jlog('[файлы] не смог отдать', m.name, e?.message || e);
+    try { c.send(JSON.stringify({ t: 'no', why: 'read' })); } catch (er) {}
+    setTimeout(() => { try { c.close(); } catch (er) {} fin(); }, 300);
+  }));
+  setTimeout(() => { if (!c.open && !o.closed) { try { c.close(); } catch (e) {} fin(); } }, 30000);
+  jlog('[файлы] отдаю', m.name, 'для', L.peer, 'с', fmtSize(from));
+}
+async function pump(o, src) {
+  const m = o.m, n = Math.ceil(m.size / BLK), dc = o.c.dataChannel;
+  const drained = () => new Promise(r => { dc.addEventListener('bufferedamountlow', r, { once: true }); setTimeout(r, 500); });
+  while (o.next < n && !o.closed) {
+    if (o.next - o.done >= WIN) {
+      if (Date.now() - o.last > 60000) throw new Error('получатель не подтверждает куски');
+      await new Promise(r => { o.wake = r; setTimeout(r, 3000); }); o.wake = null; continue;
+    }
+    const off = o.next * BLK, len = Math.min(BLK, m.size - off);
+    const buf = await readSrc(src, off, len);
+    if (buf.byteLength !== len) throw new Error('файл изменился');
+    const h = await sha(buf);
+    for (let p = 0; p < len && !o.closed; p += FRAME) {
+      const n = Math.min(FRAME, len - p);
+      await takeFrom(upB, upRate, n);                // мой лимит отдачи — общий на всех, кому отдаю
+      await takeFrom(o.rb, () => o.cap, n);          // лимит скачивания получателя
+      // в щадящем режиме держим очередь короткой, иначе в ней застрянут секунды данных и лимит «поплывёт»
+      const hi = isFinite(upRate()) || isFinite(o.cap) ? 256 << 10 : 4 << 20;
+      dc.bufferedAmountLowThreshold = hi >> 1;   // иначе «очередь опустела» не придёт, пока она и так ниже порога
+      while (!o.closed && dc.bufferedAmount > hi) await drained();
+      if (!o.closed) o.c.send(buf.subarray(p, p + n));
+    }
+    if (o.closed) return;
+    o.c.send(JSON.stringify({ t: 'h', i: o.next, h }));
+    o.next++;
+  }
+}
+
+// --- карточка файла ---
+function xLine(m) {
+  const size = fmtSize(m.size);
+  if (isMineSrc(m)) {
+    const o = [...ups.values()].find(v => v.m.id === m.id);
+    if (o) return { txt: 'отдаю: ' + Math.floor(o.sent / m.size * 100) + '%' + (o.rate ? ' · ' + fmtSize(Math.round(o.rate)) + '/с' : ''), p: o.sent / m.size };
+    if (srcMem.has(m.id)) return { txt: size + ' · ждёт, пока скачают' };
+    if (DISK && S.src[m.id]) return { txt: size + ' · показать в папке' };
+    return { txt: size + ' · здесь файла уже нет — отправь заново' };
+  }
+  const d = S.dl[m.id], x = dls.get(m.id), who = m.from === myId ? 'другое твоё устройство' : nameOf(m.from);
+  if (!d) return { txt: size + ' · скачать' };
+  const part = fmtSize(d.got || 0) + ' из ' + size;
+  switch (d.st) {
+    case 'done': return { txt: size + (DISK ? ' · показать в папке' : ' · сохранить') };
+    case 'go': {
+      const stuck = x?.c && Date.now() - (x.last || 0) > 4000, r = stuck ? 0 : x?.rate || 0, left = r > 0 ? ' · ' + fmtEta((m.size - (d.got || 0)) / r) : '';
+      return { txt: part + (r ? ' · ' + fmtSize(Math.round(r)) + '/с' + left : stuck ? ' · данные не идут…' : x?.c ? '' : ' · соединяюсь…'), p: (d.got || 0) / m.size, go: 1 };
+    }
+    case 'pause': return { txt: part + ' · пауза — продолжить', p: (d.got || 0) / m.size };
+    case 'wait': return { txt: (d.got ? part + ' · ' : size + ' · ') + 'ждём, когда ' + who + ' будет в сети', p: d.got ? d.got / m.size : null };
+    case 'gone': return { txt: size + ' · у отправителя файла уже нет' };
+    default: return { txt: (d.why || 'не получилось') + ' · ещё раз', p: d.got ? d.got / m.size : null };
+  }
+}
+function xFill(w, m) {
+  const s = xLine(m), sp = $('.t span', w), bar = $('.bar', w);
+  sp.textContent = s.txt; w.title = s.go ? 'Пауза' : '';
+  bar.hidden = s.p == null; if (s.p != null) bar.firstChild.style.width = Math.min(100, s.p * 100).toFixed(1) + '%';
+  w.classList.toggle('go', !!s.go);
+  const md = $('.xmode', w), live = !!s.go || (isMineSrc(m) && [...ups.values()].some(o => o.m.id === m.id));
+  md.hidden = !live;
+  if (live) { md.textContent = (xSoft() ? '🐢 щадящий' : '⚡ максимум') + (xMode() === 'auto' ? ' · авто' : ''); md.title = xSoft() ? 'Переключить на максимальную скорость' : 'Переключить на щадящий режим — чтобы не мешать звонку или фильму'; }
+}
+const xPaintT = new Map();
+function xPaint(id) {
+  if (xPaintT.has(id)) return;
+  xPaintT.set(id, setTimeout(async () => {
+    xPaintT.delete(id);
+    const ws = document.querySelectorAll('.filecard[data-x="' + id + '"]'); if (!ws.length) return;
+    const m = dls.get(id)?.m || [...ups.values()].find(o => o.m.id === id)?.m || await msgGet(id); if (!m) return;
+    for (const w of ws) xFill(w, m);
+  }, 150));
 }
 const sendAny = (c, files) => { files = [...files]; const im = files.filter(f => /^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)); const ot = files.filter(f => !im.includes(f)); if (im.length) sendImages(c, im); if (ot.length) sendFiles(c, ot); };
 // приглашение в звонок / кинозал
@@ -2102,8 +2419,24 @@ function settingsDlg() {
       if (ANDROID_WEB) { const a = el('a', 'btn pri', '📲 Скачать приложение для Android'); a.href = APK; a.rel = 'noopener'; card.append(a); }
       if (!TOUCH) { const a = el('a', 'btn', '⬇ Программа для Windows'); a.href = DOWNLOAD; a.target = '_blank'; a.rel = 'noopener'; card.append(a); }
     }
+    // скорость передачи больших файлов — меняется сразу, в том числе посреди передачи
+    const xs = el('details', 'adv xspeed'), xsum = el('summary'), seg = el('div', 'seg'), xhint = el('p');
+    const paintX = () => {
+      xsum.textContent = 'Скорость передачи файлов: ' + XMODES[xMode()];
+      for (const b of seg.children) b.classList.toggle('on', b.dataset.v === xMode());
+      xhint.textContent = { max: 'Файлы идут так быстро, как позволяет интернет.', soft: 'Всегда не быстрее заданного — интернет остаётся для звонков, фильмов и игр.', auto: 'Щадящий, пока ты в звонке или зале Кинозала, в остальное время — максимум.' + (window.kzRoom?.inRoom ? ' Сейчас ты в зале — действует щадящий.' : '') }[xMode()];
+    };
+    for (const [v, t] of Object.entries(XMODES)) { const b = btnEl(t, '', () => { setXMode(v); paintX(); }); b.dataset.v = v; seg.append(b); }
+    const rng = (k, label, max) => {
+      const l = el('label', 'rng'), cap = el('span'), r = el('input'); r.type = 'range'; r.min = '0.5'; r.max = String(max); r.step = '0.5'; r.value = String(xLim(k));
+      const show = () => { cap.textContent = label + ': до ' + fmtRate(+r.value); };
+      r.oninput = () => { store.set(k, r.value); show(); setXMode(xMode()); };
+      show(); l.append(cap, r); return l;
+    };
+    xs.append(xsum, seg, xhint, el('p', '', 'В щадящем режиме:'), rng('xup', 'Отдача', 20), rng('xdown', 'Скачивание', 50));
+    paintX(); card.append(xs);
     // свой TURN-сервер — для сетей, где напрямую не соединяет
-    const turn0 = (() => { try { return JSON.parse(localStorage.getItem('kinozal-turn') || 'null') || {}; } catch (e) { return {}; } })();
+    const turn0 =(() => { try { return JSON.parse(localStorage.getItem('kinozal-turn') || 'null') || {}; } catch (e) { return {}; } })();
     const adv = el('details', 'adv'), tu = el('input'), tn = el('input'), tp = el('input');
     for (const [i, ph, v] of [[tu, 'turn:example.com:3478', turn0.url], [tn, 'Логин', turn0.user], [tp, 'Пароль', turn0.pass]]) { i.type = 'text'; i.placeholder = ph; i.value = v || ''; i.autocomplete = 'off'; i.spellcheck = false; }
     adv.append(el('summary', '', 'Связь через свой сервер (TURN)'), el('p', '', 'Обычно не нужно. Если с кем-то не соединяет — так бывает в мобильных сетях и за строгими роутерами, — впиши адрес своего TURN-сервера, и связь пойдёт через него.'), tu, tn, tp);
