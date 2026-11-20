@@ -48,6 +48,12 @@ const IC = {
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12.5-7.5z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+  pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5l1-4.2L15.8 5a2.1 2.1 0 0 1 3 0l.2.2a2.1 2.1 0 0 1 0 3L8.7 18.5z"/><path d="M13.6 7.2l3.2 3.2"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/></svg>',
+  up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
+  down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path class="sh" d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>',
   palette: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.6-.8 1.6-1.6 0-.9-.6-1.3-.6-2.1 0-.9.7-1.5 1.6-1.5H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1.2" fill="currentColor"/><circle cx="10" cy="7" r="1.2" fill="currentColor"/><circle cx="15" cy="7" r="1.2" fill="currentColor"/></svg>',
   logo: '<svg class="logo" viewBox="0 0 480 300" role="img" aria-label="Кинозал"><defs><linearGradient id="mxbeam" x1="1" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#ff6b4a" stop-opacity=".55"/><stop offset="1" stop-color="#ff6b4a" stop-opacity="0"/></linearGradient><linearGradient id="mxscr" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffd2c4"/><stop offset=".6" stop-color="#ff8a6c"/><stop offset="1" stop-color="#e2553a"/></linearGradient></defs><polygon points="440,262 40,26 300,26" fill="url(#mxbeam)"/><rect x="40" y="26" width="260" height="150" rx="10" fill="url(#mxscr)"/><circle cx="440" cy="262" r="12" fill="#ff6b4a"/><g fill="#1c282b" stroke="#2a3639"><rect x="30" y="226" width="64" height="58" rx="18"/><rect x="110" y="226" width="64" height="58" rx="18"/><rect x="190" y="226" width="64" height="58" rx="18"/></g><g fill="#5fd4c4"><circle cx="62" cy="214" r="14"/><circle cx="142" cy="210" r="15"/><circle cx="222" cy="214" r="14"/></g></svg>'
 };
@@ -431,17 +437,18 @@ root.innerHTML = `
 <aside class="mx-side">
   <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
-  <div class="mx-sec">Чаты</div>
+  <div class="mx-sec"><span>Чаты</span><button class="ib lay" id="mxLay" title="Список чатов: ширина, сторона, компактный вид">${IC.dots}</button></div>
   <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
   <div class="mx-list" id="mxList"></div>
   <div class="mx-fab"><div class="fabmenu menu" id="mxFabMenu" hidden>
     <button data-a="contact"><i>👤</i>Новый собеседник</button><button data-a="group"><i>👥</i>Новая группа</button><button data-a="call"><i>📞</i>Созвон по коду</button>
-  </div><button class="fab" id="mxFab" title="Новый чат" aria-label="Новый чат">✎</button></div>
+  </div><button class="fab" id="mxFab" title="Новый чат" aria-label="Новый чат">${IC.pen}</button></div>
+  <div class="mx-split" id="mxSplit" title="Тяни — ширина списка чатов (совсем узко — только аватарки, к другому краю — список переедет туда) · двойной клик — как было · правый клик — ещё"></div>
 </aside>
 <main class="mx-main" id="mxMain"></main>`;
 document.body.append(root);
 setNet(net);
-$('#mxQ').oninput = () => renderList();
+$('#mxQ').oninput = () => { renderList(); clearTimeout(globalFind.t); globalFind.t = setTimeout(globalFind, 220); };
 $('#mxAdd').onclick = () => addContactDlg();
 $('#mxTheme').onclick = () => openTheme();
 $('#mxMe').onclick = $('#mxProf').onclick = () => settingsDlg();
@@ -452,6 +459,58 @@ $('#mxFabMenu').onclick = e => { const a = e.target.closest('button')?.dataset.a
 document.addEventListener('click', () => { if (Date.now() - menuAt < 450) return; $('#mxFabMenu').hidden = true; closeMenus(); });
 function closeMenus() { document.querySelectorAll('.mx-pop').forEach(x => x.remove()); }
 function renderMe() { const b = $('#mxMe'); b.textContent = ''; if (S.me) b.append(avEl(myId, 40)); $('#mxName').textContent = S.me?.name || 'Профиль'; }
+
+// ---------- ширина и сторона списка чатов (на широком экране; на телефоне — одна панель за раз) ----------
+const LAY = { min: 260, max: 600, rail: 80, snap: 180 };
+const lay = { w: +store.get('mxSideW', 0) || 0, rail: store.get('mxRail', '0') === '1', right: store.get('mxSideR', '0') === '1' };
+function applyLay(init) {
+  const w = lay.rail ? LAY.rail : lay.w ? Math.round(Math.max(LAY.min, Math.min(LAY.max, innerWidth - 420, lay.w))) : 0;
+  if (w) root.style.setProperty('--sideW', w + 'px'); else root.style.removeProperty('--sideW');
+  const was = root.classList.contains('rail');
+  root.classList.toggle('sized', !!w); root.classList.toggle('rail', lay.rail); root.classList.toggle('side-right', lay.right);
+  if (was !== lay.rail && !init) renderList();   // подписи-подсказки у аватарок
+}
+function saveLay() { store.set('mxSideW', lay.w || ''); store.set('mxRail', lay.rail ? '1' : '0'); store.set('mxSideR', lay.right ? '1' : '0'); }
+function setLay(x) { Object.assign(lay, x); applyLay(); saveLay(); }
+function layMenu(x, y) {
+  closeMenus(); menuAt = Date.now();
+  const mn = el('div', 'menu fabmenu mx-pop');
+  Object.assign(mn.style, { position: 'fixed', left: Math.max(8, Math.min(x, innerWidth - 270)) + 'px', top: Math.max(8, Math.min(y, innerHeight - 180)) + 'px', bottom: 'auto', right: 'auto', width: '260px', zIndex: 50 });
+  const add = (ic, t, f) => { const b = el('button'); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
+  add('⇄', lay.right ? 'Список чатов слева' : 'Список чатов справа', () => setLay({ right: !lay.right }));
+  add(lay.rail ? '☰' : '◉', lay.rail ? 'Обычный список' : 'Только аватарки', () => setLay({ rail: !lay.rail }));
+  if (lay.w || lay.rail) add('↺', 'Ширина по умолчанию', () => setLay({ w: 0, rail: false }));
+  document.body.append(mn); mn.addEventListener('click', e => e.stopPropagation());
+}
+{
+  const sp = $('#mxSplit');
+  sp.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || narrow()) return;
+    e.preventDefault(); try { sp.setPointerCapture(e.pointerId); } catch (er) {}
+    const H = document.documentElement; H.classList.add('mx-resizing');
+    let swap = false; const w0 = lay.w, r0 = lay.rail;
+    const mv = ev => {
+      const x = lay.right ? innerWidth - ev.clientX : ev.clientX;
+      swap = x > innerWidth - 110;   // утащили к другому краю — отпустишь, и список переедет туда
+      H.classList.toggle('mx-swap', swap); root.dataset.swapTo = lay.right ? 'left' : 'right';
+      if (swap) return;
+      if (x < LAY.snap) lay.rail = true; else { lay.rail = false; lay.w = Math.round(x); }
+      applyLay();
+    };
+    const up = () => {
+      sp.removeEventListener('pointermove', mv); sp.removeEventListener('pointerup', up); sp.removeEventListener('pointercancel', up);
+      H.classList.remove('mx-resizing', 'mx-swap');
+      if (swap) Object.assign(lay, { right: !lay.right, w: w0, rail: r0 });   // переехал — с той же шириной, что была
+      applyLay(); saveLay();
+    };
+    sp.addEventListener('pointermove', mv); sp.addEventListener('pointerup', up); sp.addEventListener('pointercancel', up);
+  });
+  sp.addEventListener('dblclick', () => setLay({ w: 0, rail: false }));
+  sp.addEventListener('contextmenu', e => { e.preventDefault(); layMenu(e.clientX, e.clientY); });
+  $('#mxLay').onclick = e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); layMenu(lay.right && !lay.rail ? r.right - 260 : r.left, r.bottom + 6); };
+  addEventListener('resize', () => { if (lay.w) applyLay(); });
+  applyLay(true);
+}
 
 // ---------- список чатов ----------
 function lastText(c, l) {
@@ -474,6 +533,9 @@ function renderList() {
   let total = 0;
   for (const ch of Object.values(S.chats)) total += ch.unread || 0;
   APP?.unread?.(total); document.title = total ? '(' + total + ') Кинозал' : 'Кинозал';
+  const hits = q && gfind.q === fold(q) ? gfind.hits : [];   // найденные сообщения (ищутся в фоне, см. globalFind)
+  const addHits = () => { if (!hits.length) return; box.append(el('div', 'mx-sec2', 'Сообщения')); for (const m of hits) box.append(hitEl(m, gfind.q)); };
+  if (!list.length && hits.length) return addHits();
   if (!list.length) {
     const e = el('div', 'mx-nochats');
     if (q) e.append(el('span', '', 'Ничего не нашлось'));
@@ -503,8 +565,11 @@ function renderList() {
     });
     it.addEventListener('pointermove', e => { if (lp && p0 && Math.hypot(e.clientX - p0.x, e.clientY - p0.y) > 10) { clearTimeout(lp); lp = 0; } });
     for (const t of ['pointerup', 'pointercancel', 'pointerleave']) it.addEventListener(t, () => { clearTimeout(lp); lp = 0; });
+    if (ch.unread) it.dataset.unread = ch.unread > 99 ? '99+' : ch.unread;   // в компактном списке — кружок на аватарке
+    it.title = root.classList.contains('rail') ? chatTitle(ch.id) : '';
     box.append(it);
   }
+  addHits();
 }
 const readBy = (c, ts) => Object.entries(S.chats[c]?.seen || {}).some(([u, t]) => u !== myId && t >= ts);
 function presence(u) { renderList(); if (open && members(open).includes(u)) renderHead(); }
@@ -545,19 +610,19 @@ async function openChat(c) {
   if (isDm(c)) dial(dmPeer(c)); else for (const u of members(c)) if (u !== myId) dial(u);
   if (!TOUCH) setTimeout(() => $('.mx-input textarea')?.focus(), 30);
 }
-function closeChat() { freeUrls(); open = null; renderList(); showEmpty(); }
+function closeChat() { freeUrls(); open = null; find = null; renderList(); showEmpty(); }
 async function renderChat() {
   const c = open; if (!c) return showEmpty();
   const main = $('#mxMain'); main.textContent = '';
   const sec = el('section', 'mx-chat'); sec.innerHTML = `
     <header class="mx-chead"><button class="ib back" title="К чатам">${IC.back}</button><div class="avwrap"></div><div class="who"><b></b><span></span></div>
       <div class="callzone"><button class="cz call" title="Видеозвонок">${IC.phone}<span>Позвонить</span></button><button class="cz cine" title="Кинозал — смотреть вместе">${IC.film}<span>Кинозал</span></button><button class="cz live" hidden title="Вернуться к звонку"><i class="pulse"></i><span>Идёт звонок</span><b class="tm"></b><span>· Вернуться</span></button></div>
-      <div class="act"><button class="ib more" title="Ещё">${IC.dots}</button></div></header>
+      <div class="act"><button class="ib find" title="Поиск в чате (Ctrl+F)">${IC.search}</button><button class="ib more" title="Ещё">${IC.dots}</button></div></header>
     <div class="mx-banner" hidden></div>
     <div class="mx-msgs" tabindex="-1"></div>
     <div class="mx-input"><div class="field"><button class="ib clip" title="Фото или файл">${IC.clip}</button><textarea rows="1" placeholder="Сообщение" maxlength="4000"></textarea></div>
       <button class="rec-btn" title=""></button><div class="rec-hint"></div><input type="file" multiple hidden></div>
-    <button class="mx-down" hidden title="Вниз">↓<b hidden></b></button>`;
+    <button class="mx-down" hidden title="Вниз">${IC.down}<b hidden></b></button>`;
   main.append(sec);
   $('.back', sec).onclick = closeChat;
   $('.who', sec).onclick = () => infoDlg(c);
@@ -565,19 +630,51 @@ async function renderChat() {
   $('.call', sec).onclick = () => startCall(c, 'call');
   $('.cine', sec).onclick = () => startCall(c, 'cinema');
   $('.more', sec).onclick = e => { e.stopPropagation(); chatMenu(c, e.currentTarget); };
+  $('.find', sec).onclick = () => openFind();
   $('.cz.live', sec).onclick = () => window.kzRoom?.show();
   setupInput(sec, c); paintPre();
+  if (rec?.c === c && rec.kind === 'voice') showRecBar();   // чат перерисовался посреди записи — панель записи на место
   const box = $('.mx-msgs', sec);
-  box.addEventListener('scroll', () => { if (nearBottom(box)) { downCount = 0; updDown(); } else $('.mx-down', sec).hidden = false; });
+  box.addEventListener('scroll', () => {
+    if (nearBottom(box)) { downCount = 0; updDown(); } else $('.mx-down', sec).hidden = false;
+    if (box.scrollTop < 400 && !shownAll && Date.now() - jumpAt > 900) showMore(200);   // долистали до верха — дорисуем старые
+  });
   $('.mx-down', sec).onclick = () => { box.scrollTop = box.scrollHeight; downCount = 0; updDown(); };
+  if (find && find.chat !== c) find = null;
+  if (find) findBar(sec);   // поиск переживает перерисовку чата
   renderHead(); updCallUi();
-  shown = await chatMsgs(c, 400);
+  const list = await chatMsgs(c, 400);
   if (open !== c) return;
+  shown = list; shownAll = list.length < 400;
   box.textContent = '';
   shown.forEach((m, i) => box.append(...mEls(m, shown[i - 1], shown[i + 1])));
   requestAnimationFrame(() => { box.scrollTop = box.scrollHeight; });
 }
 const nearBottom = b => b.scrollHeight - b.scrollTop - b.clientHeight < 140;
+// старые сообщения: дорисовываем сверху ещё n штук, не сдвигая то, что сейчас на экране
+let shownAll = false, moreBusy = null, jumpAt = 0;
+function showMore(n) { return moreBusy ||= showMore1(n).finally(() => { moreBusy = null; }); }
+async function showMore1(n) {
+  const c = open, box = $('.mx-msgs'); if (!c || !box || shownAll) return;
+  const want = shown.length + n, list = await chatMsgs(c, want);
+  if (open !== c || box !== $('.mx-msgs')) return;
+  shownAll = list.length < want;
+  const k = list.length - shown.length;
+  if (k <= 0) return;
+  const fromBottom = box.scrollHeight - box.scrollTop;
+  if (!shown.length || list[k]?.id !== shown[0].id) {   // пока читали, переписка поменялась — проще нарисовать заново
+    shown = list; box.textContent = ''; shown.forEach((m, i) => box.append(...mEls(m, shown[i - 1], shown[i + 1])));
+  } else {
+    const older = list.slice(0, k), first = shown[0], frag = document.createDocumentFragment();
+    older.forEach((m, i) => frag.append(...mEls(m, older[i - 1], older[i + 1] || first)));
+    // бывшее первое сообщение теперь не первое: его плашка дня, имя автора и отступ зависят от соседа сверху
+    if (box.firstElementChild?.classList.contains('day')) box.firstElementChild.remove();
+    box.firstElementChild?.replaceWith(...mEls(first, older[k - 1], shown[1]));
+    box.prepend(frag);
+    shown = list;
+  }
+  box.scrollTop = box.scrollHeight - fromBottom;
+}
 function updDown() { const d = $('.mx-down'); if (!d) return; const b = d.querySelector('b'); b.hidden = !downCount; b.textContent = downCount; if (!downCount && nearBottom($('.mx-msgs'))) d.hidden = true; }
 function renderHead() {
   const c = open, h = $('.mx-chead'); if (!c || !h) return;
@@ -654,6 +751,7 @@ function textEl(t) {
     if (/^https?:\/\//.test(part)) { const a = el('a', '', part); a.href = part; a.target = '_blank'; a.rel = 'noopener noreferrer'; s.append(a); }
     else if (part) s.append(document.createTextNode(part));
   }
+  hilite(s, findQ());   // открыт поиск — найденное подсвечено и в новых пузырях
   return s;
 }
 async function appendMsg(m) {
@@ -759,7 +857,7 @@ function fileEl(m) {
   const w = el('a', 'filecard'); w.href = '#'; w.title = 'Сохранить';
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
   const ic = el('span', 'ic', ext || '📄'), t = el('div', 't');
-  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить'));
+  t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
   w.append(ic, t);
   w.onclick = async e => { e.preventDefault(); const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
   return w;
@@ -829,28 +927,53 @@ function setupInput(sec, c) {
   chat.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
   chat.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); });
   chat.addEventListener('drop', e => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; sendAny(c, e.dataTransfer.files); });
-  // кнопка справа: есть текст — «отправить»; нет — удерживать для записи, клик — сменить голос/кружочек
+  // кнопка справа: есть текст — «отправить»; нет — удерживать для записи, клик — сменить голос/кружочек.
+  // Пока держишь: вверх — запись без рук, влево — отмена, просто отпустил — отправить.
+  // Жест считаем с первого движения, даже если микрофон ещё не открылся (getUserMedia бывает долгим):
+  // запись заводится сразу, а «без рук» или «отмена» применятся к ней, как только она начнётся.
+  // Движение слушаем на всём окне: на телефоне палец уходит с кнопки, а захват указателя иногда теряется.
+  const LOCK = 70, CANCEL = 110;
   let hold = 0, press = null;
   const say = t => { hint.textContent = t; hint.classList.add('on'); clearTimeout(say.h); say.h = setTimeout(() => hint.classList.remove('on'), 1800); };
-  btn.addEventListener('pointerdown', e => {
-    if (e.button !== 0) return;
-    if (ta.value.trim()) return;
-    e.preventDefault(); btn.setPointerCapture(e.pointerId);
-    press = { x: e.clientX, y: e.clientY, id: e.pointerId };
-    hold = setTimeout(() => { hold = 0; btn.classList.add('hold'); startRec(c, recMode); }, 230);
-  });
-  btn.addEventListener('pointermove', e => {
-    if (!press || !rec || rec.locked) return;
+  const buzz = ms => { try { navigator.vibrate?.(ms); } catch (e) {} };
+  const finish = () => {
+    clearTimeout(hold); hold = 0; press = null;
+    removeEventListener('pointermove', move, true); removeEventListener('pointerup', release, true); removeEventListener('pointercancel', lost, true);
+    btn.classList.remove('hold'); btn.style.removeProperty('--gx'); btn.style.removeProperty('--gy'); gestHide();
+  };
+  const begin = () => {
+    clearTimeout(hold); hold = 0; if (!press || press.on) return;
+    press.on = true; btn.classList.add('hold'); gestShow(btn); buzz(10);
+    const p = press;
+    startRec(c, recMode).then(() => { if (!rec && press === p) finish(); });   // нет микрофона — убираем подсказки
+  };
+  const lockNow = () => { finish(); buzz(15); if (rec) { rec.locked = true; showRecBar(); } };
+  const move = e => {
+    if (!press || e.pointerId !== press.id) return;
     const dx = e.clientX - press.x, dy = e.clientY - press.y;
-    if (dx < -110) { press = null; btn.classList.remove('hold'); stopRec(false); }
-    else if (dy < -70) { rec.locked = true; btn.classList.remove('hold'); showRecBar(); }
-  });
-  const up = () => {
-    if (!press) return; press = null; btn.classList.remove('hold');
-    if (hold) { clearTimeout(hold); hold = 0; recMode = recMode === 'voice' ? 'circle' : 'voice'; store.set('mxRec', recMode); sync(); say(recMode === 'circle' ? 'Кружочек: удерживай кнопку и говори в камеру' : 'Голосовое: удерживай кнопку и говори'); return; }
+    if (!press.on) { if (Math.hypot(dx, dy) > 12) begin(); else return; }
+    const upw = Math.max(0, -dy), left = Math.max(0, -dx), vert = upw >= left;   // одна ось за раз — куда тянут сильнее
+    btn.style.setProperty('--gx', vert ? '0px' : -Math.min(left, CANCEL) + 'px');
+    btn.style.setProperty('--gy', vert ? -Math.min(upw, LOCK) + 'px' : '0px');
+    gestPaint(vert ? upw / LOCK : 0, vert ? 0 : left / CANCEL, btn.style.getPropertyValue('--gx'), btn.style.getPropertyValue('--gy'));
+    if (vert && upw >= LOCK) lockNow();
+    else if (!vert && left >= CANCEL) { finish(); buzz(25); stopRec(false); }
+  };
+  const release = e => {
+    if (!press || e.pointerId !== press.id) return;
+    const was = press.on; finish();
+    if (!was) { recMode = recMode === 'voice' ? 'circle' : 'voice'; store.set('mxRec', recMode); sync(); say(recMode === 'circle' ? 'Кружочек: удерживай кнопку и говори в камеру' : 'Голосовое: удерживай кнопку и говори'); return; }
     if (rec && !rec.locked) stopRec(true);
   };
-  btn.addEventListener('pointerup', up); btn.addEventListener('pointercancel', up);
+  // палец «отняла» система (окно разрешения на микрофон, жест браузера) — запись не теряем: дальше без рук
+  const lost = e => { if (!press || e.pointerId !== press.id) return; const was = press.on; finish(); if (was && rec) { rec.locked = true; showRecBar(); } };
+  btn.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || ta.value.trim() || press || rec) return;
+    e.preventDefault(); try { btn.setPointerCapture(e.pointerId); } catch (er) {}
+    press = { x: e.clientX, y: e.clientY, id: e.pointerId, on: false };
+    addEventListener('pointermove', move, true); addEventListener('pointerup', release, true); addEventListener('pointercancel', lost, true);
+    hold = setTimeout(begin, 230);
+  });
   btn.addEventListener('click', () => { if (ta.value.trim()) sendText(); });
   fit(); sync();
 }
@@ -896,19 +1019,36 @@ async function startRec(c, kind) {
   r.mr.start(500); r.start = performance.now();
   r.max = kind === 'circle' ? 60 : 600;
   r.timer = setInterval(() => { paintRec(); if ((performance.now() - r.start) / 1000 >= r.max) stopRec(true); }, 200);
-  if (kind === 'circle') showCircleRec(); else showRecBar();
-  if (r.locked) showRecBar();
+  showRecBar();   // жест «без рук», сделанный до этой минуты, уже лежит в r.locked
 }
+// подсказки жеста над кнопкой записи: замок «без рук» (заполняется, пока тянешь вверх) и «отмена» слева
+function gestShow(btn) {
+  gestHide();
+  const r = btn.getBoundingClientRect(), g = el('div', 'rec-gest');
+  // копия кнопки — поверх затемнения при записи кружочка (сама кнопка остаётся под ним)
+  g.innerHTML = `<div class="lockp"><span class="lk">${IC.lock}</span><span class="ar">${IC.up}</span><span class="tx">без рук</span></div><div class="cancp"><span class="ar">${IC.back}</span>отмена</div><div class="gbtn">${recMode === 'circle' ? IC.circ : IC.mic}</div>`;
+  g.classList.toggle('circ', recMode === 'circle');
+  g.style.left = r.left + r.width / 2 + 'px'; g.style.top = r.top + r.height / 2 + 'px';
+  document.body.append(g);
+}
+function gestPaint(lp, cp, gx, gy) {
+  const g = document.querySelector('.rec-gest'); if (!g) return;
+  g.style.setProperty('--lp', Math.min(1, lp).toFixed(3)); g.style.setProperty('--cp', Math.min(1, cp).toFixed(3));
+  if (gx) g.style.setProperty('--gx', gx); if (gy) g.style.setProperty('--gy', gy);
+  g.classList.toggle('near-lock', lp > .75); g.classList.toggle('near-cancel', cp > .6);
+}
+function gestHide() { document.querySelectorAll('.rec-gest').forEach(g => g.remove()); }
 function showRecBar() {
   const r = rec; if (!r) return;
   if (r.kind === 'circle') { showCircleRec(); return; }
+  if (!r.locked && !r.mr) return;   // микрофон ещё открывается — пока хватает подсказок у кнопки
   document.querySelector('.recbar')?.remove();
-  const bar = el('div', 'recbar');
-  bar.innerHTML = `<i class="rd"></i><span class="tm">0:00</span><div class="lv"></div><span class="hint"></span>`;
-  bar.querySelector('.hint').textContent = r.locked ? '' : '← влево — отмена · ↑ вверх — без рук';
+  const bar = el('div', 'recbar' + (r.locked ? ' locked' : ''));
+  bar.innerHTML = `<i class="rd"></i><span class="tm">0:00</span><span class="hint"></span><div class="lv"></div>`;
+  bar.querySelector('.hint').textContent = r.locked ? 'запись без рук' : 'отпусти — отправить';
   if (r.locked) {
-    const del = el('button', 'ib'); del.innerHTML = IC.trash; del.title = 'Удалить'; del.onclick = () => stopRec(false);
-    const snd = el('button', 'send'); snd.innerHTML = IC.send; snd.title = 'Отправить'; snd.onclick = () => stopRec(true);
+    const del = el('button', 'ib del'); del.innerHTML = IC.trash; del.title = 'Удалить запись'; del.onclick = () => stopRec(false);
+    const snd = el('button', 'send'); snd.innerHTML = IC.send; snd.title = 'Остановить и отправить'; snd.onclick = () => stopRec(true);
     bar.prepend(del); bar.append(snd);
   }
   $('.mx-input')?.append(bar); paintRec();
@@ -920,16 +1060,17 @@ function showCircleRec() {
     ov = el('div', 'circrec');
     ov.innerHTML = `<div class="box"><div class="cv"><video muted playsinline autoplay></video><svg viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"/></svg></div><div class="row"><i class="rd" style="width:12px;height:12px;border-radius:50%;background:#ff4b3a"></i><span class="tm">0:00</span><span class="hint" style="color:var(--mute);font-weight:500"></span></div><div class="row act"></div></div>`;
     document.body.append(ov);
-    const v = ov.querySelector('video'); v.srcObject = new MediaStream(r.stream.getVideoTracks()); v.play().catch(() => {});
   }
-  ov.querySelector('.hint').textContent = r.locked ? '' : 'отпусти — отправить · влево — отмена · вверх — без рук';
+  const v = ov.querySelector('video');   // камера могла ещё не открыться — подключим, когда будет
+  if (r.stream && !v.srcObject) { v.srcObject = new MediaStream(r.stream.getVideoTracks()); v.play().catch(() => {}); }
+  ov.querySelector('.hint').textContent = r.locked ? 'запись без рук' : r.mr ? 'отпусти — отправить' : 'включаю камеру…';
   const act = ov.querySelector('.act'); act.textContent = '';
   if (r.locked) { const no = el('button', 'btn', 'Удалить'); no.onclick = () => stopRec(false); const yes = el('button', 'btn pri', 'Отправить'); yes.onclick = () => stopRec(true); act.append(no, yes); }
   paintRec();
 }
 function paintRec() {
   const r = rec; if (!r) return;
-  const s = (performance.now() - r.start) / 1000;
+  const s = r.start ? (performance.now() - r.start) / 1000 : 0;
   document.querySelectorAll('.recbar .tm, .circrec .tm').forEach(t => t.textContent = fmtDur(s) + (r.kind === 'circle' ? ' / 1:00' : ''));
   const lv = document.querySelector('.recbar .lv');
   if (lv) { const n = Math.floor(lv.clientWidth / 5); lv.textContent = ''; for (const x of r.levels.slice(-n)) { const i = el('i'); i.style.height = Math.max(8, Math.min(100, x * 160)) + '%'; lv.append(i); } }
@@ -938,9 +1079,13 @@ function paintRec() {
 function stopRec(sendIt) {
   const r = rec; if (!r) return;
   r.cancelled = !sendIt; rec = null;
-  document.querySelector('.recbar')?.remove(); document.querySelector('.circrec')?.remove();
+  document.querySelector('.recbar')?.remove(); document.querySelector('.circrec')?.remove(); gestHide();
   clearInterval(r.timer); clearInterval(r.lv); try { r.ac?.close(); } catch (e) {}
-  if (!r.mr) { r.cancelled = true; r.stream?.getTracks().forEach(t => t.stop()); return; }
+  if (!r.mr) {   // отпустили раньше, чем открылся микрофон
+    r.cancelled = true; r.stream?.getTracks().forEach(t => t.stop());
+    if (sendIt) toast(r.kind === 'circle' ? 'Камера ещё включалась — удерживай кнопку, пока записываешь' : 'Микрофон ещё включался — удерживай кнопку, пока говоришь');
+    return;
+  }
   const dur = (performance.now() - r.start) / 1000;
   r.mr.onstop = async () => {
     r.stream.getTracks().forEach(t => t.stop());
@@ -1064,10 +1209,141 @@ function paintPre() {
   if (cp) line('⏳', 'Капсула времени', 'следующее сообщение откроется ' + whenText(cp.ts), () => { capsule = null; });
   inp.append(w);
 }
-function jumpTo(id) {
-  const row = document.querySelector(`.m[data-id="${CSS.escape(id)}"]`);
-  if (!row) { toast('Это сообщение выше по переписке или удалено'); return; }
-  row.scrollIntoView({ block: 'center', behavior: 'smooth' }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 1400);
+// перейти к сообщению; если оно выше нарисованного — сначала дорисуем переписку до него
+const rowOf = id => document.querySelector(`.mx-msgs .m[data-id="${CSS.escape(id)}"]`);
+const countFrom = (c, ts) => tx('msgs', 'readonly', s => s.index('chat').count(IDBKeyRange.bound([c, ts], [c, Infinity])));
+async function jumpTo(id, quiet) {
+  let row = rowOf(id), far = false;
+  if (!row && open && !shownAll) {
+    const m = await msgGet(id);
+    if (m?.chat === open) { far = true; jumpAt = Date.now(); await showMore(Math.max(0, await countFrom(open, m.ts) - shown.length) + 30); row = rowOf(id); }
+  }
+  if (!row) { if (!quiet) toast('Это сообщение удалено или его нет на этом устройстве'); return false; }
+  jumpAt = Date.now();
+  const box = $('.mx-msgs'), dist = Math.abs(row.getBoundingClientRect().top - box.getBoundingClientRect().top);
+  row.scrollIntoView({ block: 'center', behavior: far || dist > box.clientHeight * 3 ? 'auto' : 'smooth' });   // далеко — без долгой прокрутки
+  row.classList.remove('flash'); void row.offsetWidth; row.classList.add('flash'); clearTimeout(row._fl); row._fl = setTimeout(() => row.classList.remove('flash'), 1400);
+  return true;
+}
+
+// ---------- поиск по переписке: в открытом чате (🔍 в шапке, Ctrl+F) и по всем чатам (поле над списком) ----------
+const fold = s => String(s || '').toLowerCase().replace(/ё/g, 'е');
+function findText(m) {   // в чём ищем: текст, имя файла, название киносеанса; запечатанную капсулу не открываем
+  if (m.kind === 'sys' || (m.open > Date.now() && m.from !== myId)) return '';
+  return m.kind === 'file' ? m.name || '' : m.text || '';
+}
+const allMsgs = c => tx('msgs', 'readonly', s => c ? s.index('chat').getAll(IDBKeyRange.bound([c, -Infinity], [c, Infinity])) : s.getAll());
+// подсветка найденного прямо в тексте пузыря
+function hilite(node, q) {
+  if (!q || !node) return;
+  const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT), list = [];
+  while (w.nextNode()) list.push(w.currentNode);
+  for (const t of list) {
+    const s = t.nodeValue, f = fold(s); if (f.length !== s.length) continue;
+    let i = f.indexOf(q); if (i < 0) continue;
+    const frag = document.createDocumentFragment(); let at = 0;
+    for (; i >= 0; i = f.indexOf(q, at)) { if (i > at) frag.append(s.slice(at, i)); frag.append(el('mark', 'hl', s.slice(i, i + q.length))); at = i + q.length; }
+    if (at < s.length) frag.append(s.slice(at));
+    t.replaceWith(frag);
+  }
+}
+function unhilite(root) { root?.querySelectorAll('mark.hl').forEach(m => { const p = m.parentNode; m.replaceWith(m.textContent); p.normalize(); }); }
+const findQ = () => find?.chat === open ? find.q : '';
+let find = null;   // { chat, raw, q, hits: [id] от новых к старым, i }
+function openFind(text, at) {
+  if (!open) return;
+  if (!find || find.chat !== open) find = { chat: open, raw: '', q: '', hits: [], i: -1 };
+  const sec = $('.mx-chat'); if (!sec) return;
+  const bar = findBar(sec), inp = $('input', bar);
+  if (text != null) { inp.value = text; runFind(at); }
+  if (text == null || !TOUCH) { inp.focus(); if (text == null) inp.select(); }   // пришли из общего поиска на телефоне — без клавиатуры
+}
+function findBar(sec) {
+  let bar = $('.mx-find', sec); if (bar) return bar;
+  bar = el('div', 'mx-find');
+  bar.innerHTML = `<label class="fi">${IC.search}<input type="search" placeholder="Поиск в этом чате" autocomplete="off" spellcheck="false"></label><span class="cnt"></span><button class="ib prev" title="Раньше (Enter, ↑)">${IC.up}</button><button class="ib next" title="Позже (Shift+Enter, ↓)">${IC.down}</button><button class="ib close" title="Закрыть (Esc)">${IC.x}</button>`;
+  $('.mx-chead', sec).append(bar); sec.classList.add('finding');
+  const inp = $('input', bar); inp.value = find?.raw || '';
+  inp.addEventListener('input', () => { clearTimeout(find?.t); if (find) find.t = setTimeout(() => runFind(), 160); });
+  inp.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
+    else if (e.key === 'Enter' || e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); clearTimeout(find?.t); stepFind(e.key === 'ArrowDown' || (e.key === 'Enter' && e.shiftKey) ? -1 : 1); }
+  });
+  $('.prev', bar).onclick = () => stepFind(1); $('.next', bar).onclick = () => stepFind(-1); $('.close', bar).onclick = closeFind;
+  paintFind();
+  return bar;
+}
+async function runFind(at) {
+  const f = find, inp = $('.mx-find input'); if (!f || !inp) return;
+  const raw = inp.value.trim(), q = fold(raw); f.raw = inp.value;
+  if (q === f.q && at == null && f.done) return;
+  f.q = q; f.done = false;
+  const box = $('.mx-msgs'); unhilite(box);
+  if (q) box?.querySelectorAll('.m .txt, .m .filecard b').forEach(n => hilite(n, q));
+  if (!q) { f.hits = []; f.i = -1; f.done = true; paintFind(); return; }
+  const all = await allMsgs(f.chat);
+  if (find !== f || f.q !== q) return;
+  f.hits = all.filter(m => fold(findText(m)).includes(q)).sort((a, b) => b.ts - a.ts).map(m => m.id);
+  f.done = true;
+  f.i = at ? Math.max(0, f.hits.indexOf(at)) : f.hits.length ? 0 : -1;
+  paintFind(); if (f.i >= 0) goFind();
+}
+function stepFind(d) {
+  const f = find; if (!f) return;
+  if (!f.done) { runFind(); return; }
+  if (!f.hits.length) return;
+  f.i = (f.i + d + f.hits.length) % f.hits.length;   // по кругу: после самого старого — снова самое новое
+  paintFind(); goFind();
+}
+async function goFind() {
+  const f = find, id = f?.hits[f.i]; if (!id) return;
+  document.querySelectorAll('.mx-msgs .m.found').forEach(r => r.classList.remove('found'));
+  await jumpTo(id, true);
+  if (find !== f || f.hits[f.i] !== id) return;
+  rowOf(id)?.classList.add('found');
+}
+function paintFind() {
+  const bar = $('.mx-find'), f = find; if (!bar || !f) return;
+  const cnt = $('.cnt', bar);
+  cnt.textContent = !f.q ? '' : !f.done ? '…' : f.hits.length ? (f.i + 1) + ' из ' + f.hits.length : 'не найдено';
+  cnt.classList.toggle('none', !!f.q && f.done && !f.hits.length);
+  $('.prev', bar).disabled = $('.next', bar).disabled = !f.hits.length;
+}
+function closeFind() {
+  find = null;
+  const sec = $('.mx-chat'); $('.mx-find', sec)?.remove(); sec?.classList.remove('finding');
+  unhilite($('.mx-msgs')); document.querySelectorAll('.mx-msgs .m.found').forEach(r => r.classList.remove('found'));
+  if (!TOUCH) $('.mx-input textarea')?.focus();
+}
+document.addEventListener('keydown', e => {
+  if (root.hidden || document.querySelector('.mx-modal')) return;
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === 'KeyF' && open) { e.preventDefault(); openFind(); }
+  else if (e.key === 'Escape' && find && !document.querySelector('.mx-pop')) closeFind();
+});
+// по всем чатам: под найденными чатами — «Сообщения»; клик открывает чат на этом месте
+let gfind = { q: '', hits: [] };
+async function globalFind() {
+  const q = fold($('#mxQ').value.trim());
+  if (q.length < 2) { if (gfind.q) { gfind = { q: '', hits: [] }; renderList(); } return; }
+  const all = await allMsgs();
+  if (fold($('#mxQ').value.trim()) !== q) return;
+  const ok = c => S.chats[c] && (isDm(c) ? S.contacts[dmPeer(c)]?.state !== 'blocked' : S.groups[c]);
+  gfind = { q, hits: all.filter(m => ok(m.chat) && fold(findText(m)).includes(q)).sort((a, b) => b.ts - a.ts).slice(0, 60) };
+  renderList();
+}
+function hitEl(m, q) {
+  const it = el('div', 'ci hit'); it.dataset.chat = m.chat; it.dataset.id = m.id;
+  const tx = el('div', 'tx'), r1 = el('div', 'r1'), r2 = el('div', 'r2');
+  r1.append(el('span', 'nm', chatTitle(m.chat)), el('span', 'tm', listTime(m.ts)));
+  const t = findText(m).replace(/\s+/g, ' '), i = fold(t).indexOf(q), from = i > 24 ? i - 18 : 0;
+  const ls = el('span', 'ls'), who = m.from === myId ? 'Ты: ' : !isDm(m.chat) ? nameOf(m.from) + ': ' : '';
+  if (who) ls.append(el('b', '', who));
+  const tt = el('span', '', (from ? '…' : '') + t.slice(from)); hilite(tt, q); ls.append(tt);
+  r2.append(ls); tx.append(r1, r2);
+  const w = el('div', 'avwrap'); w.append(avEl(m.chat, 44));
+  it.append(w, tx);
+  it.onclick = async () => { const raw = $('#mxQ').value.trim(); await openChat(m.chat); if (open === m.chat) openFind(raw, m.id); };
+  return it;
 }
 function capsuleEl(m) {
   const w = el('div', 'capsule'); w.dataset.open = m.open;
@@ -1612,6 +1888,7 @@ function chatMenu(c, anchor) {
   Object.assign(mn.style, { position: 'fixed', top: r.bottom + 6 + 'px', left: Math.max(8, r.right - 240) + 'px', bottom: 'auto', zIndex: 50 });
   const add = (ic, t, f, cls) => { const b = el('button', cls || ''); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
   add(isDm(c) ? '👤' : '👥', isDm(c) ? 'О собеседнике' : 'Участники и название', () => infoDlg(c));
+  add('🔍', 'Поиск в чате', () => openFind());
   if (!isDm(c) && !S.groups[c]?.gone) add('➕', 'Добавить участников', () => addMembersDlg(c));
   add('📎', 'Отправить фото или файл', () => $('.mx-input input[type=file]')?.click());
   add('🧹', 'Очистить переписку у себя', () => deleteChat(c), 'danger');
