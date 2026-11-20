@@ -1,5 +1,5 @@
 // Кинозал — настольное приложение (Electron)
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification, screen } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification, screen, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -281,7 +281,7 @@ function setupFiles() {
   const saveSends = () => { try { fs.writeFileSync(sendsFile(), JSON.stringify([...sends].slice(-2000))); } catch (e) {} };
   const okId = id => /^[\w-]{1,60}$/.test(String(id || ''));
   const partOf = id => path.join(partDir(), id + '.part');
-  const inside = (p, dir) => { const r = path.relative(dir, p); return !!r && !r.startsWith('..') && !path.isAbsolute(r); };
+  const inside = (p, dir) => { const r = path.relative(dir, p); return !!r && r !== '..' && !r.startsWith('..' + path.sep) && !path.isAbsolute(r); };
   const open = new Map();   // id -> FileHandle недокачанного файла
   const handle = async id => { let h = open.get(id); if (!h) { await fsp.mkdir(partDir(), { recursive: true }); h = await fsp.open(partOf(id), 'r+').catch(() => fsp.open(partOf(id), 'w+')); open.set(id, h); } return h; };
   const shut = async id => { const h = open.get(id); open.delete(id); if (h) await h.close().catch(() => {}); };
@@ -321,7 +321,153 @@ function setupFiles() {
     log('[файлы] получен', to);
     return to;
   });
-  ipcMain.handle('kz:fdrop', async (e, id) => { if (!okId(id)) return false; await shut(id); await fsp.rm(partOf(id), { force: true }).catch(() => {}); return true; });
+  ipcMain.handle('kz:fdrop', async (e, id) => {
+    if (!okId(id)) return false; await shut(id);
+    for (const p of [partOf(id), dpartOf(id), dmanOf(id)]) await fsp.rm(p, { recursive: true, force: true }).catch(() => {});
+    dman.delete(id); madeDirs.clear(); return true;
+  });
+
+  // ---------- папки целиком: без архива ----------
+  // Папка передаётся как один склеенный поток: все её файлы подряд в порядке описи (путь + размер).
+  // Куски, хэши, докачка и скорость — те же, что у одного файла; здесь поток раскладывается по файлам.
+  // Опись отправленной папки хранится в userData\sends\<id>.json — по ней отдаём, даже если в папке что-то появилось.
+  // Получаемая папка собирается в .докачка\<id>\, её опись — рядом, в <id>.json; готовая переезжает в «Полученные».
+  const sendDir = () => path.join(app.getPath('userData'), 'sends');
+  const smanOf = id => path.join(sendDir(), id + '.json');
+  const dpartOf = id => path.join(partDir(), id);
+  const dmanOf = id => path.join(partDir(), id + '.json');
+  const MAXF = 50000;
+  const RESERVED = /^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i;
+  // путь внутри папки от собеседника: только вниз, без «..», без запрещённых в Windows имён
+  function safeRel(p) {
+    const parts = String(p || '').split('/').map(s => s.replace(/[\\:*?"<>|\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 120)).filter(Boolean);
+    if (!parts.length || parts.length > 40) return null;
+    return parts.map(s => RESERVED.test(s) ? '_' + s : s).join('/');
+  }
+  // проверить опись: целые размеры, уникальные пути, файл не может быть одновременно папкой, сумма сходится
+  function cleanMan(man, size) {
+    if (!man || !Array.isArray(man.files) || man.files.length > MAXF) throw new Error('плохая опись папки');
+    const files = [], seen = new Set(); let total = 0;
+    for (const f of man.files) {
+      const p = safeRel(f?.p), s = Number(f?.s);
+      if (!p || !Number.isSafeInteger(s) || s < 0 || seen.has(p.toLowerCase())) throw new Error('плохая опись папки');
+      seen.add(p.toLowerCase()); files.push({ p, s }); total += s;
+    }
+    for (const f of files) { const a = f.p.toLowerCase().split('/'); for (let i = 1; i < a.length; i++) if (seen.has(a.slice(0, i).join('/'))) throw new Error('плохая опись папки'); }
+    if (total !== size) throw new Error('опись не сходится с размером');
+    const dirs = [].concat(man.dirs || []).slice(0, MAXF).map(safeRel).filter(d => d && !seen.has(d.toLowerCase()));
+    return { files, dirs };
+  }
+  // где в склеенном потоке начинается каждый файл
+  const withStarts = man => { let o = 0; man.starts = man.files.map(f => { const s = o; o += f.s; return s; }); man.size = o; return man; };
+  const firstAt = (man, off) => { let lo = 0, hi = man.files.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (man.starts[mid] <= off) lo = mid; else hi = mid - 1; } return lo; };
+  // пройти по файлам, которые задевает отрезок [off, off+len): fn(файл, позиция в файле, позиция в отрезке, сколько)
+  async function spans(man, off, len, fn) {
+    for (let i = firstAt(man, off), pos = off; i < man.files.length && pos < off + len; i++) {
+      const f = man.files[i], st = man.starts[i]; if (st + f.s <= pos) continue;
+      const n = Math.min(st + f.s, off + len) - pos; if (n <= 0) continue;
+      await fn(f, pos - st, pos - off, n); pos += n;
+    }
+  }
+  async function walk(root) {
+    const files = [], dirs = [];
+    async function go(rel) {
+      const ents = await fsp.readdir(rel ? path.join(root, rel) : root, { withFileTypes: true });
+      ents.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+      if (!ents.length && rel) dirs.push(rel);
+      for (const en of ents) {
+        const r = rel ? rel + '/' + en.name : en.name;
+        if (en.isSymbolicLink()) continue;
+        if (en.isDirectory()) await go(r);
+        else if (en.isFile()) { files.push({ p: r, s: (await fsp.stat(path.join(root, r))).size }); if (files.length > MAXF) throw new Error('в папке больше ' + MAXF + ' файлов'); }
+      }
+    }
+    await go(''); return { files, dirs };
+  }
+  const sman = new Map(), dman = new Map();   // кэш описей: отправляемых и получаемых
+  async function sendMan(id) {
+    if (!okId(id)) throw new Error('плохой id');
+    let m = sman.get(id); if (m) return m;
+    m = withStarts(JSON.parse(await fsp.readFile(smanOf(id), 'utf8'))); sman.set(id, m); return m;
+  }
+  ipcMain.handle('kz:fkind', (e, p) => { p = String(p || ''); if (!path.isAbsolute(p)) return ''; try { const s = fs.statSync(p); return s.isDirectory() ? 'dir' : s.isFile() ? 'file' : ''; } catch (er) { return ''; } });
+  ipcMain.handle('kz:fpickdir', async () => { const r = await dialog.showOpenDialog(win, { title: 'Какую папку отправить?', properties: ['openDirectory'] }); return r.canceled ? '' : r.filePaths[0] || ''; });
+  ipcMain.handle('kz:dadd', async (e, id, root) => {
+    if (!okId(id)) throw new Error('плохой id');
+    root = String(root || ''); if (!path.isAbsolute(root) || !fs.statSync(root).isDirectory()) throw new Error('это не папка');
+    const w = await walk(root), man = { root, files: w.files, dirs: w.dirs };
+    await fsp.mkdir(sendDir(), { recursive: true }); await fsp.writeFile(smanOf(id), JSON.stringify(man));
+    sends.add(root); saveSends(); sman.set(id, withStarts(man));
+    log('[файлы] папка к отправке', root, man.files.length, 'файлов', man.size);
+    return { size: man.size, n: man.files.length };
+  });
+  ipcMain.handle('kz:dman', async (e, id) => { const m = await sendMan(id); return { files: m.files, dirs: m.dirs }; });
+  // всё ли в отправленной папке на месте: те же файлы тех же размеров
+  ipcMain.handle('kz:dstat', async (e, id) => {
+    try { const m = await sendMan(id); for (const f of m.files) { const s = await fsp.stat(path.join(m.root, f.p)); if (!s.isFile() || s.size !== f.s) return 'changed'; } return 'ok'; }
+    catch (er) { return 'gone'; }
+  });
+  ipcMain.handle('kz:dread', async (e, id, off, len) => {
+    const m = await sendMan(id);
+    off = Math.max(0, +off || 0); len = Math.max(0, Math.min(8 << 20, +len || 0, m.size - off));
+    const b = Buffer.alloc(len);
+    await spans(m, off, len, async (f, fo, bo, n) => {
+      const h = await fsp.open(path.join(m.root, f.p), 'r');
+      try { const { bytesRead } = await h.read(b, bo, n, fo); if (bytesRead !== n) throw new Error('файл «' + f.p + '» изменился'); } finally { await h.close(); }
+    });
+    return b;
+  });
+  // приём папки: опись (при первом запуске — от отправителя), сколько уже есть, запись, готово
+  async function recvMan(id) {
+    let m = dman.get(id); if (m) return m;
+    try { m = withStarts(JSON.parse(await fsp.readFile(dmanOf(id), 'utf8'))); } catch (er) { return null; }
+    dman.set(id, m); return m;
+  }
+  ipcMain.handle('kz:dopen', async (e, id, blk, man, size) => {
+    if (!okId(id)) throw new Error('плохой id');
+    let m = await recvMan(id);
+    if (!m) {
+      if (!man) return -1;   // описи ещё нет — пусть попросят у отправителя
+      m = withStarts(cleanMan(man, +size)); await fsp.mkdir(partDir(), { recursive: true });
+      await fsp.writeFile(dmanOf(id), JSON.stringify({ files: m.files, dirs: m.dirs })); dman.set(id, m);
+    }
+    // уже скачано = файлы подряд, пока они полные; обрезаем до целых кусков и подравниваем файлы на диске
+    let have = 0;
+    for (const f of m.files) { let s = 0; try { s = (await fsp.stat(path.join(dpartOf(id), f.p))).size; } catch (er) {} have += Math.min(s, f.s); if (s < f.s) break; }
+    have = Math.floor(have / Math.max(1, +blk || 1)) * Math.max(1, +blk || 1);
+    for (let i = 0; i < m.files.length; i++) {
+      const f = m.files[i], keep = Math.max(0, Math.min(f.s, have - m.starts[i])), fp = path.join(dpartOf(id), f.p);
+      let s = -1; try { s = (await fsp.stat(fp)).size; } catch (er) {}
+      if (s > keep) { if (keep) await fsp.truncate(fp, keep); else await fsp.rm(fp, { force: true }); }
+    }
+    return have;
+  });
+  const madeDirs = new Set();
+  const mkdirFor = async fp => { const d = path.dirname(fp); if (!madeDirs.has(d)) { await fsp.mkdir(d, { recursive: true }); madeDirs.add(d); } };
+  ipcMain.handle('kz:dwrite', async (e, id, off, data) => {
+    const m = await recvMan(id); if (!m) throw new Error('нет описи папки');
+    const b = Buffer.from(data.buffer, data.byteOffset, data.byteLength), base = dpartOf(id);
+    await spans(m, +off || 0, b.length, async (f, fo, bo, n) => {
+      const fp = path.join(base, f.p); if (!inside(fp, base)) throw new Error('путь за пределами папки');
+      await mkdirFor(fp);
+      const h = await fsp.open(fp, 'r+').catch(() => fsp.open(fp, 'w+'));
+      try { let w = 0; while (w < n) { const { bytesWritten } = await h.write(b, bo + w, n - w, fo + w); w += bytesWritten; } } finally { await h.close(); }
+    });
+    return true;
+  });
+  ipcMain.handle('kz:ddone', async (e, id, name) => {
+    const m = await recvMan(id); if (!m) throw new Error('нет описи папки');
+    const base = dpartOf(id);
+    // пустые файлы и пустые папки потоком не приходят — создаём сами
+    for (const f of m.files) if (!f.s) { const fp = path.join(base, f.p); if (inside(fp, base)) { await mkdirFor(fp); await fsp.writeFile(fp, ''); } }
+    for (const d of m.dirs) { const dp = path.join(base, d); if (inside(dp, base)) await fsp.mkdir(dp, { recursive: true }); }
+    await fsp.mkdir(base, { recursive: true });
+    const dir = recvDir(), nm = safeName(name); let to = path.join(dir, nm);
+    for (let i = 1; fs.existsSync(to); i++) to = path.join(dir, nm + ' (' + i + ')');
+    await fsp.rename(base, to); await fsp.rm(dmanOf(id), { force: true }).catch(() => {}); dman.delete(id); madeDirs.clear();
+    log('[файлы] получена папка', to, m.files.length, 'файлов');
+    return to;
+  });
   ipcMain.handle('kz:fshow', (e, p) => {
     p = String(p || '');
     if (!sends.has(p) && !inside(p, recvDir())) return false;
@@ -329,4 +475,71 @@ function setupFiles() {
     return true;
   });
   ipcMain.handle('kz:fdir', () => { fs.mkdirSync(recvDir(), { recursive: true }); shell.openPath(recvDir()); return recvDir(); });
+
+  // ---------- раздел «Файлы»: что лежит в «Полученных», поиск, открыть, в корзину, слежение ----------
+  const hidden = n => n === '.докачка' || n.startsWith('~$') || n === 'desktop.ini' || n === 'Thumbs.db';
+  const inRecv = p => { const r = recvDir(); return p === r || inside(p, r); };
+  async function dirSize(p, budget) {   // размер папки; на огромных — приблизительно (не больше budget записей)
+    let s = 0;
+    for (const en of await fsp.readdir(p, { withFileTypes: true }).catch(() => [])) {
+      if (budget.n-- <= 0) { budget.cut = true; break; }
+      const f = path.join(p, en.name);
+      if (en.isDirectory()) s += await dirSize(f, budget); else if (en.isFile()) s += (await fsp.stat(f).catch(() => ({ size: 0 }))).size;
+    }
+    return s;
+  }
+  async function item(p, name) {
+    const st = await fsp.stat(p).catch(() => null); if (!st) return null;
+    const it = { name, path: p, dir: st.isDirectory(), mtime: st.mtimeMs, size: st.size };
+    if (it.dir) { const b = { n: 20000 }; it.size = await dirSize(p, b); it.approx = !!b.cut; it.count = (await fsp.readdir(p).catch(() => [])).filter(n => !hidden(n)).length; }
+    return it;
+  }
+  ipcMain.handle('kz:flist', async (e, p) => {
+    const root = recvDir(); await fsp.mkdir(root, { recursive: true });
+    p = p ? String(p) : root; if (!inRecv(p)) p = root;
+    const items = [];
+    for (const n of await fsp.readdir(p).catch(() => [])) { if (hidden(n)) continue; const it = await item(path.join(p, n), n); if (it) items.push(it); }
+    return { root, path: p, items };
+  });
+  ipcMain.handle('kz:fsearch', async (e, q) => {
+    q = String(q || '').toLowerCase().trim(); const root = recvDir(), out = []; if (!q) return out;
+    let budget = 50000;
+    async function go(d) {
+      for (const en of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) {
+        if (out.length >= 300 || budget-- <= 0) return; if (hidden(en.name)) continue;
+        const f = path.join(d, en.name);
+        if (en.name.toLowerCase().includes(q)) { const it = await item(f, en.name); if (it) { it.where = path.relative(root, d); out.push(it); } }
+        if (en.isDirectory()) await go(f);
+      }
+    }
+    await go(root); return out;
+  });
+  const allowed = p => inRecv(p) || sends.has(p) || [...sends].some(s => inside(p, s));
+  ipcMain.handle('kz:fopenp', async (e, p) => { p = String(p || ''); if (!allowed(p) || !fs.existsSync(p)) return 'нет такого файла'; return shell.openPath(p); });
+  ipcMain.handle('kz:ftrash', async (e, p) => {
+    p = String(p || ''); if (!inRecv(p) || p === recvDir()) return false;   // удаляем только полученное и только в корзину
+    await shell.trashItem(p); log('[файлы] в корзину', p); return true;
+  });
+  // небольшой файл из чата (он хранится в переписке) — сохранить в «Полученные», чтобы он был в разделе «Файлы»
+  ipcMain.handle('kz:fsave', async (e, name, data) => {
+    const dir = recvDir(); await fsp.mkdir(dir, { recursive: true });
+    const nm = safeName(name), ext = path.extname(nm), base = ext ? nm.slice(0, -ext.length) : nm;
+    let to = path.join(dir, nm); for (let i = 1; fs.existsSync(to); i++) to = path.join(dir, base + ' (' + i + ')' + ext);
+    await fsp.writeFile(to, Buffer.from(data.buffer, data.byteOffset, data.byteLength)); return to;
+  });
+  ipcMain.handle('kz:fexists', (e, p) => { p = String(p || ''); return allowed(p) && fs.existsSync(p); });
+  // что-то поменяли в «Полученных» (в том числе через обычный проводник) — раздел «Файлы» перерисуется
+  let watcher = null, watchT = 0;
+  ipcMain.handle('kz:fwatch', () => {
+    if (watcher) return true;
+    try {
+      fs.mkdirSync(recvDir(), { recursive: true });
+      watcher = fs.watch(recvDir(), { recursive: true }, (ev, f) => {
+        if (String(f || '').startsWith('.докачка')) return;
+        clearTimeout(watchT); watchT = setTimeout(() => { if (win && !win.isDestroyed()) win.webContents.send('kz:fchanged'); }, 400);
+      });
+      watcher.on('error', () => { watcher = null; });
+    } catch (er) { watcher = null; return false; }
+    return true;
+  });
 }

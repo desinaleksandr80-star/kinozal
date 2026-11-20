@@ -49,6 +49,7 @@ const IC = {
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5l1-4.2L15.8 5a2.1 2.1 0 0 1 3 0l.2.2a2.1 2.1 0 0 1 0 3L8.7 18.5z"/><path d="M13.6 7.2l3.2 3.2"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
   down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
@@ -270,7 +271,7 @@ function dial(u) {
 async function dialAll() { for (const u of dialList()) { dial(u); await sleep(120); } }
 setInterval(dialAll, 40000);
 window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
-const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
+const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer', 'xdir'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
 function wire(c, outgoing, u, dev = '') {
   const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, dev, self: u === myId, peer: peerOf(u, dev), their: null, q: Promise.resolve() };
   c.on('open', () => { c.send(helloMsg(L.nonce)); });
@@ -363,6 +364,8 @@ async function onData(L, d) {
     case 'bye': if (L.self && L.dev && !myDev) revokeDev(L.dev); return;   // моё устройство вышло из профиля — его ключ стёрт, убираем из списка
     case 'xget': return xServe(L, d);
     case 'xno': return xNo(L, d);
+    case 'xmanq': return xManServe(L, d);
+    case 'xman': return xManGot(L, d);
   }
 }
 function linkUp(L) {
@@ -415,7 +418,7 @@ async function onSync(L, d) {
     for (const m of await chatMsgs(c)) if (!theirs.has(m.id)) { if (!await push(L, m)) return; await sleep(5); }
   }
 }
-const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, big: m.big, dev: m.big ? m.dev || '' : undefined, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
+const wireMsg = m => ({ id: m.id, chat: m.chat, from: m.from, ts: m.ts, kind: m.kind, text: m.text, mime: m.mime, dur: m.dur, wave: m.wave, code: m.code, room: m.room, blob: m.blob, big: m.big, dev: m.big ? m.dev || '' : undefined, dir: m.dir, n: m.dir ? m.n : undefined, w: m.w, h: m.h, name: m.name, size: m.size, re: m.re, open: m.open, at: m.at });
 // кому: id человека или одна связь; своим устройствам уходят ещё галочки и реакции
 async function push(x, m) {
   const self = typeof x === 'object' ? x.self : x === myId;
@@ -634,8 +637,10 @@ function cleanMsg(x) {
     m.mime = /^[\w.+-]+\/[\w.+-]+$/.test(String(x.mime || '')) ? String(x.mime) : 'application/octet-stream';
     m.name = fileName(x.name); m.size = Math.max(0, +x.size || 0);
     // большой файл в сообщение не вложен: его скачивают напрямую с устройства отправителя (dev), кусками
-    if (x.big) { m.big = 1; m.dev = /^[0-9a-z]{6}$/.test(String(x.dev || '')) ? String(x.dev) : ''; if (!m.size || m.size > 1e13) return null; }
-    else m.blob = 1;
+    if (x.big) {
+      m.big = 1; m.dev = /^[0-9a-z]{6}$/.test(String(x.dev || '')) ? String(x.dev) : ''; if (!m.size || m.size > 1e13) return null;
+      if (x.dir) { m.dir = 1; m.n = Math.max(1, Math.min(50000, x.n | 0)); }   // папка целиком: n файлов, size — сумма
+    } else m.blob = 1;
   }
   if (m.kind === 'call') { m.code = clean(x.code, 8).toUpperCase(); m.room = x.room === 'cinema' ? 'cinema' : 'call'; if (!/^[A-Z0-9]{5}$/.test(m.code)) return null; }
   if (m.kind === 'plan') { m.at = +x.at || 0; m.room = x.room === 'call' ? 'call' : 'cinema'; m.text = clean(x.text, 80); if (m.at < m.ts - 864e5 || m.at > m.ts + 400 * 864e5) return null; }
@@ -740,7 +745,7 @@ async function createGroup(name, list) {
 const root = el('div'); root.id = 'mx'; root.hidden = true;
 root.innerHTML = `
 <aside class="mx-side">
-  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
+  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxFiles" title="Файлы: передачи, полученное, отправленное">${IC.folder}<b hidden></b></button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
   <div class="mx-sec"><span>Чаты</span><button class="ib lay" id="mxLay" title="Список чатов: ширина, сторона, компактный вид">${IC.dots}</button></div>
   <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
@@ -755,6 +760,7 @@ document.body.append(root);
 setNet(net);
 $('#mxQ').oninput = () => { renderList(); clearTimeout(globalFind.t); globalFind.t = setTimeout(globalFind, 220); };
 $('#mxAdd').onclick = () => addContactDlg();
+$('#mxFiles').onclick = () => filesOpen ? closeFiles() : openFiles();
 $('#mxTheme').onclick = () => openTheme();
 $('#mxMe').onclick = $('#mxProf').onclick = () => settingsDlg();
 $('#mxCine').onclick = () => codeDlg('cinema');
@@ -889,6 +895,7 @@ function blobUrl(id) { return urls.get(id); }
 async function mediaUrl(m) { if (urls.has(m.id)) return urls.get(m.id); const b = await blobGet(m.id); if (!b) return ''; const u = URL.createObjectURL(b); urls.set(m.id, u); return u; }
 function freeUrls() { stopVoice(); for (const u of urls.values()) URL.revokeObjectURL(u); urls.clear(); }
 function showEmpty() {
+  filesOpen = false;
   const main = $('#mxMain'); main.textContent = ''; root.classList.remove('chat-open');
   const e = el('div', 'mx-empty');
   e.innerHTML = IC.logo;
@@ -911,6 +918,7 @@ async function copyInvite() {
 }
 async function openChat(c) {
   if (!S.chats[c] && !isDm(c) && !S.groups[c]) return;
+  filesOpen = false;
   ensureChat(c);
   if (open !== c) { freeUrls(); open = c; enterChat = true; }
   root.classList.add('chat-open');
@@ -1170,21 +1178,33 @@ const riskOk = m => !RISKY.test(m.name || '') || confirm('«' + m.name + '» —
 function fileEl(m) {
   const w = el('a', 'filecard'); w.href = '#';
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
-  const ic = el('span', 'ic', ext || '📄'), t = el('div', 't');
+  const ic = el('span', 'ic' + (m.dir ? ' dir' : ''), m.dir ? '📁' : ext || '📄'), t = el('div', 't');
   t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + ' · сохранить')); hilite(t.firstChild, findQ());
   w.append(ic, t);
   if (m.big) {
-    w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'bar'); bar.append(el('i')); t.append(bar);
+    w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'xbar'); bar.append(el('i')); t.append(bar);
     // режим скорости — переключается прямо во время передачи
     const md = el('span', 'xmode'); md.setAttribute('role', 'button'); md.tabIndex = 0; t.append(md);
     md.onclick = e => { e.preventDefault(); e.stopPropagation(); const soft = !xSoft(); setXMode(soft ? 'soft' : 'max'); toast(soft ? '🐢 Щадящий режим: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' (настраивается в профиле)' : '⚡ Максимальная скорость'); };
     xFill(w, m); w.onclick = e => { e.preventDefault(); xClick(m); }; return w; }
   w.title = 'Сохранить';
-  w.onclick = async e => { e.preventDefault(); if (!riskOk(m)) return; const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
+  w.onclick = async e => {
+    e.preventDefault();
+    if (DISK) {   // программа для Windows: в «Полученные» — там его видно в разделе «Файлы», вместе с тем, кто прислал
+      const d = S.dl[m.id];
+      if (d?.path && await APP.files.exists(d.path)) { APP.files.show(d.path); return; }
+      if (!riskOk(m)) return;
+      const b = await blobGet(m.id); if (!b) return;
+      try { const p = await APP.files.save(m.name, new Uint8Array(await b.arrayBuffer())); S.dl[m.id] = { st: 'done', got: m.size, path: p }; save(); APP.files.show(p); toast('«' + m.name + '» сохранён в «Загрузки → Кинозал → Полученные»'); }
+      catch (er) { toast('Не получилось сохранить: ' + errText(er)); }
+      return;
+    }
+    if (!riskOk(m)) return; const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove(); };
   return w;
 }
 async function sendFiles(c, files) {
   for (const f of [...files].slice(0, 10)) {
+    if (DISK && !f.type && f.size <= 65536 && await APP.files.kind(f) === 'dir') { await sendDir(c, APP.files.pathOfAny(f)); continue; }   // перетащили папку
     if (!f.size) continue;
     if (f.size <= LIMIT) { await post(c, { kind: 'file', name: fileName(f.name), size: f.size }, f.type ? f : new Blob([f], { type: 'application/octet-stream' })); continue; }
     await sendBig(c, f);
@@ -1219,14 +1239,45 @@ async function sendBig(c, f) {
   if (old.length) toast('У ' + old.map(nameOf).join(', ') + ' старая версия Кинозала — большой файл скачается после обновления');
   else toast(path ? '«' + f.name + '» скачают напрямую с этого компьютера, пока Кинозал открыт' : '«' + f.name + '» скачают напрямую отсюда — не закрывай вкладку, пока не скачают');
 }
+// папка целиком (только программа для Windows): опись снимается сейчас, по ней и отдаём
+const nFiles = n => n + ' ' + plural(n, 'файл', 'файла', 'файлов');
+async function sendDir(c, root) {
+  if (!DISK || !root) return;
+  const id = uid(), name = fileName(root.split(/[\\/]/).filter(Boolean).pop() || 'папка');
+  toast('Считаю файлы в «' + name + '»…');
+  let r; try { r = await APP.files.dirAdd(id, root); } catch (e) { toast('Не получилось прочитать папку: ' + String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); return; }
+  if (!r.n || !r.size) { toast('В папке «' + name + '» нет файлов с содержимым — отправлять нечего'); return; }
+  S.src[id] = root; save();
+  const old = members(c).filter(u => u !== myId && linksOf(u).some(L => !L.their?.caps.includes('xdir')));
+  await post(c, { id, kind: 'file', big: 1, dir: 1, n: r.n, dev: myDev || '', name, size: r.size, mime: 'inode/directory' });
+  toast(old.length ? 'У ' + old.map(nameOf).join(', ') + ' старая версия Кинозала — папку скачают после обновления' : 'Папку «' + name + '» (' + nFiles(r.n) + ', ' + fmtSize(r.size) + ') скачают напрямую с этого компьютера, пока Кинозал открыт');
+}
 async function srcOf(m) {
+  if (m.dir) return DISK && S.src[m.id] && await APP.files.dirStat(m.id) === 'ok' ? { dir: m.id } : null;
   const f = srcMem.get(m.id); if (f) return f.size === m.size ? { file: f } : null;
   const p = S.src[m.id]; if (!p || !DISK) return null;
   const st = await APP.files.stat(p); return st && st.size === m.size ? { path: p } : null;
 }
 async function readSrc(src, off, len) {
   if (src.file) return new Uint8Array(await src.file.slice(off, off + len).arrayBuffer());
-  const b = await APP.files.read(src.path, off, len); return b instanceof Uint8Array ? b : new Uint8Array(b);
+  const b = src.dir ? await APP.files.dirRead(src.dir, off, len) : await APP.files.read(src.path, off, len);
+  return b instanceof Uint8Array ? b : new Uint8Array(b);
+}
+// опись папки: получатель просит её по обычной связи перед первой закачкой
+const manWait = new Map();
+async function xManServe(L, d) {
+  const id = clean(d.id, 60), m = await msgGet(id);
+  if (!m || !m.dir || !isMineSrc(m) || (!L.self && !members(m.chat).includes(L.uid))) return send(L, { t: 'xman', id, err: 'nofile' });
+  if (await APP.files?.dirStat(id) !== 'ok') return send(L, { t: 'xman', id, err: 'gone' });
+  const man = await APP.files.dirMan(id);
+  send(L, { t: 'xman', id, files: man.files, dirs: man.dirs });
+}
+function xManGot(L, d) { const w = manWait.get(clean(d.id, 60)); if (w && w.L === L) { manWait.delete(clean(d.id, 60)); w.res(d); } }
+function xManAsk(L, id) {
+  return new Promise(res => {
+    manWait.set(id, { L, res }); send(L, { t: 'xmanq', id });
+    setTimeout(() => { if (manWait.get(id)?.res === res) { manWait.delete(id); res(null); } }, 20000);
+  });
 }
 // скорость за последние секунды
 function speed(o, bytes) {
@@ -1277,11 +1328,24 @@ async function xStart(m) {
   delete d.why;
   const L = srcLink(m);
   if (!L) { d.st = 'wait'; save(); xPaint(m.id); dial(m.from); return; }
-  if (!L.their?.caps.includes('xfer')) { d.st = 'err'; d.why = 'у отправителя старая версия Кинозала'; save(); xPaint(m.id); return; }
+  if (!L.their?.caps.includes(m.dir ? 'xdir' : 'xfer')) { d.st = 'err'; d.why = 'у отправителя старая версия Кинозала'; save(); xPaint(m.id); return; }
+  if (m.dir && !DISK) { d.st = 'err'; d.why = 'папку целиком можно скачать только в программе для Windows'; save(); xPaint(m.id); return; }
   const x = { m, L, got: 0, tok: uid(), c: null, parts: [], plen: 0, q: Promise.resolve(), bad: 0 };
   dls.set(m.id, x);
-  try { x.got = DISK ? await APP.files.open(m.id, BLK) : Math.floor(Math.min(d.got || 0, m.size) / BLK) * BLK; }
-  catch (e) { return xDrop(x, 'err', 'не получилось создать файл на диске'); }
+  if (m.dir) {   // папка: сначала опись — какие файлы и каких размеров (один раз, дальше она лежит на диске)
+    try {
+      x.got = await APP.files.dirOpen(m.id, BLK, null, m.size);
+      if (x.got < 0) {
+        const r = await xManAsk(L, m.id); if (dls.get(m.id) !== x) return;
+        if (!r) return xDrop(x, 'wait');
+        if (r.err) return xDrop(x, r.err === 'gone' || r.err === 'nofile' ? 'gone' : 'err', r.err === 'gone' || r.err === 'nofile' ? '' : 'отправитель не может отдать папку');
+        x.got = await APP.files.dirOpen(m.id, BLK, { files: r.files, dirs: r.dirs }, m.size);
+      }
+    } catch (e) { return xDrop(x, 'err', 'опись папки не подошла: ' + String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
+  } else {
+    try { x.got = DISK ? await APP.files.open(m.id, BLK) : Math.floor(Math.min(d.got || 0, m.size) / BLK) * BLK; }
+    catch (e) { return xDrop(x, 'err', 'не получилось создать файл на диске'); }
+  }
   if (dls.get(m.id) !== x) return;
   d.st = 'go'; d.got = x.got; save(); xPaint(m.id);
   if (x.got >= m.size) return xFinish(x);
@@ -1316,7 +1380,7 @@ async function xData(x, d) {
       if (++x.bad > 5) return xDrop(x, 'err', 'файл приходит с ошибками');
       xDrop(x, 'wait'); setTimeout(() => xStart(m), 1000); return;
     }
-    if (DISK) await APP.files.write(m.id, x.got, buf); else await blobPut(m.id + ':' + i, new Blob([buf]));
+    if (m.dir) await APP.files.dirWrite(m.id, x.got, buf); else if (DISK) await APP.files.write(m.id, x.got, buf); else await blobPut(m.id + ':' + i, new Blob([buf]));
     if (dls.get(m.id) !== x) return;
     x.got += buf.byteLength; S.dl[m.id].got = x.got; save(); speed(x, x.got);
     try { x.c.send(JSON.stringify({ t: 'ok', i })); } catch (e) {}
@@ -1334,7 +1398,8 @@ async function xFinish(x) {
   dls.delete(m.id); clearInterval(x.dog); try { x.c?.close(); } catch (e) {}
   if (!d) return;
   try {
-    if (DISK) d.path = await APP.files.done(m.id, m.name);
+    if (m.dir) d.path = await APP.files.dirDone(m.id, m.name);
+    else if (DISK) d.path = await APP.files.done(m.id, m.name);
     else {
       const parts = []; for (let i = 0; i * BLK < m.size; i++) { const p = await blobGet(m.id + ':' + i); if (!p) throw new Error('нет куска ' + i); parts.push(p); }
       await blobPut(m.id, new Blob(parts, { type: m.mime })); await tx('blobs', 'readwrite', s => s.delete(partsKey(m.id)));
@@ -1390,6 +1455,7 @@ async function xServe(L, d) {
   if (!m || !m.big || !isMineSrc(m)) return no('nofile');
   if (!L.self && !members(m.chat).includes(L.uid)) return;
   if (!tok || from % BLK || from >= m.size) return no('bad');
+  if (m.dir && !L.their?.caps.includes('xdir')) return no('old');
   const src = await srcOf(m); if (!src) return no('gone');
   if (!peer || net !== 'on') return no('net');
   const c = peer.connect(L.peer, { reliable: true, serialization: 'raw', metadata: { v: 1, xfer: tok } });
@@ -1442,7 +1508,7 @@ async function pump(o, src) {
 
 // --- карточка файла ---
 function xLine(m) {
-  const size = fmtSize(m.size);
+  const size = fmtSize(m.size) + (m.dir ? ' · ' + nFiles(m.n || 0) : ''), total = fmtSize(m.size);
   if (isMineSrc(m)) {
     const o = [...ups.values()].find(v => v.m.id === m.id);
     if (o) return { txt: 'отдаю: ' + Math.floor(o.sent / m.size * 100) + '%' + (o.rate ? ' · ' + fmtSize(Math.round(o.rate)) + '/с' : ''), p: o.sent / m.size };
@@ -1452,7 +1518,7 @@ function xLine(m) {
   }
   const d = S.dl[m.id], x = dls.get(m.id), who = m.from === myId ? 'другое твоё устройство' : nameOf(m.from);
   if (!d) return { txt: size + ' · скачать' };
-  const part = fmtSize(d.got || 0) + ' из ' + size;
+  const part = fmtSize(d.got || 0) + ' из ' + total;
   switch (d.st) {
     case 'done': return { txt: size + (DISK ? ' · показать в папке' : ' · сохранить') };
     case 'go': {
@@ -1461,12 +1527,12 @@ function xLine(m) {
     }
     case 'pause': return { txt: part + ' · пауза — продолжить', p: (d.got || 0) / m.size };
     case 'wait': return { txt: (d.got ? part + ' · ' : size + ' · ') + 'ждём, когда ' + who + ' будет в сети', p: d.got ? d.got / m.size : null };
-    case 'gone': return { txt: size + ' · у отправителя файла уже нет' };
+    case 'gone': return { txt: size + (m.dir ? ' · у отправителя папка изменилась или пропала — пусть отправит заново' : ' · у отправителя файла уже нет') };
     default: return { txt: (d.why || 'не получилось') + ' · ещё раз', p: d.got ? d.got / m.size : null };
   }
 }
 function xFill(w, m) {
-  const s = xLine(m), sp = $('.t span', w), bar = $('.bar', w);
+  const s = xLine(m), sp = $('.t span', w), bar = $('.xbar', w);
   sp.textContent = s.txt; w.title = s.go ? 'Пауза' : '';
   bar.hidden = s.p == null; if (s.p != null) bar.firstChild.style.width = Math.min(100, s.p * 100).toFixed(1) + '%';
   w.classList.toggle('go', !!s.go);
@@ -1484,7 +1550,214 @@ function xPaint(id) {
     for (const w of ws) xFill(w, m);
   }, 150));
 }
-const sendAny = (c, files) => { files = [...files]; const im = files.filter(f => /^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)); const ot = files.filter(f => !im.includes(f)); if (im.length) sendImages(c, im); if (ot.length) sendFiles(c, ot); };
+
+// ---------- раздел «Файлы»: передачи со всех чатов, полученное, отправленное ----------
+// Не проводник по всему диску: только то, что прошло через Кинозал, — с тем, кто прислал и из какого чата.
+let filesOpen = false, fTab = store.get('fTab', 'live'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
+const FICON = { img: '🖼', video: '🎬', audio: '🎵', arc: '🗜', doc: '📄', exe: '⚙️', dir: '📁' };
+const fKind = n => /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(n) ? 'img' : /\.(mp4|webm|mkv|mov|m4v|avi)$/i.test(n) ? 'video' : /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n) ? 'audio' : /\.(zip|rar|7z|tar|gz|jar|mrpack)$/i.test(n) ? 'arc' : RISKY.test(n) ? 'exe' : 'doc';
+const fileUrl = p => 'file:///' + String(p).replace(/\\/g, '/').split('/').map((s, i) => i === 0 && /^[A-Za-z]:$/.test(s) ? s : encodeURIComponent(s)).join('/');
+const fDate = ts => { const d = new Date(ts), now = new Date(); return d.toDateString() === now.toDateString() ? d.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : d.toLocaleDateString('ru', { day: 'numeric', month: 'short', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) }); };
+const errText = e => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
+// что сейчас передаётся: качаю (в том числе жду и на паузе) и отдаю
+async function liveItems() {
+  const rx = [], tx = [];
+  for (const [id, d] of Object.entries(S.dl)) if (['go', 'wait', 'pause', 'err'].includes(d.st)) { const m = dls.get(id)?.m || await msgGet(id); if (m?.big) rx.push(m); }
+  const seen = new Set(); for (const o of ups.values()) if (!seen.has(o.m.id)) { seen.add(o.m.id); tx.push(o.m); }
+  return { rx, tx };
+}
+const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).size;
+function openFiles(tab) {
+  if (open) { freeUrls(); open = null; find = null; }
+  filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
+  if (!DISK && fTab === 'recv') fTab = 'live';
+  root.classList.add('chat-open'); renderList(); renderFiles();
+  APP?.files?.watch?.(() => { if (filesOpen && fTab === 'recv') renderFiles(); });
+}
+function closeFiles() { filesOpen = false; showEmpty(); }
+// строка с карточкой сообщения (она сама обновляет прогресс) и подписью: кто, где, когда
+function msgRow(m, extra) {
+  const r = el('div', 'frow msg'), meta = el('div', 'fmeta');
+  const mine = m.from === myId, where = chatTitle(m.chat);
+  meta.append(el('span', '', (mine ? 'ты → ' + where : nameOf(m.from) + (isDm(m.chat) ? '' : ' · ' + where)) + ' · ' + fDate(m.ts)));
+  const go = el('button', 'lnk', 'к сообщению'); go.onclick = async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); }; meta.append(go);
+  for (const b of extra || []) meta.append(b);
+  r.append(fileEl(m), meta); return r;
+}
+const lnk = (t, f, cls) => { const b = el('button', 'lnk' + (cls ? ' ' + cls : ''), t); b.onclick = e => { e.stopPropagation(); f(); }; return b; };
+async function renderFiles() {
+  if (!filesOpen) return;
+  const gen = ++fGen, main = $('#mxMain');
+  const sec = el('section', 'mx-files'), head = el('header', 'mx-chead'), tabs = el('div', 'ftabs'), bar = el('div', 'fbar'), list = el('div', 'flist');
+  const back = el('button', 'ib back'); back.innerHTML = IC.back; back.title = 'К чатам'; back.onclick = closeFiles;
+  const n = liveCount();
+  for (const [k, t] of [['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Полученные']] : []), ['sent', 'Отправленные']]) {
+    const b = el('button', 'ftab' + (fTab === k ? ' on' : ''), t); b.onclick = () => { fTab = k; store.set('fTab', k); fPath = ''; fQ = ''; renderFiles(); }; tabs.append(b);
+  }
+  head.append(back, el('h2', '', 'Файлы'), tabs);
+  sec.append(head, bar, list);
+  if (fTab === 'live') await fillLive(bar, list);
+  else if (fTab === 'recv') await fillRecv(bar, list, gen);
+  else await fillSent(bar, list);
+  if (gen !== fGen || !filesOpen) return;
+  const keep = $('.mx-files .flist')?.scrollTop || 0, hadFocus = document.activeElement?.classList.contains('fq');
+  main.textContent = ''; main.append(sec); list.scrollTop = keep;
+  if (hadFocus) { const q = $('.fq', sec); q?.focus(); q?.setSelectionRange(q.value.length, q.value.length); }
+}
+function emptyEl(icon, t, s) { const e = el('div', 'fempty'); e.append(el('div', 'big', icon), el('b', '', t), el('span', '', s)); return e; }
+
+// --- передачи ---
+async function fillLive(bar, list) {
+  const seg = el('div', 'seg');
+  for (const [v, t] of Object.entries(XMODES)) { const b = el('button', 'btn' + (xMode() === v ? ' on' : ''), t); b.onclick = () => { setXMode(v); renderFiles(); }; seg.append(b); }
+  const all = el('div', 'fall');
+  all.append(lnk('⏸ всё на паузу', () => { for (const x of [...dls.values()]) xDrop(x, 'pause'); for (const d of Object.values(S.dl)) if (d.st === 'wait') d.st = 'pause'; save(); renderFiles(); }),
+    lnk('▶ продолжить всё', async () => { for (const [id, d] of Object.entries(S.dl)) if (['pause', 'err', 'wait'].includes(d.st) && !dls.has(id)) { const m = await msgGet(id); if (m) xStart(m); } setTimeout(renderFiles, 300); }));
+  bar.append(seg, all);
+  bar.append(el('p', 'fhint', xSoft() ? '🐢 Сейчас щадящий: отдача до ' + fmtRate(xLim('xup')) + ', скачивание до ' + fmtRate(xLim('xdown')) + ' — лимиты в профиле.' : '⚡ Сейчас без ограничений.' + (xMode() === 'auto' ? ' В звонке или зале Кинозала станет щадящим.' : '')));
+  const { rx, tx } = await liveItems();
+  if (!rx.length && !tx.length) { list.append(emptyEl('📭', 'Сейчас ничего не передаётся', 'Большие файлы и папки, которые качаешь или отдаёшь, появятся здесь — из всех чатов сразу. Отправить: скрепка в чате или перетащи файл в окно.')); return; }
+  if (rx.length) { list.append(el('h3', '', 'Качаю')); for (const m of rx.sort((a, b) => b.ts - a.ts)) list.append(msgRow(m)); }
+  if (tx.length) { list.append(el('h3', '', 'Отдаю')); for (const m of tx) list.append(msgRow(m)); }
+}
+// пока раздел открыт на «Передачах» — следим, не началось ли или не закончилось что-то
+let liveKey = '';
+setInterval(async () => {
+  const n = liveCount(), b = $('#mxFiles b'); if (b) { b.textContent = n || ''; b.hidden = !n; }
+  if (!filesOpen || fTab !== 'live') return;
+  const { rx, tx } = await liveItems(), k = rx.map(m => m.id + S.dl[m.id]?.st).join() + '|' + tx.map(m => m.id).join();
+  if (k !== liveKey) { liveKey = k; renderFiles(); }
+}, 1500);
+
+// --- полученные (только программа для Windows) ---
+function recvIndex() {   // путь на диске → сообщение, из которого он пришёл
+  const ix = new Map(); for (const [id, d] of Object.entries(S.dl)) if (d.st === 'done' && d.path) ix.set(d.path.toLowerCase(), id); return ix;
+}
+async function fillRecv(bar, list, gen) {
+  const q = el('input', 'fq'); q.type = 'search'; q.placeholder = 'Поиск по полученному'; q.value = fQ;
+  q.oninput = () => { fQ = q.value; clearTimeout(q.t); q.t = setTimeout(renderFiles, 250); };
+  const sort = el('select', 'fsort');
+  for (const [v, t] of [['date', 'Сначала новые'], ['name', 'По имени'], ['size', 'По размеру']]) { const o = el('option', '', t); o.value = v; o.selected = fSort === v; sort.append(o); }
+  sort.onchange = () => { fSort = sort.value; store.set('fSort', fSort); renderFiles(); };
+  const row = el('div', 'frowbar'); row.append(q, sort, lnk('📂 в проводнике', () => fPath ? APP.files.show(fPath) : APP.files.dir()));
+  bar.append(row);
+  let r, items;
+  try {
+    if (fQ.trim()) { items = await APP.files.search(fQ.trim()); r = null; }
+    else { r = await APP.files.list(fPath); items = r.items; }
+  } catch (e) { list.append(emptyEl('⚠️', 'Не получилось прочитать папку', errText(e))); return; }
+  if (gen !== fGen) return;
+  // хлебные крошки: Полученные › папка › папка
+  if (r) {
+    const crumbs = el('div', 'fcrumbs'), rel = r.path.slice(r.root.length).split(/[\\/]/).filter(Boolean);
+    const step = (t, p) => crumbs.append(lnk(t, () => { fPath = p; renderFiles(); }));
+    step('Полученные', ''); let acc = r.root;
+    for (const s of rel) { acc += '\\' + s; crumbs.append(el('span', '', '›')); step(s, acc); }
+    bar.append(crumbs); fPath = r.path === r.root ? '' : r.path;
+  } else bar.append(el('div', 'fcrumbs', 'Найдено: ' + items.length + (items.length >= 300 ? '+' : '')));
+  const cmp = { date: (a, b) => b.mtime - a.mtime, name: (a, b) => a.name.localeCompare(b.name, 'ru', { numeric: true }), size: (a, b) => b.size - a.size }[fSort];
+  items.sort((a, b) => (b.dir - a.dir) * (fSort === 'name' ? 1 : 0) || cmp(a, b));
+  if (!items.length) {
+    list.append(fQ.trim() ? emptyEl('🔍', 'Ничего не нашлось', 'Ищу по именам файлов и папок во всех полученных.') : emptyEl('📥', fPath ? 'Папка пуста' : 'Пока ничего не получено', 'Сюда попадает всё, что скачано из чатов: большие файлы, папки целиком, а ещё файлы из переписки после «сохранить».'));
+    return;
+  }
+  const ix = recvIndex(), msgs = new Map();
+  for (const it of items) { const id = ix.get(it.path.toLowerCase()); if (id && !msgs.has(id)) msgs.set(id, await msgGet(id)); }
+  for (const it of items) list.append(recvRow(it, msgs.get(ix.get(it.path.toLowerCase()))));
+}
+function recvRow(it, m) {
+  const r = el('div', 'frow file'), k = it.dir ? 'dir' : fKind(it.name);
+  const ic = el('span', 'fic ' + k, FICON[k]), t = el('div', 't'), acts = el('div', 'facts');
+  t.append(el('b', '', it.name));
+  const info = [it.dir ? (it.approx ? '≈ ' : '') + fmtSize(it.size) + ' · ' + it.count + ' ' + plural(it.count, 'объект', 'объекта', 'объектов') : fmtSize(it.size), fDate(it.mtime)];
+  if (it.where) info.push('в «' + (it.where || 'Полученные') + '»');
+  if (m) info.push('от ' + (m.from === myId ? 'тебя' : nameOf(m.from)) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat)));
+  t.append(el('span', '', info.join(' · ')));
+  if (k === 'img') { const th = el('img', 'fthumb'); th.loading = 'lazy'; th.src = fileUrl(it.path); th.alt = ''; ic.textContent = ''; ic.append(th); }
+  const open1 = () => it.dir ? (fQ = '', fPath = it.path, renderFiles()) : ['img', 'video', 'audio'].includes(k) ? preview(it, k) : openOnDisk(it);
+  acts.append(
+    ...(it.dir ? [] : [lnk('Открыть', () => openOnDisk(it))]),
+    lnk('В проводнике', () => APP.files.show(it.path)),
+    lnk('Переслать', () => pickChat('Кому переслать «' + it.name + '»?', c => fwdPath(c, it))),
+    ...(m ? [lnk('К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); })] : []),
+    lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del'));
+  r.append(ic, t, acts); r.onclick = e => { if (!e.target.closest('button')) open1(); };
+  r.title = it.dir ? 'Открыть папку' : ['img', 'video', 'audio'].includes(k) ? 'Посмотреть' : 'Открыть';
+  return r;
+}
+async function openOnDisk(it) {
+  if (RISKY.test(it.name) && !confirm('«' + it.name + '» — программа или скрипт. Запускай, только если доверяешь тому, кто прислал. Запустить?')) return;
+  const e = await APP.files.openPath(it.path); if (e) toast('Не открылось: ' + e);
+}
+function preview(it, k) {
+  modal((card, close) => {
+    card.classList.add('fprev');
+    const m = k === 'img' ? el('img') : el(k === 'video' ? 'video' : 'audio');
+    m.src = fileUrl(it.path); if (k !== 'img') { m.controls = true; m.autoplay = true; }
+    m.onerror = () => m.replaceWith(el('p', 'fhint', 'Кинозал не умеет показывать такой формат — нажми «Открыть», и он откроется в программе Windows.'));
+    const row = el('div', 'row'); row.append(btnEl('В проводнике', '', () => APP.files.show(it.path)), btnEl('Открыть', '', () => { openOnDisk(it); close(); }), btnEl('Закрыть', 'pri', close));
+    card.append(el('h2', '', it.name), m, row);
+  }, 'wide');
+}
+
+// --- отправленные: что я раздаю (большие файлы и папки) ---
+async function fillSent(bar, list) {
+  const ids = [...new Set([...Object.keys(S.src), ...srcMem.keys()])], ms = [];
+  for (const id of ids) { const m = await msgGet(id); if (m) ms.push(m); else { delete S.src[id]; srcMem.delete(id); } }
+  bar.append(el('p', 'fhint', 'Большие файлы и папки скачивают напрямую с этого ' + (DISK ? 'компьютера, пока Кинозал открыт' : 'устройства, пока открыта вкладка') + '. «Больше не раздавать» — их больше нельзя будет скачать (то, что уже скачали, останется у людей).'));
+  if (!ms.length) { list.append(emptyEl('📤', 'Ты пока ничего не раздаёшь', 'Отправь в чат файл больше 25 МБ или папку целиком — он появится здесь.')); return; }
+  for (const m of ms.sort((a, b) => b.ts - a.ts)) {
+    const p = S.src[m.id], extra = [];
+    if (DISK && p) extra.push(lnk('в проводнике', () => APP.files.show(p)));
+    extra.push(lnk('переслать', () => pickChat('Кому переслать «' + m.name + '»?', c => fwdSent(c, m))));
+    extra.push(lnk('больше не раздавать', () => {
+      if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
+      for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
+      delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
+    }, 'del'));
+    list.append(msgRow(m, extra));
+  }
+}
+
+// --- переслать: выбрать чат ---
+function pickChat(title, cb) {
+  modal((card, close) => {
+    const q = el('input'); q.type = 'text'; q.placeholder = 'Поиск'; const box = el('div', 'fpick');
+    const paint = () => {
+      box.textContent = '';
+      const cs = myChats().filter(c => !q.value.trim() || chatTitle(c).toLowerCase().includes(q.value.trim().toLowerCase())).sort((a, b) => (S.chats[b]?.last?.ts || 0) - (S.chats[a]?.last?.ts || 0));
+      for (const c of cs.slice(0, 50)) { const b = el('button', 'fpc'); b.append(avEl(c, 36), el('span', '', chatTitle(c))); b.onclick = () => { close(); cb(c); }; box.append(b); }
+      if (!cs.length) box.append(el('p', '', 'Нет таких чатов'));
+    };
+    q.oninput = paint; paint();
+    card.append(el('h2', '', title), q, box, btnEl('Отмена', '', close));
+  });
+}
+// переслать полученное с диска: папку — как папку, большое — напрямую, небольшое — прямо в переписку
+async function fwdPath(c, it) {
+  try {
+    if (it.dir) await sendDir(c, it.path);
+    else if (it.size <= LIMIT) {
+      if (!await APP.files.add(it.path)) throw new Error('файл недоступен');
+      const parts = []; for (let o = 0; o < it.size; o += 8 << 20) parts.push(await APP.files.read(it.path, o, Math.min(8 << 20, it.size - o)));
+      await post(c, { kind: 'file', name: fileName(it.name), size: it.size }, new Blob(parts, { type: 'application/octet-stream' }));
+      toast('Отправлено в «' + chatTitle(c) + '»');
+    } else await sendPathBig(c, it.path, it.name, it.size);
+  } catch (e) { toast('Не получилось переслать: ' + errText(e)); return; }
+  filesOpen = false; openChat(c);
+}
+async function fwdSent(c, m) {
+  const p = S.src[m.id], f = srcMem.get(m.id);
+  if (m.dir) await sendDir(c, p); else if (f) await sendBig(c, f); else if (p) await sendPathBig(c, p, m.name, m.size);
+  filesOpen = false; openChat(c);
+}
+async function sendPathBig(c, p, name, size) {
+  if (!await APP.files.add(p)) throw new Error('файл недоступен');
+  const id = uid(); S.src[id] = p; save();
+  await post(c, { id, kind: 'file', big: 1, dev: myDev || '', name: fileName(name), size, mime: 'application/octet-stream' });
+  toast('«' + name + '» скачают напрямую с этого компьютера, пока Кинозал открыт');
+}
+const sendAny =(c, files) => { files = [...files]; const im = files.filter(f => /^image\/(png|jpeg|webp|gif|bmp)$/.test(f.type)); const ot = files.filter(f => !im.includes(f)); if (im.length) sendImages(c, im); if (ot.length) sendFiles(c, ot); };
 // приглашение в звонок / кинозал
 function callEl(m) {
   const w = el('div', 'callcard'); w.dataset.code = m.code;
@@ -1528,6 +1801,7 @@ function setupInput(sec, c) {
     Object.assign(mn.style, { position: 'fixed', left: Math.max(8, r.left - 4) + 'px', bottom: innerHeight - r.top + 10 + 'px', top: 'auto', right: 'auto', width: '270px', zIndex: 50 });
     const add = (ic, t, f) => { const b = el('button'); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
     add('📎', 'Фото или файл', () => file.click());
+    if (DISK) add('📁', 'Папка целиком — без архива', () => APP.files.pickDir().then(p => p && sendDir(c, p)));
     add('⏳', 'Капсула времени', () => capsuleDlg(c));
     add('🗓', 'Назначить киносеанс', () => planDlg(c));
     add('👋', 'Постучаться', () => knock(c));
@@ -2118,6 +2392,7 @@ function backable() {
   if (document.querySelector('.mx-modal:not(.ring):not(.out)')) return 'modal';
   if (S.me && !document.getElementById('room')?.hidden) return 'room';
   if (open && narrow()) return 'chat';
+  if (filesOpen && narrow()) return 'files';
   return '';
 }
 function goBack() {
@@ -2127,6 +2402,7 @@ function goBack() {
   else if (b === 'modal') [...document.querySelectorAll('.mx-modal:not(.ring):not(.out)')].pop()?.remove();
   else if (b === 'room') window.kzRoom?.hide();
   else if (b === 'chat') closeChat();
+  else if (b === 'files') closeFiles();
   return !!b;
 }
 window.kzBack = goBack;   // приложение для Android спрашивает напрямую; false — закрывать нечего, сворачиваемся
