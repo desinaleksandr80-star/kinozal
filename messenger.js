@@ -60,8 +60,15 @@ const IC = {
 };
 
 // ---------- хранилище ----------
+// На одном устройстве может быть несколько профилей (как аккаунты в Телеграме): у каждого своя база.
+// Первый (старый) — 'kinozal-mx', остальные — 'kinozal-mx-<слот>'. Активный — localStorage 'kinozal-slot'.
+const lsGet = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+const lsSet = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} };
+const SLOT = /^[0-9a-z]{4,12}$/.test(lsGet('kinozal-slot') || '') ? lsGet('kinozal-slot') : '';
+const dbName = slot => 'kinozal-mx' + (slot ? '-' + slot : '');
+{ const drop = lsGet('kinozal-dropdb'); if (drop && drop !== dbName(SLOT)) { lsSet('kinozal-dropdb', null); try { indexedDB.deleteDatabase(drop); } catch (e) {} } }   // брошенный пустой профиль
 const db = await new Promise((res, rej) => {
-  const r = indexedDB.open('kinozal-mx', 1);
+  const r = indexedDB.open(dbName(SLOT), 1);
   r.onupgradeneeded = () => { const d = r.result; d.createObjectStore('kv'); d.createObjectStore('msgs', { keyPath: 'id' }).createIndex('chat', ['chat', 'ts']); d.createObjectStore('blobs'); };
   r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
 });
@@ -96,6 +103,21 @@ function wipeChat(chat) {
 const partsKey = id => IDBKeyRange.bound(id + ':', id + ':￿');   // куски большого файла, пока он качается в браузере
 const delMsg = id => new Promise(res => { xGone(id); const t = db.transaction(['msgs', 'blobs'], 'readwrite'); t.objectStore('msgs').delete(id); t.objectStore('blobs').delete(id); t.objectStore('blobs').delete(partsKey(id)); t.oncomplete = res; t.onerror = res; });
 
+// Телефон: если хранилище WebView стёрлось (сбой посреди записи), но в закрытой папке приложения есть
+// запасная копия — возвращаем тот же профиль: ключ, контакты, группы, устройства. Переписку дошлют собеседники.
+let restored = false;
+if (APP?.backup && !await kvGet('keys')) {
+  try {
+    const b = JSON.parse(await APP.backup.get(SLOT) || 'null');
+    if (b?.keys?.jwk && b.keys.pub) {
+      const priv = await crypto.subtle.importKey('jwk', b.keys.jwk, { name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign']);
+      await kvSet('keys', { pub: b.keys.pub, priv, jwk: b.keys.jwk });
+      if (b.ident) await kvSet('ident', b.ident);
+      if (b.state?.me) await kvSet('state', { ...b.state, chats: {}, ended: {}, dl: {}, src: {} });
+      restored = true; jlog('[копия] профиль восстановлен из запасной копии', b.id || '');
+    }
+  } catch (e) { jlog('[копия] не получилось восстановить:', e?.message || e); }
+}
 // состояние: я, контакты, группы, чаты (сами сообщения — отдельно, в msgs)
 let S = await kvGet('state') || null;
 if (!S) S = { me: null, contacts: {}, groups: {}, chats: {}, ended: {} };
@@ -105,7 +127,15 @@ S.dl ||= {}; S.src ||= {};
 for (const d of Object.values(S.dl)) if (d.st === 'go') d.st = 'wait';   // программу закрыли посреди закачки — докачаем
 const dls = new Map(), ups = new Map(), expect = new Map(), srcMem = new Map();
 let saveT = 0, wiping = false;
-function save() { if (wiping) return; clearTimeout(saveT); saveT = setTimeout(() => kvSet('state', S).catch(e => console.warn('save', e)), 250); }
+function save() { if (wiping) return; clearTimeout(saveT); saveT = setTimeout(() => { kvSet('state', S).catch(e => console.warn('save', e)); backupSoon(); }, 250); }
+let backupT = 0;
+function backupSoon() {
+  if (!APP?.backup || wiping || !S?.me) return;
+  clearTimeout(backupT); backupT = setTimeout(() => {
+    const st = { me: S.me, contacts: S.contacts, groups: S.groups, devs: S.devs, revs: S.revs, pname: S.pname, pwd: S.pwd, routing: S.routing, devSeen: S.devSeen };
+    APP.backup.put(SLOT, JSON.stringify({ v: 1, id: myId, ts: Date.now(), keys: { pub: keys.pub, jwk: keys.jwk || null }, ident, state: st }));
+  }, 3000);
+}
 
 // ---------- личность: ключ и подписи ----------
 const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -116,9 +146,11 @@ const pid = id => 'kzm-' + id.toLowerCase();
 async function idFromPub(p) { const h = await crypto.subtle.digest('SHA-256', enc(String(p.x) + '.' + String(p.y))); return b32(new Uint8Array(h)).slice(0, 10); }
 let keys = await kvGet('keys');
 if (!keys) {
-  const k = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign', 'verify']);
+  // на телефоне ключ можно прочитать — его копия лежит в закрытой папке приложения на случай, если хранилище WebView сотрётся
+  const k = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, !!APP?.backup, ['sign', 'verify']);
   const j = await crypto.subtle.exportKey('jwk', k.publicKey);
   keys = { pub: { kty: 'EC', crv: 'P-256', x: j.x, y: j.y }, priv: k.privateKey };
+  if (APP?.backup) keys.jwk = await crypto.subtle.exportKey('jwk', k.privateKey);
   await kvSet('keys', keys);
 }
 // Связанные устройства. Ключ профиля живёт только на основном устройстве (его нельзя скопировать).
@@ -529,13 +561,40 @@ async function revokeDev(dev) {
   setTimeout(() => closeLinks(myId, dev), 1500);
   jlog('[устройства] отвязано', dev); renderDevs();
 }
-// стереть с этого устройства всё: ключ, переписку, профиль — и снова показать первый экран
+// стереть с этого устройства этот профиль: ключ, переписку, запасную копию — и перейти к другому профилю или на первый экран
 async function wipeDevice(why) {
-  wiping = true; clearTimeout(saveT);
+  wiping = true; clearTimeout(saveT); clearTimeout(backupT);
   try { peer?.destroy(); } catch (e) {}
   for (const n of ['kv', 'msgs', 'blobs']) await tx(n, 'readwrite', s => s.clear()).catch(() => {});
+  await APP?.backup?.drop(SLOT);   // иначе профиль «воскреснет» из копии при следующем запуске
+  const rest = profList().filter(x => x.slot !== SLOT); profSave(rest);
   try { if (why) sessionStorage.setItem('kinozal-why', why); } catch (e) {}
+  if (rest.length) { lsSet('kinozal-slot', rest[0].slot || null); if (SLOT) lsSet('kinozal-dropdb', dbName(SLOT)); }
   location.hash = ''; location.reload();
+}
+
+// ---------- профили на этом устройстве ----------
+// Список (localStorage 'kinozal-profiles'): [{slot, id, name, avatar}]. В сети — только активный; остальные догрузят своё, когда в них перейдёшь.
+const profList = () => { try { const l = JSON.parse(lsGet('kinozal-profiles') || '[]'); return Array.isArray(l) ? l.filter(x => x && typeof x.slot === 'string') : []; } catch (e) { return []; } };
+const profSave = l => lsSet('kinozal-profiles', JSON.stringify(l.slice(0, 20)));
+function profTouch() {   // текущий профиль — в список (имя и аватарка свежие)
+  if (!S?.me) return;
+  const l = profList().filter(x => x.slot !== SLOT);
+  l.unshift({ slot: SLOT, id: myId, name: S.me.name || '', avatar: S.me.avatar || '', dev: !!myDev });
+  profSave(l.sort((a, b) => (a.slot || '').localeCompare(b.slot || '')));
+}
+function switchProfile(slot) { if (slot === SLOT) return; clearTimeout(saveT); kvSet('state', S).finally(() => { lsSet('kinozal-slot', slot || null); location.hash = ''; location.reload(); }); }
+// новый профиль рядом с текущим: пустой слот, на первом экране — сразу вход (по ID и паролю или коду) или создание
+function addProfile(mode, code) {
+  const slot = b32(rnd(5)).toLowerCase().slice(0, 8);
+  try { sessionStorage.setItem('kinozal-add', JSON.stringify({ mode, code: code || '', back: SLOT })); } catch (e) {}
+  switchProfile(slot);
+}
+async function removeProfile(x) {
+  if (x.slot === SLOT) return;
+  try { indexedDB.deleteDatabase(dbName(x.slot)); } catch (e) {}
+  await APP?.backup?.drop(x.slot);
+  profSave(profList().filter(y => y.slot !== x.slot));
 }
 function revokedMe() {
   if (wiping) return;
@@ -546,39 +605,71 @@ function revokedMe() {
 // ---------- вход в профиль с другого устройства: код из ID профиля и одноразового секрета ----------
 let linkSess = null;   // {secret, exp, tries, paint} — пока открыто окно «Подключить другое устройство»
 const linkMacStr = (nonce, dev, p) => 'link|' + nonce + '|' + dev + '|' + String(p.x) + '.' + String(p.y);
-async function hmac(secret, s) { const k = await crypto.subtle.importKey('raw', enc(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return b64(await crypto.subtle.sign('HMAC', k, enc(s))); }
+async function hmac(secret, s) { return hmacRaw(enc(secret), s); }
+async function hmacRaw(bytes, s) { const k = await crypto.subtle.importKey('raw', bytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return b64(await crypto.subtle.sign('HMAC', k, enc(s))); }
+// Пароль профиля: на основном устройстве хранится не он сам, а производный ключ PBKDF2 (310 000 итераций, своя соль).
+// Входящее устройство доказывает, что знает пароль (HMAC от одноразового числа), сам пароль по сети не идёт.
+const PWD_IT = 310000;
+async function pwdKey(pw, salt, it) {
+  const k = await crypto.subtle.importKey('raw', enc(String(pw).normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: it }, k, 256));
+}
+async function setPassword(pw) {
+  if (!pw) { delete S.pwd; save(); jlog('[устройства] пароль убран'); return; }
+  const salt = rnd(16); S.pwd = { salt: b64(salt), it: PWD_IT, k: b64(await pwdKey(pw, salt, PWD_IT)) }; S.pwdFail = 0; delete S.pwdLock; save();
+  jlog('[устройства] пароль задан');
+}
 function parseLinkCode(s) { const m = String(s || '').match(/link=([0-9A-Za-z-]{16,24})/); const c = normId(m ? m[1] : s); return c.length === 16 ? { id: c.slice(0, 10), secret: c.slice(10) } : null; }
 // основное устройство: новое устройство постучалось с кодом
 function linkServe(c) {
   const nonce = b64(rnd(18)); let done = false;
   const bye = m => { try { c.send(m); } catch (e) {} setTimeout(() => { try { c.close(); } catch (e) {} }, 1500); };
+  const byPwd = c.metadata?.pw === 1;
+  const locked = () => S.pwdLock && Date.now() < S.pwdLock;
   c.on('open', () => {
     if (myDev) return bye({ t: 'linkerr', e: 'notmain' });
+    if (byPwd) {
+      if (!S.pwd) return bye({ t: 'linkerr', e: 'nopwd' });
+      if (locked()) return bye({ t: 'linkerr', e: 'locked', until: S.pwdLock });
+      return c.send({ t: 'linkchal', nonce, salt: S.pwd.salt, it: S.pwd.it });
+    }
     if (!linkSess || Date.now() > linkSess.exp) return bye({ t: 'linkerr', e: 'nosess' });
     c.send({ t: 'linkchal', nonce });
   });
   c.on('data', async d => {
     if (done || d?.t !== 'linkreq') return; done = true;
-    const s = linkSess;
-    if (!s || Date.now() > s.exp) return bye({ t: 'linkerr', e: 'nosess' });
+    const s = byPwd ? { tries: 0 } : linkSess;
+    if (byPwd ? !S.pwd || locked() : !s || Date.now() > s.exp) return bye({ t: 'linkerr', e: byPwd ? (S.pwd ? 'locked' : 'nopwd') : 'nosess' });
     const dpub = cleanPub(d.dpub), dev = String(d.dev || ''), name = clean(d.name, 40) || 'Устройство';
-    const ok = /^[0-9a-z]{6}$/.test(dev) && dev === await devIdOf(dpub) && String(d.mac || '') === await hmac(s.secret, linkMacStr(nonce, dev, dpub));
+    const want = byPwd ? await hmacRaw(unb64(S.pwd.k), linkMacStr(nonce, dev, dpub)) : await hmac(s.secret, linkMacStr(nonce, dev, dpub));
+    const ok = /^[0-9a-z]{6}$/.test(dev) && dev === await devIdOf(dpub) && String(d.mac || '') === want;
+    if (!ok && byPwd) {   // неверный пароль: 5 попыток, потом 15 минут тишины
+      S.pwdFail = (S.pwdFail || 0) + 1; jlog('[устройства] неверный пароль, попытка', S.pwdFail);
+      if (S.pwdFail >= 5) { S.pwdFail = 0; S.pwdLock = Date.now() + 15 * 6e4; toast('Кто-то 5 раз ввёл неверный пароль от профиля — вход по паролю закрыт на 15 минут'); }
+      save(); return bye({ t: 'linkerr', e: S.pwdLock && Date.now() < S.pwdLock ? 'locked' : 'pwd', until: S.pwdLock });
+    }
     if (!ok) { jlog('[устройства] неверный код'); if (++s.tries >= 5) { linkSess = null; s.paint?.('fail', 'Слишком много попыток с неверным кодом — открой это окно заново, будет новый код'); } else s.paint?.('bad'); return bye({ t: 'linkerr', e: 'code' }); }
+    if (byPwd) { S.pwdFail = 0; save(); }
     if (revSet(myId).has(dev)) return bye({ t: 'linkerr', e: 'revoked' });
     const cert = await sign(certStr(myId, dev, dpub));
     (S.devs ||= {})[dev] = { dev, pub: dpub, cert, name, added: Date.now() };
-    linkSess = null; save();
+    if (!byPwd) linkSess = null; save();
     c.send({ t: 'linkok', profile: myId, ppub: myPub, cert, me: { name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0 }, pname: devName(), devs: devList() });
     setTimeout(() => { try { c.close(); } catch (e) {} }, 4000);
-    jlog('[устройства] подключено', dev, name);
-    s.paint?.('ok', name); toast('«' + name + '» подключено к профилю');
+    jlog('[устройства] подключено', dev, name, byPwd ? 'по паролю' : 'по коду');
+    s.paint?.('ok', name); toast('«' + name + '» подключено к профилю' + (byPwd ? ' по паролю' : ''));
     const m = devsMsg(); for (const u of links.keys()) send(u, m);   // собеседники узнают новое устройство
     renderDevs();
   });
 }
 // новое устройство: входит в профиль по коду; оба устройства должны быть в сети
-async function joinProfile(code, dname, status) {
-  const k = parseLinkCode(code); if (!k) throw new Error('Код — это 16 букв и цифр, например 7KQ2M-9XAB4-H3D8PQ');
+async function joinProfile(code, dname, status, pw) {
+  let k;
+  if (pw != null) {   // по ID и паролю
+    const id = idFromText(code); if (id.length !== 10) throw new Error('ID — это 10 букв и цифр, например ' + fmtId('7KQ2M9XAB4'));
+    if (!pw) throw new Error('Введи пароль от профиля');
+    k = { id, pw };
+  } else { k = parseLinkCode(code); if (!k) throw new Error('Код — это 16 букв и цифр, например 7KQ2M-9XAB4-H3D8PQ'); }
   if (typeof Peer === 'undefined') throw new Error('Нет связи с сервером — проверь интернет');
   const dev = await devIdOf(keys.pub);
   status('Подключаюсь к сети…');
@@ -589,16 +680,25 @@ async function joinProfile(code, dname, status) {
     status('Ищу устройство с профилем ' + fmtId(k.id) + '…');
     r = await new Promise((res, rej) => {
       const fail = t => { clearTimeout(to); rej(new Error(t)); };
-      const to = setTimeout(() => fail('Устройство с профилем не отвечает. Проверь, что на нём открыт Кинозал и окно «Подключить другое устройство».'), 30000);
-      p.on('error', e => fail(e.type === 'peer-unavailable' ? 'Устройство с профилем ' + fmtId(k.id) + ' сейчас не в сети. Открой на нём Кинозал: Профиль → «Мои устройства» → «Подключить другое устройство».' : 'Ошибка связи: ' + (e.type || e)));
-      const c = p.connect(pid(k.id), { reliable: true, metadata: { v: 1, link: 1 } });
+      const to = setTimeout(() => fail(k.pw ? 'Основное устройство профиля не отвечает — проверь, что на нём открыт Кинозал.' : 'Устройство с профилем не отвечает. Проверь, что на нём открыт Кинозал и окно «Подключить другое устройство».'), 40000);
+      p.on('error', e => fail(e.type === 'peer-unavailable' ? 'Основное устройство профиля ' + fmtId(k.id) + ' сейчас не в сети. Открой на нём Кинозал' + (k.pw ? ' и попробуй ещё раз.' : ': Профиль → «Мои устройства» → «Подключить другое устройство».') : 'Ошибка связи: ' + (e.type || e)));
+      const c = p.connect(pid(k.id), { reliable: true, metadata: { v: 1, link: 1, ...(k.pw ? { pw: 1 } : {}) } });
       c.on('data', async d => {
-        if (d?.t === 'linkchal') { status('Проверяю код…'); c.send({ t: 'linkreq', dev, dpub: keys.pub, name: dname, mac: await hmac(k.secret, linkMacStr(String(d.nonce || ''), dev, keys.pub)) }); }
+        if (d?.t === 'linkchal') {
+          let key;
+          if (k.pw) { status('Проверяю пароль…'); const it = Math.min(2e6, Math.max(1e5, d.it | 0)); key = await pwdKey(k.pw, unb64(d.salt), it); }
+          else status('Проверяю код…');
+          const msg = linkMacStr(String(d.nonce || ''), dev, keys.pub);
+          c.send({ t: 'linkreq', dev, dpub: keys.pub, name: dname, mac: key ? await hmacRaw(key, msg) : await hmac(k.secret, msg) });
+        }
         else if (d?.t === 'linkok') { clearTimeout(to); res(d); }
         else if (d?.t === 'linkerr') fail({
           code: 'Код не подошёл — проверь его. Если ошибся несколько раз, открой окно подключения на основном устройстве заново.',
+          pwd: 'Пароль не подошёл. После 5 неверных попыток вход по паролю закрывается на 15 минут.',
+          locked: 'Слишком много неверных попыток — вход по паролю закрыт' + (d.until ? ' до ' + new Date(d.until).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ' на 15 минут') + '.',
+          nopwd: 'У этого профиля не задан пароль. На основном устройстве: Профиль → «Мои устройства» → «Пароль для входа». Или войди по одноразовому коду.',
           nosess: 'На основном устройстве не открыто окно подключения или код устарел. Открой там Профиль → «Мои устройства» → «Подключить другое устройство» и введи новый код.',
-          notmain: 'Это устройство само вошло в профиль с другого. Код нужно взять на основном устройстве — там, где профиль создан.',
+          notmain: 'Это устройство само вошло в профиль с другого. Войти можно только через основное устройство — там, где профиль создан.',
           revoked: 'Это устройство раньше отвязали от профиля — войти с ним снова нельзя.'
         }[d.e] || 'Не получилось войти в профиль');
       });
@@ -1196,7 +1296,7 @@ function fileEl(m) {
   if (m.w && m.h) { md.style.aspectRatio = m.w + '/' + m.h; md.style.width = Math.min(360, Math.round(360 * Math.min(1.6, m.w / m.h))) + 'px'; }
   if (m.th) img.src = m.th;
   if (m.blob && viewable(m)) mediaUrl(m).then(u => { if (u) img.src = u; });   // оригинал из переписки — во всей красе
-  else if (DISK && viewable(m)) { const p = isMineSrc(m) ? S.src[m.id] : S.dl[m.id]?.st === 'done' ? S.dl[m.id].path : ''; if (p) { const full = new Image(); full.onload = () => { img.src = full.src; }; full.src = fileUrl(p); } }
+  else if (DESK && viewable(m)) { const p = isMineSrc(m) ? S.src[m.id] : S.dl[m.id]?.st === 'done' ? S.dl[m.id].path : ''; if (p) { const full = new Image(); full.onload = () => { img.src = full.src; }; full.src = fileUrl(p); } }
   const raw = isRawName(m.name), vid = isVideoName(m.name) || /^video\//.test(m.mime || '');
   const ext = (m.name.match(/\.([a-z0-9]{1,5})$/i)?.[1] || '').toUpperCase();
   md.append(img, el('span', 'fbadge', raw ? (/^TIFF?$/.test(ext) ? ext + ' · миниатюра' : 'RAW · ' + ext) : vid ? '▶ ' + (m.dur ? fmtDur(m.dur) : ext) : typeOfName(m.name) === 'audio' ? '♪ ' + ext : /^PDF$/.test(ext) ? 'PDF' : ext + ' · оригинал'));
@@ -1228,7 +1328,7 @@ async function saveSmall(m) {
     if (d?.path && await APP.files.exists(d.path)) { APP.files.show(d.path); return; }
     if (!riskOk(m)) return;
     const b = await blobGet(m.id); if (!b) return;
-    try { const p = await saveToRoute(m); APP.files.show(p); toast('«' + m.name + '» сохранён — ' + routeLabel(m)); }
+    try { const p = await saveToRoute(m); if (DESK) APP.files.show(p); toast('«' + m.name + '» сохранён — ' + routeLabel(m)); }
     catch (er) { toast('Не получилось сохранить: ' + errText(er)); }
     return;
   }
@@ -1356,8 +1456,8 @@ function docView(o) {
   const offs = [], close = () => { ov.remove(); document.removeEventListener('keydown', key, true); for (const u of urls) URL.revokeObjectURL(u); for (const f of offs) try { f(); } catch (e) {} };
   const btn = (txt, f, cls) => { const b = el('button', 'btn' + (cls ? ' ' + cls : ''), txt); b.onclick = e => { e.stopPropagation(); f(); }; acts.append(b); };
   const m = o.m, st = m ? fileState(m) : null;
-  if (DISK && o.path) { btn('В проводнике', () => APP.files.show(o.path)); btn('Открыть в программе', () => openOnDisk({ name: o.name, path: o.path })); }
-  else if (m && st?.k === 'chat') btn(DISK ? 'Сохранить' : 'Скачать', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); APP.files.show(p); } catch (e) { toast('Не получилось: ' + errText(e)); } });
+  if (DISK && o.path) { btn(SHOWB, () => APP.files.show(o.path)); if (DESK) btn('Открыть в программе', () => openOnDisk({ name: o.name, path: o.path })); }
+  else if (m && st?.k === 'chat') btn(DISK ? 'Сохранить' : 'Скачать', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); if (DESK) APP.files.show(p); } catch (e) { toast('Не получилось: ' + errText(e)); } });
   btn('Закрыть', close, 'pri');
   top.append(t, acts); ov.append(top, body); document.body.append(ov);
   const key = e => { if (e.key === 'Escape') { e.stopPropagation(); close(); } };
@@ -1464,7 +1564,7 @@ async function zipEntry(o, e, urls) {
     if (/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(nm)) { const u = URL.createObjectURL(new Blob([data])); urls.push(u); return viewer({ src: u, m: { id: '', name: nm, size: data.length } }); }
     if (canViewName(nm)) return docView({ name: nm, size: data.length, src });
     // остальное — достать наружу
-    if (DISK) { const p = await APP.files.save(nm, data, o.m ? routeTarget(o.m) : null); toast('«' + nm + '» достан из архива'); APP.files.show(p); }
+    if (DISK) { const p = await APP.files.save(nm, data, o.m ? routeTarget(o.m) : null); toast('«' + nm + '» достан из архива'); if (DESK) APP.files.show(p); }
     else { const u = URL.createObjectURL(new Blob([data])), a = el('a'); a.href = u; a.download = nm; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 5000); }
   } catch (er) { toast('Не получилось: ' + errText(er)); }
 }
@@ -1473,7 +1573,7 @@ async function showAudio(o, body, urls, info) {
   body.textContent = ''; const box = el('div', 'kaudio'), cov = el('div', 'cov');
   if (tags.cover) { const u = URL.createObjectURL(tags.cover); urls.push(u); const i = el('img'); i.src = u; i.alt = ''; cov.append(i); } else cov.textContent = '🎵';
   const a = el('audio'); a.controls = true; a.autoplay = true;
-  if (o.path) a.src = fileUrl(o.path); else { const u = URL.createObjectURL(await srcBlob(o.src)); urls.push(u); a.src = u; }
+  if (o.path) a.src = await pathUrl(o.path, urls); else { const u = URL.createObjectURL(await srcBlob(o.src)); urls.push(u); a.src = u; }
   a.onerror = () => a.replaceWith(el('p', 'fhint', 'Такой звук Кинозал не играет — открой в программе.'));
   const t = el('div', 't'); t.append(el('b', '', tags.title || o.name.replace(/\.[^.]+$/, '')), el('span', '', [tags.artist, tags.album, tags.year].filter(Boolean).join(' · ')));
   box.append(cov, t, a); body.append(box);
@@ -1516,8 +1616,9 @@ async function openOriginal(m) {
       if (raw) { const r = rawFromBytes(new Uint8Array(await b.arrayBuffer())); if (r) { src = URL.createObjectURL(r.blob); own = true; orient = r.orient; ex = r.ex || ex; } }
       else if (viewable(m) || vid) { src = URL.createObjectURL(b); own = true; }
     } else if (DISK && path) {
-      if (raw) { const r = await APP.files.rawPreview(path); if (r) { src = URL.createObjectURL(new Blob([r.jpeg], { type: 'image/jpeg' })); own = true; orient = r.orient; ex = r.ex || ex; } }
-      else if (viewable(m) || vid) src = fileUrl(path);
+      if (raw && APP.files.rawPreview) { const r = await APP.files.rawPreview(path); if (r) { src = URL.createObjectURL(new Blob([r.jpeg], { type: 'image/jpeg' })); own = true; orient = r.orient; ex = r.ex || ex; } }
+      else if (raw) { const ds = await diskSource(path), r = ds && ds.size <= 400e6 ? rawFromBytes(await ds.read(0, ds.size)) : null; if (r) { src = URL.createObjectURL(r.blob); own = true; orient = r.orient; ex = r.ex || ex; } }   // телефон: разбираем сами
+      else if (viewable(m) || vid) { src = await pathUrl(path); own = ANDROID; }
     }
   } catch (e) { jlog('[файлы] просмотр', m.name, e?.message || e); }
   const preview = !src && !!m.th; if (preview) src = m.th;
@@ -1535,7 +1636,7 @@ function viewer(o) {
   const btn = (txt, f, cls) => { const b = el('button', 'btn' + (cls ? ' ' + cls : ''), txt); b.onclick = e => { e.stopPropagation(); f(); }; acts.append(b); };
   const d = S.dl[m.id];
   if (m.big && !isMineSrc(m) && d?.st !== 'done') btn(d?.st === 'go' ? 'Качается…' : 'Скачать оригинал', () => { close(); if (d?.st !== 'go') xClick(m); }, 'pri');
-  else if (o.path && DISK) btn('В проводнике', () => APP.files.show(o.path));
+  else if (o.path && DISK) btn(SHOWB, () => APP.files.show(o.path));
   else if (m.blob) btn('Сохранить', () => saveSmall(m));
   btn('Закрыть', close);
   top.append(t, acts);
@@ -1612,7 +1713,7 @@ function zoomable(stage, img, top, close) {
 const dataOr = src => fetch(src).then(r => r.blob());
 async function sendFiles(c, files) {
   for (const f of [...files].slice(0, 10)) {
-    if (DISK && !f.type && f.size <= 65536 && await APP.files.kind(f) === 'dir') { await sendDir(c, APP.files.pathOfAny(f)); continue; }   // перетащили папку
+    if (DESK && !f.type && f.size <= 65536 && await APP.files.kind(f) === 'dir') { await sendDir(c, APP.files.pathOfAny(f)); continue; }   // перетащили папку
     if (!f.size) continue;
     const meta = await makeThumb(f) || {};   // картинка, RAW или видео — с превью, чтобы было видно, что прислали
     if (f.size <= LIMIT) { await post(c, { kind: 'file', name: fileName(f.name), size: f.size, ...meta }, f.type ? f : new Blob([f], { type: 'application/octet-stream' })); continue; }
@@ -1626,7 +1727,11 @@ async function sendFiles(c, files) {
 // куски по 4 МБ, к каждому — SHA-256. Получатель проверяет кусок, пишет на диск и подтверждает; в пути
 // не больше WIN неподтверждённых кусков. После обрыва или перезапуска продолжаем с последнего целого куска.
 const BLK = 4 << 20, FRAME = 64 << 10, WIN = 6;
-const DISK = !!APP?.files;   // программа для Windows: читаем и пишем прямо на диск; в браузере — память и IndexedDB
+const DISK = !!APP?.files;   // программа для Windows и приложение для Android: пишем прямо в файл; в браузере — память и IndexedDB
+const DESK = DISK && !ANDROID;   // только на компьютере: папки целиком, свои папки маршрутов, «Папки», проводник
+const SHOWT = ANDROID ? 'открыть' : 'показать в папке', SHOWB = ANDROID ? 'Открыть в другой программе' : 'В проводнике';
+// адрес файла с диска для <img>/<audio>: на компьютере — file://, на телефоне (content://) — читаем в память
+async function pathUrl(p, urls) { if (!ANDROID) return fileUrl(p); const src = await diskSource(p); if (!src) return ''; const u = URL.createObjectURL(new Blob([await src.read(0, src.size)])); urls?.push(u); return u; }
 const sha = async b => b64(await crypto.subtle.digest('SHA-256', b));
 const devKey = d => d || '';
 const isMineSrc = m => m.from === myId && devKey(m.dev) === devKey(myDev);
@@ -1639,7 +1744,7 @@ function xGone(id) {   // сообщение удалили — бросаем �
 }
 async function sendBig(c, f, meta) {
   let path = '';
-  if (DISK) path = await APP.files.pathOf(f);
+  if (DESK) path = await APP.files.pathOf(f);
   const id = uid();
   if (path) S.src[id] = path; else srcMem.set(id, f);
   save();
@@ -1651,7 +1756,7 @@ async function sendBig(c, f, meta) {
 // папка целиком (только программа для Windows): опись снимается сейчас, по ней и отдаём
 const nFiles = n => n + ' ' + plural(n, 'файл', 'файла', 'файлов');
 async function sendDir(c, root) {
-  if (!DISK || !root) return;
+  if (!DESK || !root) return;
   const id = uid(), name = fileName(root.split(/[\\/]/).filter(Boolean).pop() || 'папка');
   toast('Считаю файлы в «' + name + '»…');
   let r; try { r = await APP.files.dirAdd(id, root); } catch (e) { toast('Не получилось прочитать папку: ' + String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); return; }
@@ -1662,9 +1767,9 @@ async function sendDir(c, root) {
   toast(old.length ? 'У ' + old.map(nameOf).join(', ') + ' старая версия Кинозала — папку скачают после обновления' : 'Папку «' + name + '» (' + nFiles(r.n) + ', ' + fmtSize(r.size) + ') скачают напрямую с этого компьютера, пока Кинозал открыт');
 }
 async function srcOf(m) {
-  if (m.dir) return DISK && S.src[m.id] && await APP.files.dirStat(m.id) === 'ok' ? { dir: m.id } : null;
+  if (m.dir) return DESK && S.src[m.id] && await APP.files.dirStat(m.id) === 'ok' ? { dir: m.id } : null;
   const f = srcMem.get(m.id); if (f) return f.size === m.size ? { file: f } : null;
-  const p = S.src[m.id]; if (!p || !DISK) return null;
+  const p = S.src[m.id]; if (!p || !DESK) return null;
   const st = await APP.files.stat(p); return st && st.size === m.size ? { path: p } : null;
 }
 async function readSrc(src, off, len) {
@@ -1738,7 +1843,7 @@ async function xStart(m) {
   const L = srcLink(m);
   if (!L) { d.st = 'wait'; save(); xPaint(m.id); dial(m.from); return; }
   if (!L.their?.caps.includes(m.dir ? 'xdir' : 'xfer')) { d.st = 'err'; d.why = 'у отправителя старая версия Кинозала'; save(); xPaint(m.id); return; }
-  if (m.dir && !DISK) { d.st = 'err'; d.why = 'папку целиком можно скачать только в программе для Windows'; save(); xPaint(m.id); return; }
+  if (m.dir && !DESK) { d.st = 'err'; d.why = 'папку целиком можно скачать только в программе для Windows'; save(); xPaint(m.id); return; }
   const x = { m, L, got: 0, tok: uid(), c: null, parts: [], plen: 0, q: Promise.resolve(), bad: 0 };
   dls.set(m.id, x);
   if (m.dir) {   // папка: сначала опись — какие файлы и каких размеров (один раз, дальше она лежит на диске)
@@ -1922,14 +2027,14 @@ function xLine(m) {
     const o = [...ups.values()].find(v => v.m.id === m.id);
     if (o) return { txt: 'отдаю: ' + Math.floor(o.sent / m.size * 100) + '%' + (o.rate ? ' · ' + fmtSize(Math.round(o.rate)) + '/с' : ''), p: o.sent / m.size };
     if (srcMem.has(m.id)) return { txt: size + ' · ждёт, пока скачают' };
-    if (DISK && S.src[m.id]) return { txt: size + ' · показать в папке' };
+    if (DESK && S.src[m.id]) return { txt: size + ' · показать в папке' };
     return { txt: size + ' · здесь файла уже нет — отправь заново' };
   }
   const d = S.dl[m.id], x = dls.get(m.id), who = m.from === myId ? 'другое твоё устройство' : nameOf(m.from);
   if (!d) return { txt: size + ' · скачать' };
   const part = fmtSize(d.got || 0) + ' из ' + total;
   switch (d.st) {
-    case 'done': return { txt: size + (DISK ? ' · показать в папке' : ' · сохранить') };
+    case 'done': return { txt: size + (DISK ? ' · ' + SHOWT : ' · сохранить') };
     case 'go': {
       const stuck = x?.c && Date.now() - (x.last || 0) > 4000, r = stuck ? 0 : x?.rate || 0, left = r > 0 ? ' · ' + fmtEta((m.size - (d.got || 0)) / r) : '';
       return { txt: part + (r ? ' · ' + fmtSize(Math.round(r)) + '/с' + left : stuck ? ' · данные не идут…' : x?.c ? '' : ' · соединяюсь…'), p: (d.got || 0) / m.size, go: 1 };
@@ -1979,7 +2084,7 @@ const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).s
 function openFiles(tab) {
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
-  if (!DISK && (fTab === 'recv' || fTab === 'routes')) fTab = 'all';
+  if ((!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all';
   if (!['all', 'live', 'recv', 'routes'].includes(fTab)) fTab = 'all';
   root.classList.add('chat-open'); renderList(); renderFiles();
   APP?.files?.watch?.(() => { if (filesOpen && (fTab === 'recv' || fTab === 'all')) renderFiles(); });
@@ -2001,7 +2106,7 @@ async function renderFiles() {
   const sec = el('section', 'mx-files'), head = el('header', 'mx-chead'), tabs = el('div', 'ftabs'), bar = el('div', 'fbar'), list = el('div', 'flist');
   const back = el('button', 'ib back'); back.innerHTML = IC.back; back.title = 'К чатам'; back.onclick = closeFiles;
   const n = liveCount();
-  for (const [k, t] of [['all', 'Все файлы'], ['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DISK ? [['recv', 'Папки'], ['routes', 'Маршруты']] : [])]) {
+  for (const [k, t] of [['all', 'Все файлы'], ['live', 'Передачи' + (n ? ' · ' + n : '')], ...(DESK ? [['recv', 'Папки']] : []), ...(DISK ? [['routes', 'Маршруты']] : [])]) {
     const b = el('button', 'ftab' + (fTab === k ? ' on' : ''), t); b.onclick = () => { fTab = k; store.set('fTab', k); fPath = ''; fQ = ''; renderFiles(); }; tabs.append(b);
   }
   head.append(back, el('h2', '', 'Файлы'), tabs);
@@ -2044,6 +2149,7 @@ const whoName = m => m.from === myId ? 'Я' : nameOf(m.from);
 // Правила проверяются сверху вниз, первое подходящее решает: тип файла и от кого → папка и подпапки.
 // Если ни одно не подошло — «Полученные». Маленькие файлы сохраняются сразу, большие качаются сами до заданного размера.
 S.routing ||= { auto: true, bigMax: 2048, sub: 'none', rules: [] };
+if (ANDROID && !S.routing.phone) { S.routing.phone = 1; S.routing.bigMax = 0; save(); }   // на телефоне большие — только по кнопке, бережём мобильный интернет
 const SUBS = { none: 'без подпапок', person: 'по человеку', month: 'по месяцу', 'person-month': 'по человеку, внутри по месяцам', type: 'по типу файла' };
 function routeOf(m) { const t = ftype(m); return S.routing.rules.find(r => r.on !== false && (!r.types?.length || r.types.includes(t)) && (!r.who || r.who === m.from || r.who === m.chat)) || null; }
 function routeTarget(m) {
@@ -2051,7 +2157,7 @@ function routeTarget(m) {
   const sub = { none: [], person: [whoName(m)], month: [mon], 'person-month': [whoName(m), mon], type: [FT[ftype(m)].t] }[r ? r.sub : S.routing.sub] || [];
   return { root: r?.dest || '', sub };
 }
-const rootName = p => p ? String(p).split(/[\\/]/).filter(Boolean).pop() || p : 'Полученные';
+const rootName = p => p ? String(p).split(/[\\/]/).filter(Boolean).pop() || p : ANDROID ? 'Загрузки/Кинозал' : 'Полученные';
 function routeLabel(m) { const t = routeTarget(m); return 'он в «' + [rootName(t.root), ...t.sub].join(' → ') + '»'; }
 async function saveToRoute(m, auto) {
   const b = await blobGet(m.id); if (!b) throw new Error('файла нет в переписке');
@@ -2091,8 +2197,8 @@ function fileState(m) {
 const fMonth = ts => new Date(ts).toLocaleDateString('ru', { month: 'long', year: 'numeric' });
 function fActions(m) {
   const st = fileState(m), a = [['Открыть', () => openAny(m)]];
-  if (st.path) a.push(['В проводнике', () => APP.files.show(st.path)]);
-  if (st.k === 'chat') a.push([DISK ? 'Сохранить — ' + rootName(routeTarget(m).root) : 'Сохранить', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); APP.files.show(p); renderFiles(); } catch (e) { toast('Не получилось: ' + errText(e)); } }]);
+  if (st.path) a.push([SHOWB, () => APP.files.show(st.path)]);
+  if (st.k === 'chat') a.push([DISK ? 'Сохранить — ' + rootName(routeTarget(m).root) : 'Сохранить', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); if (DESK) APP.files.show(p); renderFiles(); } catch (e) { toast('Не получилось: ' + errText(e)); } }]);
   if (m.big && !isMineSrc(m) && st.k !== 'disk' && st.k !== 'here') a.push([S.dl[m.id]?.st === 'go' ? 'Пауза' : 'Скачать', () => { xClick(m); setTimeout(renderFiles, 300); }]);
   a.push(['Переслать', () => pickChat('Кому переслать «' + fileNameOf(m) + '»?', c => fwdMsg(c, m))]);
   a.push(['К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); }]);
@@ -2180,7 +2286,7 @@ function libRow(m) {
   const info = [FT[ftype(m)].t, m.size ? fmtSize(m.size) : '', m.dir ? nFiles(m.n || 0) : '', (m.from === myId ? 'ты → ' + chatTitle(m.chat) : nameOf(m.from) + (isDm(m.chat) ? '' : ' · ' + chatTitle(m.chat))), fDate(m.ts)].filter(Boolean);
   t.append(el('span', '', info.join(' · ')));
   if (m.ex) t.append(el('span', 'ex', m.ex));
-  if (st.t) { const s = el('span', 'fst ' + st.k, st.t + (st.path && st.k === 'disk' ? ' · ' + st.path.split(/[\\/]/).slice(-3, -1).join('\\') : '')); s.title = st.path || ''; t.append(s); }
+  if (st.t) { const s = el('span', 'fst ' + st.k, st.t + (st.path && st.k === 'disk' && DESK ? ' · ' + st.path.split(/[\\/]/).slice(-3, -1).join('\\') : st.k === 'disk' && ANDROID ? ' · Загрузки/Кинозал' : '')); s.title = st.path || ''; t.append(s); }
   for (const [txt, f] of fActions(m).slice(1)) acts.append(lnk(txt, f));
   r.append(thumbEl(m, 'fic'), t, acts);
   r.onclick = e => { if (!e.target.closest('button')) openAny(m); };
@@ -2210,10 +2316,10 @@ function fillRoutes(bar, list) {
   for (const [v, t] of [[0, 'большие — только по кнопке'], [500, 'большие — сами до 500 МБ'], [2048, 'большие — сами до 2 ГБ'], [10240, 'большие — сами до 10 ГБ'], [1e6, 'большие — сами, любого размера']]) { const o = el('option', '', t); o.value = v; o.selected = +R.bigMax === v; big.append(o); }
   big.onchange = () => { R.bigMax = +big.value; ch(); }; big.disabled = !R.auto;
   const row = el('div', 'frowbar'); row.append(auto, big);
-  bar.append(row, el('p', 'fhint', 'Правила проверяются сверху вниз — решает первое подходящее. Программы (.exe и подобные) и капсулы времени сами не сохраняются. Удобно: RAW — в папку для фото, документы — по людям, всё остальное — в «Полученные».'));
+  bar.append(row, el('p', 'fhint', (ANDROID ? 'На телефоне всё складывается в «Загрузки/Кинозал», по подпапкам. ' : '') + 'Правила проверяются сверху вниз — решает первое подходящее. Программы (.exe и подобные) и капсулы времени сами не сохраняются. Удобно: RAW — в папку для фото, документы — по людям, всё остальное — в «Полученные».'));
   // быстрые заготовки
   const presets = el('div', 'fchips');
-  const preset = (t, rule) => { const b = el('button', 'fchip', '+ ' + t); b.onclick = async () => { const dest = await APP.files.pickRoot(); if (!dest) return; R.rules.push({ id: uid(), on: true, dest, ...rule }); ch(); }; presets.append(b); };
+  const preset = (t, rule) => { const b = el('button', 'fchip', '+ ' + t); b.onclick = async () => { const dest = APP.files.pickRoot ? await APP.files.pickRoot() : ''; if (APP.files.pickRoot && !dest) return; R.rules.push({ id: uid(), on: true, dest, ...rule }); ch(); }; presets.append(b); };
   preset('RAW — в свою папку', { types: ['raw'], who: '', sub: 'month' });
   preset('Фото и видео по месяцам', { types: ['photo', 'video'], who: '', sub: 'month' });
   preset('Документы по людям', { types: ['pdf', 'doc', 'sheet', 'text'], who: '', sub: 'person' });
@@ -2233,18 +2339,18 @@ function fillRoutes(bar, list) {
     const who = el('select', 'fsort'); for (const [v, t] of whoOpts) { const o = el('option', '', t); o.value = v; o.selected = (r.who || '') === v; who.append(o); } who.onchange = () => { r.who = who.value; ch(); };
     const sub = el('select', 'fsort'); for (const [v, t] of Object.entries(SUBS)) { const o = el('option', '', 'подпапки: ' + t); o.value = v; o.selected = r.sub === v; sub.append(o); } sub.onchange = () => { r.sub = sub.value; ch(); };
     const dest = el('button', 'btn fdest', '📂 ' + (r.dest ? rootName(r.dest) : 'Полученные')); dest.title = r.dest || 'Загрузки → Кинозал → Полученные';
-    dest.onclick = async () => { const p = await APP.files.pickRoot(); if (p) { r.dest = p; ch(); } };
+    dest.onclick = async () => { if (!APP.files.pickRoot) { toast('На телефоне всё складывается в «Загрузки/Кинозал» — выбери подпапки справа'); return; } const p = await APP.files.pickRoot(); if (p) { r.dest = p; ch(); } };
     const line = el('div', 'frowbar'); line.append(who, el('span', 'arrow', '→'), dest, sub);
     const ex = { ts: Date.now(), from: r.who && S.contacts[r.who] ? r.who : (Object.keys(S.contacts)[0] || myId), chat: '', kind: 'file', name: 'пример' };
     const segs = { none: [], person: [whoName(ex)], month: [new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0')], 'person-month': [whoName(ex), new Date().getFullYear() + '-' + String(new Date().getMonth() + 1).padStart(2, '0')], type: [r.types?.[0] ? FT[r.types[0]].t : 'Фото'] }[r.sub] || [];
-    c.append(top, types, line, el('p', 'fhint', 'Например: ' + [r.dest || 'Загрузки\\Кинозал\\Полученные', ...segs].join('\\')));
+    c.append(top, types, line, el('p', 'fhint', 'Например: ' + (ANDROID ? ['Загрузки/Кинозал', ...segs].join('/') : [r.dest || 'Загрузки\\Кинозал\\Полученные', ...segs].join('\\'))));
     list.append(c);
   });
   // всё остальное
   const fb = el('div', 'frow route'), fsub = el('select', 'fsort');
   for (const [v, t] of Object.entries(SUBS)) { const o = el('option', '', 'подпапки: ' + t); o.value = v; o.selected = R.sub === v; fsub.append(o); }
   fsub.onchange = () => { R.sub = fsub.value; ch(); };
-  const fl2 = el('div', 'frowbar'); fl2.append(el('b', '', R.rules.length ? 'Всё остальное' : 'Все файлы'), el('span', 'arrow', '→'), lnk('📂 Полученные', () => APP.files.dir()), fsub);
+  const fl2 = el('div', 'frowbar'); fl2.append(el('b', '', R.rules.length ? 'Всё остальное' : 'Все файлы'), el('span', 'arrow', '→'), DESK ? lnk('📂 Полученные', () => APP.files.dir()) : el('b', '', '📂 Загрузки/Кинозал'), fsub);
   fb.append(fl2); list.append(fb);
   // применить к тому, что уже пришло
   const again = el('button', 'btn', 'Разложить уже полученное по маршрутам');
@@ -2449,7 +2555,7 @@ function setupInput(sec, c) {
     Object.assign(mn.style, { position: 'fixed', left: Math.max(8, r.left - 4) + 'px', bottom: innerHeight - r.top + 10 + 'px', top: 'auto', right: 'auto', width: '270px', zIndex: 50 });
     const add = (ic, t, f) => { const b = el('button'); b.append(el('i', '', ic), document.createTextNode(t)); b.onclick = () => { closeMenus(); f(); }; mn.append(b); };
     add('📎', 'Фото или файл', () => file.click());
-    if (DISK) add('📁', 'Папка целиком — без архива', () => APP.files.pickDir().then(p => p && sendDir(c, p)));
+    if (DESK) add('📁', 'Папка целиком — без архива', () => APP.files.pickDir().then(p => p && sendDir(c, p)));
     add('⏳', 'Капсула времени', () => capsuleDlg(c));
     add('🗓', 'Назначить киносеанс', () => planDlg(c));
     add('👋', 'Постучаться', () => knock(c));
@@ -3179,29 +3285,47 @@ function helloDlg(code) {
     name.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
     card.append(el('h2', '', 'Добро пожаловать в Кинозал'), el('p', '', 'Мессенджер с голосовыми, кружочками и видеозвонками — а ещё можно смотреть кино вместе. Без регистрации: всё напрямую между вами.'));
     if (why) card.append(el('p', 'err', why));
-    card.append(ap, inp, name, go, el('div', 'sep'), btnEl('🔗 Войти в профиль с другого устройства', '', () => join('')));
+    card.append(ap, inp, name, go, el('div', 'sep'), btnEl('🔑 Войти в свой профиль — по ID и паролю или коду', '', () => join('')));
     if (ANDROID_WEB) { const a = el('a', 'btn', '📲 Удобнее в приложении для Android — уведомления и звонки даже в фоне'); a.href = APK; a.rel = 'noopener'; a.style.textDecoration = 'none'; card.append(a); }
     if (!TOUCH) setTimeout(() => name.focus(), 50);
   };
-  const join = pre => {
+  const join = (pre, mode) => {
+    mode = pre ? 'code' : mode || 'pwd';
     card.textContent = ''; card.innerHTML = IC.logo;
+    const tabs = el('div', 'ftabs jtabs');
+    for (const [k, t] of [['pwd', 'По ID и паролю'], ['code', 'По коду']]) { const b2 = el('button', 'ftab' + (mode === k ? ' on' : ''), t); b2.onclick = () => join('', k); tabs.append(b2); }
+    const id = el('input'); id.type = 'text'; id.placeholder = 'XXXXX-XXXXX'; id.maxLength = 40; id.autocomplete = 'username'; id.autocapitalize = 'characters'; id.spellcheck = false;
+    id.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase';
+    const pw = el('input'); pw.type = 'password'; pw.placeholder = 'Пароль'; pw.autocomplete = 'current-password';
     const inp = el('input'); inp.type = 'text'; inp.placeholder = 'XXXXX-XXXXX-XXXXXX'; inp.maxLength = 200; inp.autocomplete = 'off'; inp.autocapitalize = 'characters'; inp.spellcheck = false;
     inp.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase'; inp.value = pre || '';
     const dn = el('input'); dn.type = 'text'; dn.maxLength = 40; dn.value = devName(); dn.placeholder = 'Как назвать это устройство';
     const st = el('p'), err = el('div', 'err');
     const back = btnEl('Назад', '', create);
+    const fields = mode === 'pwd' ? [id, pw] : [inp];
     const go = btnEl('Войти', 'pri', async () => {
-      err.textContent = ''; go.disabled = back.disabled = inp.disabled = dn.disabled = true;
-      try { await joinProfile(inp.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }); }
-      catch (e) { st.textContent = ''; err.textContent = e?.message || String(e); go.disabled = back.disabled = inp.disabled = dn.disabled = false; }
+      err.textContent = ''; for (const x of [go, back, dn, ...fields]) x.disabled = true;
+      try { mode === 'pwd' ? await joinProfile(id.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }, pw.value) : await joinProfile(inp.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }); }
+      catch (e) { st.textContent = ''; err.textContent = e?.message || String(e); for (const x of [go, back, dn, ...fields]) x.disabled = false; }
     });
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
+    for (const x of fields) x.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
     const row = el('div', 'row'); row.style.justifyContent = 'center'; row.append(back, go);
-    card.append(el('h2', '', 'Вход в профиль'), el('p', '', 'На устройстве, где профиль уже есть, открой Профиль → «Мои устройства» → «Подключить другое устройство». Введи код оттуда — или наведи камеру телефона на QR-код. Оба устройства должны быть в сети.'),
-      el('label', '', 'Код подключения'), inp, el('label', '', 'Название этого устройства'), dn, st, err, row);
-    if (pre) go.click(); else if (!TOUCH) setTimeout(() => inp.focus(), 50);
+    card.append(el('h2', '', 'Вход в свой профиль'), tabs);
+    if (mode === 'pwd') card.append(el('p', '', 'Логин — это ID профиля (виден в профиле на основном устройстве), пароль задаётся там же: Профиль → «Мои устройства» → «Пароль для входа». Основное устройство должно быть в сети.'), el('label', '', 'ID профиля'), id, el('label', '', 'Пароль'), pw);
+    else card.append(el('p', '', 'На основном устройстве открой Профиль → «Мои устройства» → «Подключить другое устройство». Введи код оттуда — или наведи камеру телефона на QR-код. Оба устройства должны быть в сети.'), el('label', '', 'Код подключения'), inp);
+    card.append(el('label', '', 'Название этого устройства'), dn, st, err, row);
+    if (pre) go.click(); else if (!TOUCH) setTimeout(() => fields[0].focus(), 50);
   };
-  code ? join(code) : create();
+  // пришли из «Добавить профиль» в другом профиле: сразу нужный экран и путь назад; другие профили — переключиться
+  let add = null; try { add = JSON.parse(sessionStorage.getItem('kinozal-add') || 'null'); sessionStorage.removeItem('kinozal-add'); } catch (e) {}
+  const others = profList().filter(x => x.slot !== SLOT);
+  if (others.length) {
+    const bar = el('div', 'hprofs'), lab = el('span', '', add ? 'Вернуться:' : 'Профили на этом устройстве:');
+    bar.append(lab);
+    for (const x of others) { const b2 = el('button', 'fchip', (x.name || 'Профиль') + ' · ' + fmtId(x.id)); b2.onclick = () => { lsSet('kinozal-dropdb', dbName(SLOT)); lsSet('kinozal-slot', x.slot || null); location.hash = ''; location.reload(); }; bar.append(b2); }
+    ov.append(bar);
+  }
+  if (code) join(code); else if (add?.mode === 'join') join(add.code || '', add.code ? 'code' : 'pwd'); else create();
 }
 // профиль → мои устройства: список, подключить новое, отвязать, выйти из профиля на этом устройстве
 function devicesDlg() {
@@ -3231,7 +3355,15 @@ function devicesDlg() {
     if (myDev) card.append(el('p', '', 'Это устройство вошло в профиль «' + (S.me?.name || '') + '» (ID ' + fmtId(myId) + '). Переписка, контакты и группы сверяются между твоими устройствами, когда они в сети одновременно. Новые устройства подключаются на основном — там, где профиль создан.'));
     else card.append(el('p', '', 'Профиль можно открыть на телефоне или другом компьютере — переписка, контакты и группы будут одни и те же. Ключ профиля хранится на этом устройстве: не удаляй здесь данные Кинозала, иначе новые устройства подключить будет нельзя.'));
     card.append(list);
-    if (!myDev) { const b = btnEl('＋ Подключить другое устройство', 'pri', () => { close(); linkDlg(); }); card.append(b); }
+    if (!myDev) {
+      const b = btnEl('＋ Подключить другое устройство — одноразовый код', 'pri', () => { close(); linkDlg(); }); card.append(b);
+      // пароль: войти с другого устройства по ID и паролю, без кода (основное устройство при этом должно быть в сети)
+      const pw = el('div', 'pwbox'), info = el('div');
+      info.append(el('b', '', S.pwd ? '🔑 Пароль для входа задан' : '🔑 Пароль для входа не задан'), el('span', '', S.pwd ? 'С другого устройства: «Войти в свой профиль» → ID ' + fmtId(myId) + ' и пароль.' : 'Задай пароль — и с телефона или другого компьютера можно будет войти по ID ' + fmtId(myId) + ' и паролю, без кода.'));
+      pw.append(info, btnEl(S.pwd ? 'Сменить' : 'Задать пароль', S.pwd ? '' : 'pri', () => { close(); passwordDlg(); }));
+      if (S.pwd) pw.append(btnEl('Убрать', '', async () => { if (!confirm('Убрать пароль? Войти с нового устройства можно будет только по одноразовому коду.')) return; await setPassword(''); close(); devicesDlg(); }));
+      card.append(pw);
+    }
     else card.append(btnEl('🚪 Выйти из профиля на этом устройстве', '', () => {
       if (!confirm('Выйти из профиля на этом устройстве? Переписка, контакты и настройки профиля здесь удалятся. На других твоих устройствах всё останется, а войти сюда снова можно будет по новому коду.')) return;
       close(); jlog('[устройства] выход из профиля на этом устройстве');
@@ -3240,6 +3372,21 @@ function devicesDlg() {
     }));
     const row = el('div', 'row'); row.append(btnEl('Готово', '', close)); card.append(row);
     devsPaint = paint; paint();
+  });
+}
+// основное устройство: задать или сменить пароль для входа с других устройств
+function passwordDlg() {
+  modal((card, close) => {
+    const a = el('input'), b2 = el('input'); a.type = b2.type = 'password'; a.placeholder = 'Новый пароль (не меньше 6 символов)'; b2.placeholder = 'Ещё раз'; a.autocomplete = b2.autocomplete = 'new-password';
+    const err = el('div', 'err');
+    const ok = btnEl('Сохранить', 'pri', async () => {
+      if (a.value.length < 6) { err.textContent = 'Пароль — не меньше 6 символов'; a.focus(); return; }
+      if (a.value !== b2.value) { err.textContent = 'Пароли не совпадают'; b2.focus(); return; }
+      ok.disabled = true; await setPassword(a.value); toast('Пароль задан. Войти: «Войти в свой профиль» → ID ' + fmtId(myId) + ' и пароль'); close(); devicesDlg();
+    });
+    b2.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); });
+    const row = el('div', 'row'); row.append(btnEl('Отмена', '', () => { close(); devicesDlg(); }), ok);
+    card.append(el('h2', '', 'Пароль для входа'), el('p', '', 'С ним на телефоне или другом компьютере можно войти в этот профиль по ID ' + fmtId(myId) + ' и паролю. Сам пароль никуда не отправляется и здесь не хранится — только его отпечаток. Вход возможен, только пока это устройство в сети; после 5 неверных попыток он закрывается на 15 минут.'), a, b2, err, row);
   });
 }
 // основное устройство: показать одноразовый код и QR для входа с нового устройства
@@ -3328,6 +3475,26 @@ function settingsDlg() {
     const [ap, inp] = avatarPicker(() => avatar, v => { avatar = v; });
     const name = el('input'); name.type = 'text'; name.maxLength = 40; name.value = S.me.name;
     const snd = el('label', 'switch'), sc = el('input'); sc.type = 'checkbox'; sc.checked = store.get('mxSound', '1') === '1'; snd.append(document.createTextNode('Звук уведомлений'), sc);
+    // профили на этом устройстве: переключиться, добавить (войти в свой по ID и паролю / создать новый), убрать
+    const profs = el('details', 'adv profs'), plist = el('div', 'mlist'), all = profList();
+    profs.append(el('summary', '', 'Профили на этом устройстве' + (all.length > 1 ? ' · ' + all.length : '')));
+    for (const x of all) {
+      const pr = el('div', 'pick'), av = el('div', 'av'); av.style.setProperty('--s', '34px'); av.style.setProperty('--h', hash(x.id || '') % 360);
+      if (x.avatar) { const i = el('img'); i.src = x.avatar; i.alt = ''; av.append(i); } else av.textContent = (x.name || '?')[0].toUpperCase();
+      const t = el('span'); t.append(document.createTextNode(x.name || 'Профиль'), el('small', '', 'ID ' + fmtId(x.id) + (x.slot === SLOT ? ' · сейчас открыт' : x.dev ? ' · вход с другого устройства' : '')));
+      pr.append(av, t);
+      if (x.slot !== SLOT) {
+        pr.append(btnEl('Открыть', 'pri', () => { close(); switchProfile(x.slot); }));
+        pr.append(btnEl('Убрать', '', async () => {
+          if (!confirm('Убрать профиль «' + (x.name || '') + '» с этого устройства? Его переписка здесь удалится.' + (x.dev ? '' : ' ВНИМАНИЕ: здесь хранится ключ этого профиля — без него в профиль больше не войти ни с одного устройства.'))) return;
+          await removeProfile(x); close(); settingsDlg();
+        }));
+      }
+      plist.append(pr);
+    }
+    profs.append(el('p', '', 'Как аккаунты в Телеграме: в сети — только открытый профиль, остальные догрузят своё, когда в них перейдёшь.'), plist,
+      btnEl('🔑 Войти в свой профиль — по ID и паролю или коду', 'pri', () => { close(); addProfile('join'); }),
+      btnEl('＋ Создать ещё один профиль', '', () => { close(); addProfile('new'); }));
     card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), btnEl(myDev ? '📱 Мои устройства и выход из профиля' : '📱 Мои устройства — войти в профиль с телефона или другого компьютера', '', () => { close(); devicesDlg(); }), el('div', 'sep'), snd);
     let auto = null;
     if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode(ANDROID ? 'Работать в фоне — сообщения и звонки приходят, даже когда Кинозал свёрнут' : 'Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
@@ -3336,6 +3503,7 @@ function settingsDlg() {
       if (!i.fullScreen) card.insertBefore(btnEl('📞 Входящие звонки на весь экран', '', () => APP.askFullScreen()), card.querySelector('.adv'));
       if (!i.notifications) card.insertBefore(btnEl('🔔 Включить уведомления', '', () => APP.openSettings()), card.querySelector('.adv'));
     }).catch(() => {});
+    card.append(profs);
     if (APP?.readLog) card.append(btnEl('🧾 Отправить журнал ошибок в чат…', '', () => { close(); sendLogDlg(); }));
     if (!APP) {
       if ('Notification' in window && Notification.permission !== 'granted') card.append(btnEl('🔔 Включить уведомления', '', async () => { const p = await Notification.requestPermission().catch(() => 'denied'); toast(p === 'granted' ? 'Уведомления включены' : 'Браузер не разрешил уведомления — проверь настройки сайта'); }));
@@ -3375,7 +3543,7 @@ function settingsDlg() {
       const tj = tu.value.trim() ? JSON.stringify({ url: tu.value.trim(), user: tn.value.trim(), pass: tp.value }) : '';
       if (tj !== (localStorage.getItem('kinozal-turn') || '')) { try { tj ? localStorage.setItem('kinozal-turn', tj) : localStorage.removeItem('kinozal-turn'); } catch (e) {} if (!window.kzRoom?.inRoom) startPeer(); }
       for (const g of Object.values(S.groups)) if (g.names) g.names[myId] = n;
-      save(); renderMe(); renderList(); renderHead();
+      save(); renderMe(); renderList(); renderHead(); profTouch();
       sendProfile();   // собеседникам и моим другим устройствам
       close();
     }));
@@ -3557,7 +3725,9 @@ function chatMenu(c, anchor) {
 // ---------- запуск ----------
 function boot() {
   root.hidden = !!window.kzRoom?.inRoom;
-  jlog('[мессенджер] запуск, ID', myId, '· контактов', Object.keys(S.contacts).length, '· чатов', Object.keys(S.chats).length);
+  jlog('[мессенджер] запуск, ID', myId, '· контактов', Object.keys(S.contacts).length, '· чатов', Object.keys(S.chats).length, SLOT ? '· профиль ' + SLOT : '');
+  profTouch(); backupSoon();
+  if (restored) setTimeout(() => toast('Профиль восстановлен из запасной копии — переписка догрузится от собеседников'), 1500);
   try { renderMe(); renderList(); showEmpty(); } catch (e) { console.error('[мессенджер] отрисовка: ' + (e?.stack || e)); }
   startPeer(); tickAlerts();
   // пришли по ссылке: #add=ID — новый собеседник, #КОД — сразу в зал
@@ -3567,7 +3737,7 @@ function boot() {
     const a = h.match(/add=([0-9A-Za-z-]{10,13})/);
     const lk = /link=/.test(h) && parseLinkCode(h);
     if (a) { const e = addContact(normId(a[1])); if (e) toast(e); else toast('Собеседник добавлен — напиши ему'); }
-    else if (lk) toast(lk.id === myId ? 'Это устройство уже в этом профиле' : 'Это устройство уже в профиле «' + (S.me?.name || '') + '». Чтобы войти в другой, сначала выйди из этого: Профиль → «Мои устройства»' + (myDev ? '' : ' (здесь профиль создан — выйти из него нельзя)'));
+    else if (lk) { if (lk.id === myId) toast('Это устройство уже в этом профиле'); else if (confirm('Войти в профиль ' + fmtId(lk.id) + ' на этом устройстве? Он добавится рядом с «' + (S.me?.name || '') + '» — переключаться можно в Профиле.')) addProfile('join', h.match(/link=([0-9A-Za-z-]{16,24})/)?.[1] || ''); }
     else if (/^[A-Za-z0-9]{5}$/.test(h) && window.kzRoom && !window.kzRoom.busy) { toast('Подключаюсь к залу ' + h.toUpperCase() + '…'); window.kzRoom.join(h.toUpperCase(), S.me.name).then(ok => { if (!ok) toast('Зал с таким кодом не найден'); }); }
   };
   go(); window.addEventListener('hashchange', go);
