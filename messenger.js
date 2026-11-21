@@ -3370,6 +3370,18 @@ function devicesDlg() {
       send(myId, { t: 'bye' });   // основное устройство уберёт меня из списка (если оно сейчас в сети)
       setTimeout(() => wipeDevice('Ты вышел(-ла) из профиля на этом устройстве. Можно создать новый профиль или войти снова.'), 600);
     }));
+    // ввод кода с другого устройства: профиль подключается рядом с текущим (как второй аккаунт), текущий не трогается
+    const ib = el('div', 'pwbox'), ii = el('div'), cin = el('input');
+    cin.type = 'text'; cin.placeholder = 'XXXXX-XXXXX-XXXXXX'; cin.maxLength = 200; cin.autocomplete = 'off'; cin.autocapitalize = 'characters'; cin.spellcheck = false;
+    cin.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase';
+    const cgo = btnEl('Войти', 'pri', () => {
+      if (!cin.value.trim()) { cin.focus(); return; }
+      close(); addProfile('join', cin.value.trim());
+    });
+    cin.addEventListener('keydown', e => { if (e.key === 'Enter') cgo.click(); });
+    ii.append(el('b', '', '🔑 Ввести код с другого устройства'), el('span', '', 'Код подключения из окна «Подключить другое устройство» на твоём основном устройстве. Профиль откроется рядом с текущим — переключаться между ними можно в «Профиль → Профили на этом устройстве».'), cin);
+    ib.append(ii, cgo);
+    card.append(ib, btnEl('Войти в профиль по ID и паролю', '', () => { close(); addProfile('join'); }));
     const row = el('div', 'row'); row.append(btnEl('Готово', '', close)); card.append(row);
     devsPaint = paint; paint();
   });
