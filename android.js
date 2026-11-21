@@ -39,8 +39,32 @@
     inCall(on) { K.setCall({ on: !!on, speaker: speakerOn }).catch(e => log('[звонок] служба:', e?.message || e)); },
     async toggleSpeaker() { speakerOn = !speakerOn; const r = await K.speaker({ on: speakerOn }).catch(() => ({})); return r.route || (speakerOn ? 'speaker' : 'earpiece'); },
     get speaker() { return speakerOn; },
-    openUrl: url => K.openUrl({ url })
+    openUrl: url => K.openUrl({ url }),
+    // большие файлы и сохранение — кусками в «Загрузки/Кинозал» (тот же набор, что у программы для Windows, без папок целиком)
+    files: {
+      android: true,
+      open: (id, blk) => K.fOpen({ id, blk }).then(r => +r.have || 0),
+      write: async (id, off, u8) => { await K.fWrite({ id, off, data: await b64(u8) }); return true; },
+      done: (id, name, t) => K.fDone({ id, name, sub: subOf(t), mime: mimeOf(name) }).then(r => r.uri),
+      drop: id => K.fDrop({ id }).catch(() => {}),
+      save: async (name, u8, t) => { const id = 'save-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); await K.fOpen({ id, blk: 1 }); for (let o = 0; o < u8.length; o += 2 << 20) await K.fWrite({ id, off: o, data: await b64(u8.subarray(o, o + (2 << 20))) }); return (await K.fDone({ id, name, sub: subOf(t), mime: mimeOf(name) })).uri; },
+      size: uri => K.fSize({ uri }).then(r => r.size ?? -1),
+      slice: async (uri, off, len) => { const out = new Uint8Array(len); let got = 0; while (got < len) { const r = await K.fRead({ uri, off: off + got, len: Math.min(8 << 20, len - got) }); const b = unb64(r.data || ''); if (!b.length) break; out.set(b, got); got += b.length; } return out.subarray(0, got); },
+      exists: uri => K.fSize({ uri }).then(r => (r.size ?? -1) >= 0).catch(() => false),
+      openPath: uri => K.fView({ uri }).then(() => '').catch(e => e?.message || 'нечем открыть'),
+      show: uri => K.fView({ uri }).catch(() => {})
+    },
+    backup: {
+      put: (slot, data) => K.backupPut({ slot, data }).catch(e => log('[копия] не записалась:', e?.message || e)),
+      get: slot => K.backupGet({ slot }).then(r => r.data || '').catch(() => ''),
+      drop: slot => K.backupDrop({ slot }).catch(() => {})
+    }
   };
+  const b64 = u8 => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(new Blob([u8])); });
+  const unb64 = s => { const bin = atob(s), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
+  const subOf = t => [].concat(t?.sub || []).map(String).join('/');
+  const MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic', mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', mp3: 'audio/mpeg', m4a: 'audio/mp4', flac: 'audio/flac', ogg: 'audio/ogg', wav: 'audio/wav', pdf: 'application/pdf', zip: 'application/zip', apk: 'application/vnd.android.package-archive', txt: 'text/plain', json: 'application/json', csv: 'text/csv', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' };
+  const mimeOf = n => MIME[String(n || '').split('.').pop().toLowerCase()] || 'application/octet-stream';
 
   // ссылки-приглашения kinozal://add/ID и kinozal://room/КОД
   K.addListener('link', d => { if (d?.hash) location.hash = d.hash; });
@@ -60,11 +84,12 @@
     const a = e.target.closest?.('a[download]'); if (!a) return;
     const href = a.href || ''; if (!/^(blob|data):/.test(href)) return;
     e.preventDefault(); e.stopPropagation();
-    try {
+    try {   // кусками по 2 МБ — целиком одной строкой большой файл ронял приложение
       const b = await (await fetch(href)).blob();
-      const data = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1] || ''); r.onerror = rej; r.readAsDataURL(b); });
       const name = (a.getAttribute('download') || 'kinozal-file').replace(/[\\/:*?"<>|]/g, '_');
-      const r = await K.saveFile({ name, mime: b.type || 'application/octet-stream', data });
+      const id = 'dl-' + Date.now().toString(36); await K.fOpen({ id, blk: 1 });
+      for (let o = 0; o < b.size; o += 2 << 20) await K.fWrite({ id, off: o, data: await b64(new Uint8Array(await b.slice(o, o + (2 << 20)).arrayBuffer())) });
+      const r = await K.fDone({ id, name, sub: '', mime: b.type || mimeOf(name) });
       toast('Сохранено в ' + (r.where || '«Загрузки»'));
     } catch (er) { toast(er?.message || 'Не получилось сохранить'); }
   }, true);

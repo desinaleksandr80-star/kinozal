@@ -447,6 +447,137 @@ public class KinozalPlugin extends Plugin {
         }).start();
     }
 
+    // ---------- большие файлы: кусками, без больших строк в памяти ----------
+    // Раньше файл приходил сюда одной строкой base64: на 100+ МБ приложение падало (OutOfMemoryError),
+    // а падение посреди записи портило хранилище WebView вместе с профилем.
+    // Теперь: недокачанное — в закрытой папке приложения (parts/<id>.part), готовое — в «Загрузки/Кинозал/…».
+    private final java.util.concurrent.ExecutorService io = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private File partOf(String id) { File d = new File(getContext().getFilesDir(), "parts"); d.mkdirs(); return new File(d, id.replaceAll("[^\\w-]", "_") + ".part"); }
+    private static String safeSeg(String s) { s = s == null ? "" : s.replaceAll("[\\\\/:*?\"<>|\\x00-\\x1f]", "_").trim(); while (s.endsWith(".")) s = s.substring(0, s.length() - 1); return s.length() > 120 ? s.substring(0, 120) : s; }
+    private static String subPath(String sub) { StringBuilder b = new StringBuilder(); if (sub != null) for (String p : sub.split("/")) { String q = safeSeg(p); if (!q.isEmpty() && b.length() < 300) b.append('/').append(q); } return b.toString(); }
+
+    @PluginMethod
+    public void fOpen(PluginCall call) {
+        String id = call.getString("id", ""); long blk = Math.max(1, call.getData().optLong("blk", 1));
+        io.execute(() -> {
+            try (RandomAccessFile f = new RandomAccessFile(partOf(id), "rw")) {
+                long size = f.length(), have = size / blk * blk; if (have != size) f.setLength(have);
+                JSObject r = new JSObject(); r.put("have", have); call.resolve(r);
+            } catch (Exception e) { call.reject("не получилось создать файл: " + e.getMessage()); }
+        });
+    }
+
+    @PluginMethod
+    public void fWrite(PluginCall call) {
+        String id = call.getString("id", ""), data = call.getString("data", ""); long off = call.getData().optLong("off", 0);
+        io.execute(() -> {
+            try (RandomAccessFile f = new RandomAccessFile(partOf(id), "rw")) { byte[] b = Base64.decode(data, Base64.DEFAULT); f.seek(off); f.write(b); call.resolve(); }
+            catch (Exception e) { call.reject("не получилось записать: " + e.getMessage()); }
+        });
+    }
+
+    @PluginMethod
+    public void fDrop(PluginCall call) { String id = call.getString("id", ""); io.execute(() -> { partOf(id).delete(); call.resolve(); }); }
+
+    // готово: переносим в «Загрузки/Кинозал/<подпапки>/имя», отдаём адрес файла (content://)
+    @PluginMethod
+    public void fDone(PluginCall call) {
+        String id = call.getString("id", ""), name = safeSeg(call.getString("name", "файл")), mime = call.getString("mime", "application/octet-stream"), sub = subPath(call.getString("sub", ""));
+        io.execute(() -> {
+            File part = partOf(id);
+            try {
+                String where = "Загрузки/Кинозал" + sub, uri;
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ContentValues v = new ContentValues();
+                    v.put(MediaStore.MediaColumns.DISPLAY_NAME, name.isEmpty() ? "файл" : name);
+                    v.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+                    v.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Кинозал" + sub);
+                    v.put(MediaStore.MediaColumns.IS_PENDING, 1);
+                    Uri u = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v);
+                    if (u == null) throw new Exception("нет доступа к «Загрузкам»");
+                    try (java.io.InputStream in = new java.io.FileInputStream(part); OutputStream os = getContext().getContentResolver().openOutputStream(u)) { copy(in, os); }
+                    ContentValues done = new ContentValues(); done.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                    getContext().getContentResolver().update(u, done, null, null);
+                    uri = u.toString();
+                } else {
+                    if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                        ActivityCompat.requestPermissions(getActivity(), new String[] { Manifest.permission.WRITE_EXTERNAL_STORAGE }, 7102);
+                        call.reject("Разреши Кинозалу доступ к файлам и сохрани ещё раз"); return;
+                    }
+                    File dir = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Кинозал" + sub); dir.mkdirs();
+                    File to = new File(dir, name); String base = name, ext = ""; int dot = name.lastIndexOf('.'); if (dot > 0) { base = name.substring(0, dot); ext = name.substring(dot); }
+                    for (int i = 1; to.exists(); i++) to = new File(dir, base + " (" + i + ")" + ext);
+                    try (java.io.InputStream in = new java.io.FileInputStream(part); OutputStream os = new FileOutputStream(to)) { copy(in, os); }
+                    uri = Uri.fromFile(to).toString(); where = "Download/Кинозал" + sub;
+                }
+                part.delete();
+                JSObject r = new JSObject(); r.put("uri", uri); r.put("where", where); call.resolve(r);
+            } catch (Exception e) { call.reject("Не получилось сохранить: " + e.getMessage()); }
+        });
+    }
+    private static void copy(java.io.InputStream in, OutputStream os) throws java.io.IOException { byte[] buf = new byte[1 << 16]; int n; while ((n = in.read(buf)) > 0) os.write(buf, 0, n); }
+
+    // сохранённый файл: размер, кусок (для просмотра), открыть в другой программе
+    @PluginMethod
+    public void fSize(PluginCall call) {
+        String s = call.getString("uri", "");
+        io.execute(() -> {
+            long size = -1;
+            try (android.os.ParcelFileDescriptor pfd = getContext().getContentResolver().openFileDescriptor(Uri.parse(s), "r")) { if (pfd != null) size = pfd.getStatSize(); } catch (Exception e) {}
+            JSObject r = new JSObject(); r.put("size", size); call.resolve(r);
+        });
+    }
+    @PluginMethod
+    public void fRead(PluginCall call) {
+        String s = call.getString("uri", ""); long off = call.getData().optLong("off", 0); int len = (int) Math.min(8 << 20, Math.max(0, call.getData().optLong("len", 0)));
+        io.execute(() -> {
+            try (android.os.ParcelFileDescriptor pfd = getContext().getContentResolver().openFileDescriptor(Uri.parse(s), "r");
+                 java.io.FileInputStream in = new java.io.FileInputStream(pfd.getFileDescriptor())) {
+                java.nio.channels.FileChannel ch = in.getChannel(); ch.position(off);
+                java.nio.ByteBuffer bb = java.nio.ByteBuffer.allocate(len); while (bb.hasRemaining() && ch.read(bb) > 0) {}
+                JSObject r = new JSObject(); r.put("data", Base64.encodeToString(bb.array(), 0, bb.position(), Base64.NO_WRAP)); call.resolve(r);
+            } catch (Exception e) { call.reject("не получилось прочитать: " + e.getMessage()); }
+        });
+    }
+    @PluginMethod
+    public void fView(PluginCall call) {
+        try {
+            Uri u = Uri.parse(call.getString("uri", ""));
+            if ("file".equals(u.getScheme())) u = FileProvider.getUriForFile(getContext(), getContext().getPackageName() + ".fileprovider", new File(u.getPath()));
+            String mime = call.getString("mime", null); if (mime == null || mime.isEmpty()) mime = getContext().getContentResolver().getType(u);
+            Intent i = new Intent(Intent.ACTION_VIEW).setDataAndType(u, mime == null ? "*/*" : mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            getActivity().startActivity(Intent.createChooser(i, "Открыть").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            call.resolve();
+        } catch (Exception e) { call.reject("Нечем открыть такой файл"); }
+    }
+
+    // ---------- запасная копия профиля: ключ, контакты, группы — в закрытой папке приложения ----------
+    // Если хранилище WebView сотрётся (сбой посреди записи), страница восстановит из неё тот же профиль.
+    private File backupOf(String slot) { File d = new File(getContext().getFilesDir(), "backup"); d.mkdirs(); return new File(d, "profile-" + (slot == null || slot.isEmpty() ? "main" : slot.replaceAll("[^\\w-]", "_")) + ".json"); }
+    @PluginMethod
+    public void backupPut(PluginCall call) {
+        String slot = call.getString("slot", ""), data = call.getString("data", "");
+        io.execute(() -> {
+            try {
+                File f = backupOf(slot), tmp = new File(f.getPath() + ".tmp");
+                try (FileOutputStream os = new FileOutputStream(tmp)) { os.write(data.getBytes(StandardCharsets.UTF_8)); os.getFD().sync(); }
+                if (!tmp.renameTo(f)) { f.delete(); tmp.renameTo(f); }
+                call.resolve();
+            } catch (Exception e) { call.reject(e.getMessage()); }
+        });
+    }
+    @PluginMethod
+    public void backupGet(PluginCall call) {
+        String slot = call.getString("slot", "");
+        io.execute(() -> {
+            JSObject r = new JSObject();
+            try { File f = backupOf(slot); if (f.exists()) r.put("data", new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8)); } catch (Exception e) {}
+            call.resolve(r);
+        });
+    }
+    @PluginMethod
+    public void backupDrop(PluginCall call) { String slot = call.getString("slot", ""); io.execute(() -> { backupOf(slot).delete(); call.resolve(); }); }
+
     @PluginMethod
     public void openUrl(PluginCall call) {
         try {
