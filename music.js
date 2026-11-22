@@ -1566,6 +1566,14 @@ function buildShade() {
   });
   const wheel = e => { e.preventDefault(); setVol(player.vol + (e.deltaY < 0 ? 0.04 : -0.04)); };   // колесо над обложкой, ручкой и громкостью
   cv.addEventListener('wheel', wheel, { passive: false }); volRow.addEventListener('wheel', wheel, { passive: false }); handle.addEventListener('wheel', wheel, { passive: false });
+  // мышь приближается к верхнему центру — язычок выезжает целиком; отошла — прячется
+  let near = false, nearT = 0;
+  document.addEventListener('mousemove', e => {
+    const dx = Math.abs(e.clientX - innerWidth / 2), want = near ? dx < 130 && e.clientY < 90 : dx < 85 && e.clientY < 46;
+    if (want) { clearTimeout(nearT); nearT = 0; if (!near) { near = true; root.classList.add('near'); } }
+    else if (near && !nearT) nearT = setTimeout(() => { nearT = 0; near = false; root.classList.remove('near'); }, 350);
+  }, { passive: true });
+  document.addEventListener('mouseleave', () => { near = false; root.classList.remove('near'); });
   document.body.append(root);
   setPane('main'); bar.sync(); bgBar.sync();
   shadeApi = { open: () => setOpen(true), close: () => setOpen(false), get isOpen() { return isOpen; }, refresh: () => { if (isOpen) paintSess(); } };
