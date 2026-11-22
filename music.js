@@ -843,7 +843,7 @@ function gotoMode(m) { mode = m; H.store.set('musicMode', m); view.detail = null
 function paint() {
   if (!shown || !host) return; gen++;
   for (const b of [...player.bars]) if (!b.mini) player.bars.delete(b);   // панели прошлой отрисовки
-  bgBars.clear();
+  for (const b of [...bgBars]) if (!b.perm) bgBars.delete(b);
   const keepTop = host.querySelector('.mu-scroll')?.scrollTop || 0, hadQ = document.activeElement?.classList.contains('mu-q');
   const sec = el('section', 'mx-files mu');
   // шапка: назад + три режима
@@ -1362,6 +1362,124 @@ function bgCard() {
   c.append(opts); return c;
 }
 
+
+// ---------- «шторка»: маленькая вкладка сверху по центру ----------
+// Нажми или потяни вниз — раскроется окошко музыки, как на телефоне: что играет, перемотка, переключение треков, быстрый выбор полки.
+// Доступна везде: в чатах, в зале, поверх всего. Потяни вверх, нажми мимо или Esc — свернётся.
+let shadeApi = null;
+function buildShade() {
+  if (shadeApi) return shadeApi;
+  const root = el('div', 'mu-shade'); root.id = 'kzShade';
+  const handle = el('button', 'mu-sh-h'); handle.type = 'button'; handle.title = 'Музыка — нажми или потяни вниз'; handle.setAttribute('aria-label', 'Музыка');
+  handle.innerHTML = '<span class="eq"><i></i><i></i><i></i></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  const sheet = el('div', 'mu-sh-s'); sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', 'Музыка');
+  root.append(sheet, handle);
+
+  // — что играет
+  const top = el('div', 'mu-sh-top'), cv = el('div', 'mu-sh-cv'), info = el('div', 'mu-sh-info'), tt = el('b'), ar = el('span'), al = el('small');
+  info.append(tt, ar, al);
+  const full = ibtn('⤢', 'Открыть «Музыку» целиком', () => openFull(), 'mu-sh-full');
+  top.append(cv, info, full);
+  // — перемотка
+  const seek = el('input', 'mu-seek'); seek.type = 'range'; seek.min = 0; seek.max = 1000; seek.value = 0;
+  const tcur = el('span', 'mu-t', '0:00'), tall = el('span', 'mu-t', '0:00'), line = el('div', 'mu-line'); line.append(tcur, seek, tall);
+  let dragging = false;
+  seek.oninput = () => { dragging = true; tcur.textContent = fmt(seek.value / 1000 * (au.duration || 0)); };
+  seek.onchange = () => { if (isGuest()) { guestBlock(); dragging = false; return; } seekTo(seek.value / 1000); dragging = false; };
+  // — кнопки
+  const shuf = ibtn(IC.shuffle, 'Перемешать', () => { player.shuffle = !player.shuffle; H.store.set('musicShuffle', player.shuffle ? '1' : '0'); const c = player.queue[player.qi]; if (player.queue.length) { if (player.shuffle) reshuffle(c); else { player.queue = player.orig.slice(); player.qi = Math.max(0, player.queue.indexOf(c)); } } player.sync(); });
+  const prv = ibtn(IC.prev, 'Предыдущий', prev), play1 = ibtn(IC.play, 'Играть / пауза', toggle, 'big'), nxt = ibtn(IC.next, 'Следующий', () => next(false));
+  const rep = ibtn(IC.repeat, 'Повтор', () => { player.repeat = { off: 'all', all: 'one', one: 'off' }[player.repeat]; H.store.set('musicRepeat', player.repeat); player.sync(); });
+  const ctl = el('div', 'mu-sh-ctl'); ctl.append(shuf, prv, play1, nxt, rep);
+  // — инструменты и громкость
+  const fav = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } } }, 'fav');
+  const shelf = ibtn('🏷️', 'На полку', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 10, t, null); }, 'shelf');
+  const que = ibtn(IC.queue, 'Очередь', () => queueDlg()), snd = ibtn(IC.sliders, 'Звук', () => soundDlg());
+  const vi = el('span', 'mu-vi'); vi.innerHTML = IC.vol; const vol = el('input', 'mu-vol'); vol.type = 'range'; vol.min = 0; vol.max = 100; vol.oninput = () => setVol(vol.value / 100);
+  const tools = el('div', 'mu-sh-tools'); tools.append(fav, shelf, que, snd, vi, vol);
+  // — фон
+  const bgRow = el('div', 'mu-sh-bg'), bgt = el('div'), bgb = el('b'), bgs = el('span'); bgt.append(bgb, bgs);
+  const bgp = ibtn(IC.play, 'Фон: играть / пауза', bgToggle), bgn = ibtn(IC.next, 'Фон: следующий', bgNext), bgx = ibtn('✕', 'Остановить фон', bgStop);
+  const bgv = el('input', 'mu-vol'); bgv.type = 'range'; bgv.min = 0; bgv.max = 100; bgv.title = 'Громкость фона'; bgv.oninput = () => setBgVol(bgv.value / 100);
+  bgRow.append(el('i', '', '🌙'), bgt, bgp, bgn, bgv, bgx);
+  // — быстрый выбор
+  const picks = el('div', 'mu-sh-picks'), pk = el('div', 'mu-sh-pg');
+  picks.append(el('h4', '', 'Включить'), pk);
+  const foot = el('div', 'mu-sh-foot'); foot.append(H.btnEl('🎵 Вся музыка', '', () => openFull()), H.btnEl('🎧 Вместе', '', () => { gotoMode('together'); openFull(); }));
+  sheet.append(top, line, ctl, tools, bgRow, picks, foot);
+
+  // — состояние
+  const bar = { mini: true };
+  bar.sync = () => {
+    const t = player.cur, playing = !!t && !au.paused;
+    root.classList.toggle('playing', playing); root.classList.toggle('idle', !t);
+    cv.textContent = ''; cv.append(coverEl(t || null, 'xl'));
+    tt.textContent = t ? t.title : (isGuest() && sess.track ? sess.track.title : 'Ничего не играет'); ar.textContent = t ? (t.artist || '') : (isGuest() && sess.track ? sess.track.artist || '' : 'Выбери, что включить, ниже');
+    al.textContent = t?.album || '';
+    play1.innerHTML = au.paused ? IC.play : IC.pause;
+    shuf.classList.toggle('on', player.shuffle); rep.classList.toggle('on', player.repeat !== 'off'); rep.dataset.one = player.repeat === 'one' ? '1' : '';
+    fav.classList.toggle('on', !!t && isFav(t)); vol.value = Math.round(player.vol * 100);
+    sheet.classList.toggle('noplay', !t);
+    bar.tick();
+  };
+  bar.tick = () => {
+    const d = au.duration, c = au.currentTime;
+    tall.textContent = isFinite(d) ? fmt(d) : '0:00';
+    if (!dragging) { seek.value = isFinite(d) && d ? Math.round(c / d * 1000) : 0; tcur.textContent = fmt(c); }
+    seek.style.setProperty('--p', (seek.value / 10) + '%');
+  };
+  player.bars.add(bar);
+  const bgBar = { perm: true, sync() { const t = bgCur(); bgRow.hidden = !bg.queue.length; bgb.textContent = t ? t.title : ''; bgs.textContent = t ? (bg.src?.emoji || '') + ' ' + (bg.src?.name || '') : ''; bgp.innerHTML = bgEl.paused ? IC.play : IC.pause; bgv.value = Math.round(bg.vol * 100); } };
+  bgBars.add(bgBar);
+  const fillPicks = () => {
+    pk.textContent = '';
+    const c = collections(''), all = [c.all, ...c.lists.filter(x => x.tracks.length), ...c.albums.slice(0, 6)].slice(0, 14);
+    for (const x of all) {
+      const t = tile(x, { on: player.src?.kind === x.kind && player.src?.id === x.id, playing: !au.paused, go: () => { playColl(x); } });
+      t.classList.add('sm'); pk.append(t);
+    }
+    picks.hidden = !all.length;
+  };
+
+  // — открытие и закрытие: нажатие или потянуть вниз
+  let isOpen = false, drag = null;
+  const setOpen = o => {
+    isOpen = o; sheet.style.transform = ''; sheet.style.transition = '';
+    root.classList.toggle('open', o);
+    if (o) { bar.sync(); bgBar.sync(); fillPicks(); }
+  };
+  const openFull = () => {
+    setOpen(false);
+    const inRoom = window.kzRoom?.inRoom && !document.getElementById('room')?.hidden;
+    if (inRoom && window.kzPanel) { if (!document.getElementById('roomMusic')?.classList.contains('on')) window.kzPanel('music'); } else H.openSelf();
+  };
+  handle.addEventListener('pointerdown', e => {
+    if (e.button) return; drag = { y0: e.clientY, moved: false, open: isOpen };
+    try { handle.setPointerCapture(e.pointerId); } catch (er) {}
+    if (!isOpen) { bar.sync(); bgBar.sync(); fillPicks(); }
+  });
+  handle.addEventListener('pointermove', e => {
+    if (!drag) return; const dy = e.clientY - drag.y0;
+    if (!drag.moved && Math.abs(dy) < 5) return;
+    drag.moved = true; drag.dy = dy; sheet.style.transition = 'none'; root.classList.add('pulling');
+    const h = sheet.offsetHeight + 24, base = drag.open ? 0 : -h;
+    sheet.style.transform = 'translateY(' + Math.max(-h, Math.min(0, base + dy)) + 'px)';
+  });
+  const end = e => {
+    if (!drag) return; const d = drag; drag = null; root.classList.remove('pulling');
+    if (!d.moved) { setOpen(!isOpen); return; }
+    const h = sheet.offsetHeight + 24;
+    setOpen(d.open ? d.dy > -h * 0.25 : d.dy > h * 0.3);   // потянул на треть вниз — раскрылась; потянул вверх на четверть — свернулась
+  };
+  handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
+  document.addEventListener('pointerdown', e => { if (isOpen && !drag && !root.contains(e.target) && !e.target.closest?.('.mx-modal, .mx-pop')) setOpen(false); }, true);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && isOpen && !document.querySelector('.mx-modal')) setOpen(false); });
+  document.body.append(root);
+  bar.sync(); bgBar.sync();
+  shadeApi = { open: () => setOpen(true), close: () => setOpen(false), get isOpen() { return isOpen; } };
+  return shadeApi;
+}
+
 // ---------- подключение к приложению ----------
 let ready = false;
 async function init() {
@@ -1388,12 +1506,12 @@ window.kzMusic = {
   debug: () => ({ bg: { vol: bg.vol, level: +bg.level.toFixed(2), volume: +bgEl.volume.toFixed(2), paused: bgEl.paused, n: bg.queue.length }, sess: sess && { host: sess.host, mode: sess.mode, track: sess.track && sess.track.title, aud: !!sess.aud, audOn: !!(sess.aud && !sess.aud.paused && !sess.aud.muted), off: Math.round(sess.off), peers: sess.peers.size }, decks: decks && decks.map(d => ({ rel: d.rel.slice(-14), paused: d.el.paused, g: +d.g.gain.value.toFixed(2), t: +d.el.currentTime.toFixed(1), rate: d.el.playbackRate })), eq: eqNodes.map(n => n.gain.value), xf: cfg.xf, q: player.queue, qi: player.qi, paused: au.paused, err: au.error && au.error.message, code: au.error && au.error.code, src: au.src, t: au.currentTime, dur: au.duration, ready: au.readyState }),
   // H: {store, toast, modal, btnEl, host(): контейнер раздела, side: боковая колонка, openSelf(), close(), net}
   mount(h) {
-    H = h; init();
+    H = h; init(); buildShade();
     const wrap = el('div', 'mu-mini'); h.side.append(wrap);
     const mini = playerBar(true), bgm = bgBarEl(true); wrap.append(mini, bgm);
     const upd = () => { wrap.hidden = shown || (!player.cur && !bg.queue.length); mini.hidden = !player.cur; };
     const old = mini.sync; mini.sync = () => { old(); upd(); };
-    const oldB = bgm.sync; bgm.sync = () => { oldB(); upd(); };
+    bgm.perm = true; const oldB = bgm.sync; bgm.sync = () => { oldB(); upd(); };
     mini.sync(); bgm.sync();
     return {
       // el — куда рисовать: по умолчанию главная область мессенджера, в зале — правая панель
