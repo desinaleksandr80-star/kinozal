@@ -108,3 +108,23 @@
 .mu-band .mu-vol{width:100%}.mu-band span:last-child{text-align:right;font-variant-numeric:tabular-nums}
 .mu-sleep{display:flex;gap:6px;flex-wrap:wrap}
 .mu-h2{margin:6px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+
+/* реакции */
+.mu-rxs{margin-left:8px;font-style:normal;white-space:nowrap}
+.mu-rxs i{font-style:normal;margin-right:2px;font-size:13px}.mu-rxs i.fr{opacity:.55;font-size:11px}
+.mu-pal{display:flex;flex-wrap:wrap;gap:4px;padding:8px;max-width:288px}
+.mu-pal button{width:44px;height:44px;border-radius:12px;border:1px solid var(--line2);background:var(--btn);font-size:22px;cursor:pointer}
+.mu-pal button:hover{background:var(--btnh);transform:scale(1.08)}.mu-pal button.on{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
+.mu-ib.rx{font-size:18px;line-height:1}
+.mu-sk{position:relative;display:grid}
+.mu-ticks{position:absolute;left:0;right:0;top:-14px;height:14px;pointer-events:none}
+.mu-tick{position:absolute;transform:translateX(-50%);font-style:normal;font-size:12px;cursor:pointer;pointer-events:auto}
+.mu-fly{position:fixed;bottom:96px;z-index:90;font-size:38px;pointer-events:none;animation:mufly 2.7s ease-out forwards;text-align:center}
+.mu-fly small{display:block;font-size:11px;color:var(--ink);background:var(--card);border-radius:8px;padding:1px 6px;margin-top:2px}
+@keyframes mufly{0%{opacity:0;transform:translateY(0) scale(.6)}12%{opacity:1;transform:translateY(-30px) scale(1.15)}100%{opacity:0;transform:translateY(-260px) scale(1)}}
+.fchips{display:flex;gap:6px;flex-wrap:wrap}
+/* слушать вместе */
+.mu-sess{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;margin-bottom:10px;border-radius:14px;background:linear-gradient(90deg,color-mix(in srgb,var(--acc2) 24%,var(--card)),color-mix(in srgb,var(--acc2) 10%,var(--card)));border:1px solid color-mix(in srgb,var(--acc2) 40%,var(--line2))}
+.mu-sess .btn{min-height:34px!important;padding:4px 12px}
+
+.mu-tx b .mu-rxs{display:inline}

@@ -268,6 +268,7 @@ function startPeer() {
   setNet('wait');
   const p = peer = new Peer(myPeer, { config: iceCfg(), debug: 0 });
   p.on('open', () => { if (peer !== p) return; idTaken = 0; setNet('on'); dialAll(); });
+  p.on('call', c => window.kzMusic?.onCall?.(c));   // трансляция музыки от ведущего
   p.on('connection', c => {
     if (c.metadata?.link === 1) { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }   // старые версии стучались сюда за входом по коду — теперь вход идёт через сервер
     if (c.metadata?.xfer) { xIncoming(c); return; }          // отправитель большого файла, который я попросил
@@ -304,7 +305,7 @@ function dial(u) {
 async function dialAll() { for (const u of dialList()) { dial(u); await sleep(120); } }
 setInterval(dialAll, 40000);
 window.addEventListener('focus', () => { if (net === 'on') dialAll(); });
-const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer', 'xdir'], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
+const helloMsg = nonce => ({ t: 'hello', v: 1, id: myId, pub: myPub, name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0, nonce, ver: appVer, caps: ['dev', 'xfer', 'xdir', ...(window.kzMusic ? ['mu'] : [])], ...(myDev ? { dev: myDev, dpub: keys.pub, cert: ident.cert } : {}) });
 function wire(c, outgoing, u, dev = '') {
   const L = { c, outgoing, authed: false, nonce: b64(rnd(18)), uid: u, dev, self: u === myId, peer: peerOf(u, dev), their: null, q: Promise.resolve() };
   c.on('open', () => { c.send(helloMsg(L.nonce)); });
@@ -399,6 +400,7 @@ async function onData(L, d) {
     case 'xno': return xNo(L, d);
     case 'xmanq': return xManServe(L, d);
     case 'xman': return xManGot(L, d);
+    case 'mu': return window.kzMusic?.onMsg?.(L, d);   // совместное прослушивание (music.js)
   }
 }
 function linkUp(L) {
@@ -3712,7 +3714,16 @@ function boot() {
   }, 2000);
 }
 if (DESK && window.kzMusic) {
-  musicApi = window.kzMusic.mount({ store, toast, modal, btnEl: (...a) => btnEl(...a), host: () => $('#mxMain'), side: root.querySelector('.mx-side'), openSelf: openMusic, close: closeMusic });
+  musicApi = window.kzMusic.mount({
+    store, toast, modal, btnEl: (...a) => btnEl(...a), host: () => $('#mxMain'), side: root.querySelector('.mx-side'), openSelf: openMusic, close: closeMusic,
+    // связь с собеседниками для совместного прослушивания
+    net: {
+      send, peer: () => peer, nameOf: u => nameOf(u), myName: () => S.me?.name || '',
+      canMu: u => linksOf(u).some(L => L.their?.caps.includes('mu')),
+      friends: () => Object.values(S.contacts).filter(ct => ct.state !== 'blocked' && ct.id !== myId && isOn(ct.id) && linksOf(ct.id).some(L => L.their?.caps.includes('mu'))).map(ct => ({ id: ct.id, name: nameOf(ct.id) })),
+      isOn: u => isOn(u)
+    }
+  });
   if (musicApi) $('#mxMusic').hidden = false;
 }
 window.__mx = { get S() { return S; }, myId, myDev, myPeer, links, isOn, openChat, post, devicesDlg, vaultSync, setPassword, get open() { return open; } }; // для диагностики

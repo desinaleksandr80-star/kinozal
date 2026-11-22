@@ -124,7 +124,7 @@ async function hashAll() {
       const t = [...lib.values()].find(x => !x.h && !tried.has(key(x))); if (!t) break;
       tried.add(key(t));
       const h = await MU.hash(t.p).catch(() => '');
-      const c = lib.get(t.rel); if (h && c) { c.h = h; hashIdx = null; await tx('tracks', 'readwrite', s => s.put(c)).catch(() => {}); }
+      const c = lib.get(t.rel); if (h && c) { c.h = h; hashIdx = null; migrateRx(c); await tx('tracks', 'readwrite', s => s.put(c)).catch(() => {}); }
     }
   } finally { hashing = false; }
 }
@@ -199,7 +199,7 @@ const au = new Proxy({}, {
 const player = {
   orig: [], queue: [], qi: -1, shuffle: false, repeat: 'off', bars: new Set(), vol: 1, errs: 0,
   get cur() { return lib.get(this.queue[this.qi]) || null; },
-  sync() { for (const b of this.bars) b.sync(); mediaMeta(); markRows(); lyricsSync(); }
+  sync() { for (const b of this.bars) b.sync(); mediaMeta(); markRows(); lyricsSync(); sessSync(); }
 };
 function mkDeck() {
   const el = new Audio(); el.crossOrigin = 'anonymous'; el.preload = 'auto';
@@ -209,8 +209,8 @@ function mkDeck() {
   el.addEventListener('play', () => { if (mine()) player.sync(); });
   el.addEventListener('pause', () => { if (mine()) { clearTimeout(nextT); player.sync(); } });
   el.addEventListener('playing', () => { if (mine()) { player.errs = 0; armNext(); } });
-  el.addEventListener('seeked', () => { if (mine()) armNext(); });
-  el.addEventListener('ratechange', () => { if (mine()) armNext(); });
+  el.addEventListener('seeked', () => { if (mine()) { armNext(); sessSync(); } });
+  el.addEventListener('ratechange', () => { if (mine()) { armNext(); sessSync(); } });
   el.addEventListener('error', () => {
     if (!mine() || !d.rel) return;
     const t = player.cur; if (!t) return;
@@ -242,6 +242,7 @@ function reshuffle(keep) {
   player.queue = keep ? [keep, ...rest] : rest; player.qi = keep ? 0 : -1;
 }
 function setQueue(list, start) {   // list — треки, start — с какого начать
+  if (isGuest() && !sess.internal) { guestBlock(); return; }
   player.orig = list.map(t => t.rel);
   const first = list[start]?.rel;
   if (player.shuffle) reshuffle(first); else { player.queue = player.orig.slice(); player.qi = Math.max(0, start); }
@@ -298,6 +299,7 @@ function cleanQueue() {   // файл удалили — выкидываем и
   player.qi = cur && lib.has(cur) ? player.queue.indexOf(cur) : Math.min(player.qi, player.queue.length - 1);
 }
 function next(auto) {
+  if (!auto && guestBlock()) return;
   if (!player.queue.length) return;
   if (auto && player.repeat === 'one') { au.currentTime = 0; au.play().catch(() => {}); return; }
   if (player.qi + 1 < player.queue.length) { player.qi++; play(); return; }
@@ -306,10 +308,17 @@ function next(auto) {
   au.pause(); au.currentTime = 0; player.sync();   // дошли до конца очереди
 }
 function prev() {
+  if (guestBlock()) return;
   if (au.currentTime > 3 || player.qi <= 0) { au.currentTime = 0; return; }
   player.qi--; play();
 }
 function toggle() {
+  if (isGuest()) {   // гость может приглушить себе: пауза у себя ведущему не мешает
+    if (sess.mode === 'stream') { sess.userPaused = !sess.userPaused; if (sess.aud) sess.aud.muted = sess.userPaused; sessUi(); player.sync(); return; }
+    if (!player.cur) return;
+    if (!au.paused) { sess.userPaused = true; au.pause(); } else { sess.userPaused = false; if (sess.hostL) netTo(sess.hostL, { k: 'ping', sid: sess.sid, c: Date.now() }); au.play().catch(() => {}); }
+    return;
+  }
   if (!player.cur) return;
   if (!decks || !decks[deckI].rel) { play(); return; }
   ensureAudio();
@@ -317,6 +326,7 @@ function toggle() {
   else { for (const d of decks) d.el.pause(); }   // и деку, которая в этот момент затухает
 }
 function enqueue(t, nextUp) {
+  if (guestBlock()) return;
   if (!player.queue.length) { setQueue([t], 0); return; }
   const at = nextUp ? player.qi + 1 : player.queue.length;
   player.queue.splice(at, 0, t.rel);
@@ -362,7 +372,7 @@ if ('mediaSession' in navigator) {
 }
 
 // ---------- интерфейс ----------
-let lyricsOpen = false;
+let lyricsOpen = false, rxFilter = new Set();
 let shown = false, view = { tab: 'tracks', detail: null }, query = '', sortBy = 'title', limit = 200, queuePaint = null;
 let host = null;   // контейнер раздела (#mxMain)
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -380,19 +390,20 @@ function playerBar(mini) {
   seek.oninput = () => { dragging = true; tcur.textContent = fmt(seek.value / 1000 * (au.duration || 0)); };
   seek.onchange = () => { seekTo(seek.value / 1000); dragging = false; };
   const open = () => { if (mini) H.openSelf(); };
-  let shuf, rep, que, vol, fav, lyr, snd;
+  let shuf, rep, que, vol, fav, lyr, snd, rxb, ticks;
   if (mini) { bar.append(cv, info, ctl); bar.onclick = open; }
   else {
     shuf = ibtn(IC.shuffle, 'Перемешать', () => { player.shuffle = !player.shuffle; H.store.set('musicShuffle', player.shuffle ? '1' : '0'); const c = player.queue[player.qi]; if (player.queue.length) { if (player.shuffle) reshuffle(c); else { player.queue = player.orig.slice(); player.qi = Math.max(0, player.queue.indexOf(c)); } } player.sync(); queuePaint?.(); });
     rep = ibtn(IC.repeat, 'Повтор: выкл', () => { player.repeat = { off: 'all', all: 'one', one: 'off' }[player.repeat]; H.store.set('musicRepeat', player.repeat); player.sync(); });
     que = ibtn(IC.queue, 'Очередь', () => queueDlg());
+    rxb = ibtn('😊', 'Реакция на этот момент', e => { const t = player.cur; if (t) reactPalette(e.clientX, e.clientY, t, au.currentTime); }, 'rx');
     lyr = ibtn(IC.lyr, 'Текст песни', () => { lyricsOpen = !lyricsOpen; if (lyricsOpen) view.detail = null; repaint(); });
     snd = ibtn(IC.sliders, 'Звук: переход между треками, эквалайзер, скорость, таймер сна', () => soundDlg());
     fav = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) toggleFav(t); }, 'fav');
     vol = el('input', 'mu-vol'); vol.type = 'range'; vol.min = 0; vol.max = 100; vol.title = 'Громкость'; vol.oninput = () => setVol(vol.value / 100);
-    const mid = el('div', 'mu-mid'), line = el('div', 'mu-line'); line.append(tcur, seek, tall); mid.append(ctl, line);
+    const mid = el('div', 'mu-mid'), line = el('div', 'mu-line'), sk = el('div', 'mu-sk'); ticks = el('div', 'mu-ticks'); sk.append(ticks, seek); line.append(tcur, sk, tall); mid.append(ctl, line);
     const vi = el('span', 'mu-vi'); vi.innerHTML = IC.vol;
-    const right = el('div', 'mu-right'); right.append(fav, shuf, rep, que, lyr, snd, vi, vol);
+    const right = el('div', 'mu-right'); right.append(rxb, fav, shuf, rep, que, lyr, snd, vi, vol);
     bar.append(cv, info, mid, right);
   }
   bar.sync = () => {
@@ -405,14 +416,20 @@ function playerBar(mini) {
       rep.classList.toggle('on', player.repeat !== 'off'); rep.title = 'Повтор: ' + { off: 'выкл', all: 'очередь', one: 'один трек' }[player.repeat]; rep.dataset.one = player.repeat === 'one' ? '1' : '';
       vol.value = Math.round(player.vol * 100);
       fav.classList.toggle('on', !!t && isFav(t));
-      lyr.classList.toggle('on', lyricsOpen);
+      lyr.classList.toggle('on', lyricsOpen); drawTicks();
       snd.classList.toggle('on', !!(cfg.xf || cfg.rate !== 1 || cfg.eqOn || sleep.until || sleep.endOfTrack));
     }
     bar.tick();
   };
+  let tickDur = -1;
+  const drawTicks = () => {   // реакции на секунды трека — метками над перемоткой
+    if (!ticks) return; ticks.textContent = ''; const t = player.cur, d = au.duration; tickDur = d; if (!t || !isFinite(d) || !d) return;
+    for (const [e, v] of Object.entries(rxMine(t) || {})) for (const m of v.m || []) { const i = el('i', 'mu-tick', e); i.style.left = Math.min(100, m / d * 100) + '%'; i.title = rxName(e) + ' — ' + fmt(m); i.onclick = ev => { ev.stopPropagation(); au.currentTime = Math.max(0, m - 2); }; ticks.append(i); }
+  };
   bar.tick = () => {
     const d = au.duration, c = au.currentTime;
     if (mini) return;
+    if (d !== tickDur) drawTicks();
     tall.textContent = isFinite(d) ? fmt(d) : '0:00';
     if (!dragging) { seek.value = isFinite(d) && d ? Math.round(c / d * 1000) : 0; tcur.textContent = fmt(c); }
     seek.style.setProperty('--p', (seek.value / 10) + '%');
@@ -446,6 +463,7 @@ function trackRow(t, list, i) {
   const r = el('div', 'mu-row'), cur = player.cur?.rel === t.rel;
   r.dataset.rel = t.rel; if (cur) r.classList.add('cur', au.paused ? 'paused' : 'playing');
   const tx = el('div', 'mu-tx'); tx.append(el('b', '', t.title), el('span', '', [t.artist, t.album].filter(Boolean).join(' · ') || t.rel));
+  const rc = rxChips(t); if (rc) tx.firstChild.append(rc);
   const play1 = el('div', 'mu-pl'); play1.innerHTML = cur && !au.paused ? IC.pause : IC.play;
   const cv = coverEl(t, 'sm'); cv.append(play1);
   r.append(cv, tx, el('span', 'mu-d', t.dur ? fmt(t.dur) : ''));
@@ -476,6 +494,7 @@ function trackMenu(t, x, y, list) {
     ['▶', 'Играть', () => setQueue(list, Math.max(0, list.indexOf(t)))],
     ['⏭', 'Играть следующим', () => enqueue(t, true)],
     ['➕', 'В очередь', () => enqueue(t, false)],
+    ['😊', 'Реакция…', () => reactPalette(x, y + 150, t, null)],
     ['📋', 'В плейлист…', () => addToPlaylistDlg(t)],
     [isFav(t) ? '💔' : '♥', isFav(t) ? 'Убрать из любимого' : 'В любимое', () => toggleFav(t)],
     ['📂', 'Показать в папке', () => MU.show(t.p)]
@@ -608,6 +627,7 @@ function body() {
   if (d) {
     if (d.type === 'album') { const a = albumsOf(all).find(x => x.key === d.key); if (a) { const ts = a.tracks.slice().sort(sorters.album); wrap.append(el('h3', 'mu-h', a.name + (a.artist ? ' — ' + a.artist : '')), actions(ts), listView(ts)); return wrap; } }
     else if (d.type === 'artist') { const a = artistsOf(all).find(x => x.name === d.key); if (a) { const ts = a.tracks.slice().sort(sorters.artist); wrap.append(el('h3', 'mu-h', a.name), actions(ts), listView(ts)); return wrap; } }
+    else if (d.type === 'rx') { const ts = rxTracks(d.key); wrap.append(el('h3', 'mu-h', d.key + ' ' + rxName(d.key) + ' · ' + ts.length), actions(ts), listView(ts, { empty: 'Пока ни одного трека с такой реакцией' })); return wrap; }
     else if (d.type === 'pl') {
       const fav = d.id === 'fav', l = fav ? { id: 'fav', name: '♥ Любимое', items: PL.fav } : PL.lists.find(x => x.id === d.id);
       if (l) {
@@ -619,12 +639,20 @@ function body() {
     view.detail = null;
   }
   if (tabs === 'tracks') {
-    const ts = sortTracks(all.filter(matches));
-    wrap.append(actions(ts, [sortSel()]), listView(ts));
+    const ts = sortTracks(all.filter(matches).filter(t => [...rxFilter].every(e => rxMine(t)?.[e])));
+    wrap.append(actions(ts, [sortSel()]));
+    const used = allRx().filter(([e]) => rxTracks(e).length);
+    if (used.length) { const row = el('div', 'fchips'); for (const [e, name] of used) { const c = el('button', 'fchip' + (rxFilter.has(e) ? ' on' : ''), e + ' ' + name); c.onclick = () => { rxFilter.has(e) ? rxFilter.delete(e) : rxFilter.add(e); limit = 200; repaint(); }; row.append(c); } wrap.append(row); }
+    wrap.append(listView(ts, { empty: rxFilter.size ? 'С такой реакцией пока нет треков' : undefined }));
   } else if (tabs === 'albums') {
     wrap.append(groupCards(albumsOf(all.filter(matches)), 'album'));
   } else if (tabs === 'artists') {
     wrap.append(groupCards(artistsOf(all.filter(matches)), 'artist'));
+  } else if (tabs === 'rx') {
+    const g = el('div', 'mu-grid pl');
+    for (const [e, name] of allRx()) { const n = rxTracks(e).length; const c = el('button', 'mu-card'); const cv = el('div', 'mu-cv lg', e); c.append(cv, el('b', '', name), el('span', '', n + ' ' + plural(n, 'трек', 'трека', 'треков'))); c.onclick = () => { view.detail = { type: 'rx', key: e }; limit = 200; repaint(); }; g.append(c); }
+    const nw = el('button', 'mu-card new'); nw.append(el('div', 'mu-cv lg add', '＋'), el('b', '', 'Своя реакция')); nw.onclick = () => customRxDlg(); g.append(nw);
+    wrap.append(el('p', 'fhint', 'Ставь реакцию на трек (⋯ → «Реакция…» или 😊 в плеере — на конкретную секунду). Каждая реакция сама становится плейлистом.'), g);
   } else {
     const g = el('div', 'mu-grid pl');
     const mkc = (id, name, tracks, n) => { const c = el('button', 'mu-card'); c.append(coverEl(tracks, 'lg'), el('b', '', name), el('span', '', n + ' ' + plural(n, 'трек', 'трека', 'треков'))); c.onclick = () => { view.detail = { type: 'pl', id }; limit = 200; repaint(); }; g.append(c); };
@@ -651,16 +679,16 @@ function paint() {
   const hd = head(d ? '' : 'Музыка', d ? () => { view.detail = null; limit = 200; repaint(); } : null);
   if (d) { hd.querySelector('h2').remove(); hd.append(el('h2', '', d.type === 'pl' ? 'Плейлист' : d.type === 'album' ? 'Альбом' : 'Исполнитель')); }
   const tabs = el('div', 'ftabs');
-  for (const [k, t] of [['tracks', 'Треки'], ['albums', 'Альбомы'], ['artists', 'Исполнители'], ['pl', 'Плейлисты']]) { const b = el('button', 'ftab' + (view.tab === k && !d ? ' on' : ''), t); b.onclick = () => { view = { tab: k, detail: null }; lyricsOpen = false; limit = 200; repaint(); }; tabs.append(b); }
+  for (const [k, t] of [['tracks', 'Треки'], ['albums', 'Альбомы'], ['artists', 'Исполнители'], ['pl', 'Плейлисты'], ['rx', 'Реакции']]) { const b = el('button', 'ftab' + (view.tab === k && !d ? ' on' : ''), t); b.onclick = () => { view = { tab: k, detail: null }; lyricsOpen = false; limit = 200; repaint(); }; tabs.append(b); }
   hd.append(tabs);
   const bar = el('div', 'fbar mu-tool');
   const q = el('input', 'mu-q'); q.type = 'search'; q.placeholder = 'Поиск по названию, исполнителю, альбому'; q.value = query; q.autocomplete = 'off';
   q.oninput = () => { query = q.value; limit = 200; if (view.detail) view.detail = null; repaint(); };
   statusEl = el('span', 'mu-stat', statusText());
   const tools = el('div', 'mu-tools');
-  tools.append(H.btnEl('＋ Добавить', '', async () => { const n = await MU.pickFiles(); if (n) { H.toast('Добавлено: ' + n); refresh(); } }), ibtn(IC.cog, 'Папка с музыкой', settingsDlg));
+  tools.append(H.btnEl(sess ? '🎧 Вместе · ' + (sess.host ? sess.peers.size : 1) : '🎧 Вместе', sess ? 'pri' : '', togetherDlg), H.btnEl('＋ Добавить', '', async () => { const n = await MU.pickFiles(); if (n) { H.toast('Добавлено: ' + n); refresh(); } }), ibtn(IC.cog, 'Папка с музыкой', settingsDlg));
   bar.append(q, statusEl, tools);
-  const scroll = el('div', 'mu-scroll'); if (lyricsOpen) { const lv = el('div', 'mu-lyr'); lv.dataset.rel = player.cur?.rel || ''; scroll.append(lv); fillLyrics(lv, player.cur); } else scroll.append(body());
+  const scroll = el('div', 'mu-scroll'); const sb = sessBanner(); if (sb) scroll.append(sb); if (lyricsOpen) { const lv = el('div', 'mu-lyr'); lv.dataset.rel = player.cur?.rel || ''; scroll.append(lv); fillLyrics(lv, player.cur); } else scroll.append(body());
   sec.append(hd, bar, scroll, playerBar(false));
   // перетащили файлы из проводника — копируем в папку
   sec.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); sec.classList.add('drop'); } });
@@ -744,11 +772,257 @@ function soundDlg() {
   });
 }
 
+// ---------- реакции ----------
+// Реакция на трек — эмодзи: каждая сама становится плейлистом. Её можно поставить на конкретную секунду (на дроп, на строчку).
+let RX = { on: {}, custom: [], friends: {} };   // on: ключ трека → {эмодзи: {m: [секунды]}}; friends: ключ → {id друга: [эмодзи]}
+const loadRX = () => { try { const j = JSON.parse(H.store.get('musicRx', '{}')); RX = { on: j.on || {}, custom: Array.isArray(j.custom) ? j.custom : [], friends: j.friends || {} }; } catch (e) { RX = { on: {}, custom: [], friends: {} }; } };
+const saveRX = () => H.store.set('musicRx', JSON.stringify(RX));
+const BASE_RX = [['🔥', 'Огонь'], ['😢', 'Грустно'], ['💃', 'Танцевать'], ['🌙', 'Ночное'], ['🏋️', 'Тренировка'], ['❤️', 'Люблю'], ['😂', 'Смешно'], ['🚗', 'В дорогу']];
+const allRx = () => [...BASE_RX, ...RX.custom.map(c => [c.e, c.name])];
+const rxName = e => (allRx().find(x => x[0] === e) || [e, e])[1];
+const rxKey = t => t.h || t.rel;
+const rxMine = t => RX.on[t.h] || RX.on[t.rel] || null;
+const rxFriends = t => RX.friends[t.h] || RX.friends[t.rel] || null;
+function migrateRx(t) {   // посчитали хэш — реакции переезжают с имени файла на хэш: переименование и перенос файла их не теряют
+  if (!t.h) return;
+  for (const bag of [RX.on, RX.friends]) if (bag[t.rel] && t.rel !== t.h) { bag[t.h] = Object.assign(bag[t.h] || {}, bag[t.rel]); delete bag[t.rel]; saveRX(); }
+}
+function toggleRx(t, e, pos) {
+  const k = rxMine(t) ? (RX.on[t.h] ? t.h : t.rel) : rxKey(t); const o = (RX.on[k] ||= {});
+  if (pos == null) { if (o[e]) delete o[e]; else o[e] = { m: [] }; }
+  else { const y = (o[e] ||= { m: [] }), p = Math.round(pos); if (!y.m.includes(p)) y.m.push(p); }
+  if (!Object.keys(o).length) delete RX.on[k];
+  saveRX(); repaint(); player.sync();
+}
+function fly(e, who) {   // летающая эмодзи — своя и друзей
+  const n = el('div', 'mu-fly'); n.textContent = e; if (who) n.append(el('small', '', who));
+  n.style.left = (35 + Math.random() * 40) + '%'; document.body.append(n); setTimeout(() => n.remove(), 2800);
+}
+const rxTracks = e => allTracks().filter(t => rxMine(t)?.[e]);
+function reactPalette(x, y, t, pos) {
+  document.querySelectorAll('.mx-pop').forEach(n => n.remove());
+  const pal = el('div', 'menu mx-pop mu-pal');
+  Object.assign(pal.style, { position: 'fixed', left: Math.max(8, Math.min(x, innerWidth - 300)) + 'px', top: Math.max(8, y - 150) + 'px', zIndex: 60 });
+  const mine = rxMine(t) || {};
+  for (const [e, name] of allRx()) {
+    const b = el('button', mine[e] ? 'on' : ''); b.textContent = e; b.title = name + (pos != null ? ' — на ' + fmt(pos) : '');
+    b.onclick = () => {
+      toggleRx(t, e, pos); if (pos != null || !mine[e]) { fly(e); netReact(t, e, pos); }
+      pal.remove();
+    };
+    pal.append(b);
+  }
+  const add = el('button', 'add'); add.textContent = '＋'; add.title = 'Своя реакция'; add.onclick = () => { pal.remove(); customRxDlg(); }; pal.append(add);
+  document.body.append(pal); pal.addEventListener('click', e => e.stopPropagation());
+}
+function customRxDlg() {
+  H.modal((card, close) => {
+    const em = el('input'), nm = el('input'); em.type = nm.type = 'text'; em.maxLength = 8; nm.maxLength = 24; em.placeholder = 'Эмодзи, например 🎸'; nm.placeholder = 'Название — «для дороги»';
+    const ok = H.btnEl('Добавить', 'pri', () => { const e = em.value.trim(), n = nm.value.trim(); if (!e || !n) return; if (!allRx().some(x => x[0] === e)) { RX.custom.push({ e, name: n.slice(0, 24) }); saveRX(); } close(); repaint(); });
+    const row = el('div', 'row'); row.append(H.btnEl('Отмена', '', close), ok);
+    card.append(el('h2', '', 'Своя реакция'), el('p', '', 'Она станет отдельным плейлистом: все треки с этой реакцией соберутся вместе.'), em, nm, row); setTimeout(() => em.focus(), 50);
+  });
+}
+function rxChips(t) {
+  const mine = rxMine(t), fr = rxFriends(t); if (!mine && !fr) return null;
+  const s = el('span', 'mu-rxs');
+  for (const e of Object.keys(mine || {})) s.append(el('i', 'me', e));
+  const seen = new Set(Object.keys(mine || {}));
+  for (const [uid, list] of Object.entries(fr || {})) for (const e of list) if (!seen.has(e)) { seen.add(e); const i = el('i', 'fr', e); i.title = H.net.nameOf(uid) + ': ' + rxName(e); s.append(i); }
+  return s;
+}
+
+// ---------- слушать вместе ----------
+// Ведущий играет, остальные слышат то же самое секунда в секунду. У кого трек есть (узнаём по SHA-256) — играет у себя,
+// остальные слушают трансляцию ведущего. Всё идёт напрямую между компьютерами.
+let sess = null;   // {sid, host, hostL, hostU, peers: Map(uid → {L, name, mode, last, call}), track, off, offs, mode, hold, userPaused, aud, timers}
+const netTo = (to, m) => { try { return H.net.send(to, { t: 'mu', ...m }); } catch (e) { return false; } };
+const isGuest = () => !!sess && !sess.host;
+const guestBlock = () => { if (isGuest()) { H.toast('Здесь управляет ' + H.net.nameOf(sess.hostU)); return true; } return false; };
+let streamDest = null;
+const sdpHq = sdp => sdp.replace('useinbandfec=1', 'useinbandfec=1;stereo=1;sprop-stereo=1;maxaveragebitrate=192000');
+async function hostState() {
+  const t = player.cur; const base = { sid: sess.sid, k: 'st' };
+  if (!t || !decks || !decks[deckI].rel) return { ...base, idle: 1 };
+  if (!t.h) { const h = await MU.hash(t.p).catch(() => ''); if (h) { t.h = h; hashIdx = null; migrateRx(t); tx('tracks', 'readwrite', s => s.put(t)).catch(() => {}); } }
+  return { ...base, h: t.h || '', title: t.title, artist: t.artist, album: t.album, dur: t.dur || 0, playing: !au.paused, pos: au.currentTime, ts: Date.now(), rate: au.playbackRate || 1 };
+}
+async function bcast(only) {
+  if (!sess?.host) return;
+  const m = await hostState(); if (!sess?.host) return;
+  if (only) netTo(only, m); else for (const p of sess.peers.values()) netTo(p.L, m);
+}
+function sessSync() { if (!sess?.host) return; clearTimeout(sess.syncT); sess.syncT = setTimeout(() => bcast(), 60); }
+function newSess(host, sid) {
+  sess = { sid, host, hostL: null, hostU: '', peers: new Map(), track: null, off: 0, offs: [], mode: 'wait', hold: 0, userPaused: false, aud: null, last: Date.now(), timers: [] };
+  sess.timers.push(setInterval(tickSess, 4000));
+  sessUi();
+}
+function dropSess() {
+  if (!sess) return;
+  for (const t of sess.timers) clearInterval(t); clearTimeout(sess.syncT);
+  for (const p of sess.peers.values()) try { p.call?.close(); } catch (e) {}
+  if (sess.aud) { try { sess.aud.pause(); sess.aud.srcObject = null; } catch (e) {} }
+  sess = null; sessUi(); player.sync();
+}
+function endSess(notify) {
+  if (!sess) return;
+  if (sess.host) { for (const p of sess.peers.values()) netTo(p.L, { k: 'end', sid: sess.sid }); }
+  else if (notify && sess.hostL) netTo(sess.hostL, { k: 'leave', sid: sess.sid });
+  dropSess();
+}
+function tickSess() {
+  if (!sess) return;
+  if (sess.host) {
+    for (const [u, p] of [...sess.peers]) if (Date.now() - p.last > 40000) { try { p.call?.close(); } catch (e) {} sess.peers.delete(u); H.toast(p.name + ' вышел(-ла) из прослушивания'); sessUi(); }
+    bcast();
+  } else {
+    if (Date.now() - sess.last > 25000) { H.toast('Связь с ведущим потеряна — прослушивание закончено'); dropSess(); return; }
+    if (sess.hostL) netTo(sess.hostL, { k: 'ping', sid: sess.sid, c: Date.now() });
+  }
+}
+// ведущий: позвать друга
+function inviteTo(uid) {
+  if (!sess) newSess(true, uid.slice(0, 3) + Math.random().toString(36).slice(2, 8));
+  const t = player.cur;
+  netTo(uid, { k: 'inv', sid: sess.sid, title: t?.title || '', artist: t?.artist || '' });
+  H.toast('Позвал(а) ' + H.net.nameOf(uid));
+}
+// гость: пришло приглашение
+function onInvite(L, d) {
+  if (sess) { netTo(L, { k: 'busy', sid: String(d.sid || '') }); return; }
+  const who = H.net.nameOf(L.uid), sid = String(d.sid || '').slice(0, 20); if (!sid) return;
+  const ring = setTimeout(() => dlg?.close?.(), 90000); let dlg = null;
+  H.modal((card, close) => {
+    dlg = { close };
+    card.append(el('h2', '', '🎧 ' + who + ' зовёт слушать вместе'), el('p', '', d.title ? 'Сейчас играет: «' + String(d.title).slice(0, 80) + '»' + (d.artist ? ' — ' + String(d.artist).slice(0, 60) : '') : 'Музыка у ' + who + ' скоро начнётся.'));
+    const row = el('div', 'row');
+    row.append(H.btnEl('Не сейчас', '', () => { clearTimeout(ring); netTo(L, { k: 'no', sid }); close(); }), H.btnEl('Присоединиться', 'pri', () => {
+      clearTimeout(ring); close(); if (sess) return;
+      newSess(false, sid); sess.hostL = L; sess.hostU = L.uid; netTo(L, { k: 'join', sid }); H.openSelf(); H.toast('Подключаюсь к ' + who + '…');
+    }));
+    card.append(row);
+  });
+}
+function onMusicMsg(L, d) {
+  const k = d.k, sid = String(d.sid || '');
+  if (k === 'inv') return onInvite(L, d);
+  if (k === 'no' || k === 'busy') { if (sess?.host && sess.sid === sid) H.toast(H.net.nameOf(L.uid) + (k === 'no' ? ' пока не может' : ' сейчас слушает другое')); return; }
+  if (k === 'rx') { onFriendRx(L, d); relayRx(L, d); return; }
+  if (!sess || sess.sid !== sid) return;
+  if (sess.host) {
+    if (k === 'join') { sess.peers.set(L.uid, { L, name: H.net.nameOf(L.uid), mode: 'wait', last: Date.now(), call: null }); H.toast(H.net.nameOf(L.uid) + ' слушает вместе с тобой'); sessUi(); bcast(L); }
+    else if (k === 'leave') { const p = sess.peers.get(L.uid); try { p?.call?.close(); } catch (e) {} sess.peers.delete(L.uid); H.toast(H.net.nameOf(L.uid) + ' вышел(-ла)'); sessUi(); }
+    else if (k === 'ping') { const p = sess.peers.get(L.uid); if (p) { p.last = Date.now(); p.L = L; } netTo(L, { k: 'pong', sid, c: d.c, s: Date.now() }); }
+    else if (k === 'mode') { const p = sess.peers.get(L.uid); if (p) { p.mode = String(d.m || ''); sessUi(); } }
+    else if (k === 'need') startStreamTo(L);
+  } else {
+    if (L.uid !== sess.hostU) return;
+    if (k === 'st') { sess.last = Date.now(); sess.hostL = L; applySt(d); }
+    else if (k === 'pong') { const now = Date.now(), rtt = now - (+d.c || now); sess.offs.push({ rtt, off: (+d.s || now) + rtt / 2 - now }); if (sess.offs.length > 8) sess.offs.shift(); sess.off = sess.offs.reduce((a, b) => b.rtt < a.rtt ? b : a).off; }
+    else if (k === 'end') { H.toast(H.net.nameOf(L.uid) + ' закончил(-а) прослушивание'); dropSess(); }
+  }
+}
+// трансляция: ведущий отдаёт то, что играет у него (после эквалайзера), тем, у кого такого трека нет
+function startStreamTo(L) {
+  if (!sess?.host) return; const p = sess.peers.get(L.uid); if (!p || p.call) return;
+  ensureAudio();
+  if (!streamDest) { streamDest = actx.createMediaStreamDestination(); master.connect(streamDest); }
+  const pr = H.net.peer(); if (!pr) return;
+  try { const c = pr.call(L.peer, streamDest.stream, { metadata: { mu: sess.sid }, sdpTransform: sdpHq }); p.call = c; c.on('close', () => { if (p.call === c) p.call = null; }); c.on('error', () => { if (p.call === c) p.call = null; }); } catch (e) { console.warn('[музыка] трансляция', e); }
+}
+function onMusicCall(c) {
+  if (!isGuest() || c.metadata?.mu !== sess.sid) { try { c.close(); } catch (e) {} return; }
+  c.answer();
+  c.on('stream', s => {
+    if (!sess) return;
+    const a = sess.aud ||= new Audio(); a.srcObject = s; a.volume = player.vol; a.muted = sess.mode !== 'stream'; a.play().catch(() => {});
+  });
+}
+function setMode(m) {
+  if (sess.mode === m) return; sess.mode = m; if (sess.aud) sess.aud.muted = m !== 'stream';
+  if (sess.hostL) netTo(sess.hostL, { k: 'mode', sid: sess.sid, m }); sessUi();
+}
+// гость: подтянуться к состоянию ведущего
+function applySt(st) {
+  sess.track = st.idle ? null : { h: st.h, title: st.title, artist: st.artist, album: st.album, dur: st.dur };
+  if (st.idle) { if (decks) { silence(decks[0]); silence(decks[1]); } setMode('wait'); player.sync(); sessUi(); return; }
+  const local = byHash(st.h), hostNow = Date.now() + sess.off;
+  const target = st.pos + (st.playing ? Math.max(0, hostNow - st.ts) / 1000 * (st.rate || 1) : 0);
+  if (local) {
+    if (sess.aud) sess.aud.muted = true;
+    const changed = player.cur?.rel !== local.rel || !decks || !decks[deckI].rel;
+    if (changed) {
+      setMode('local'); sess.internal = true; setQueue([local], 0); sess.internal = false;   // setQueue сам запускает; ниже подгоняем позицию и паузу
+      sess.hold = Date.now() + 1500; au.currentTime = target; if (!st.playing || sess.userPaused) au.pause();
+    } else {
+      setMode('local');
+      if (au.playbackRate !== (st.rate || 1)) for (const d of decks) d.el.playbackRate = st.rate || 1;
+      if (!st.playing) { if (!au.paused) au.pause(); if (Math.abs(au.currentTime - st.pos) > 0.3) au.currentTime = st.pos; }
+      else if (!sess.userPaused) {
+        if (au.paused) { au.currentTime = target; au.play().catch(() => {}); sess.hold = Date.now() + 1500; }
+        else if (Date.now() > sess.hold && Math.abs(au.currentTime - target) > 0.35) { au.currentTime = target; sess.hold = Date.now() + 1500; }
+      }
+    }
+  } else {
+    if (decks) { for (const d of decks) { if (!d.el.paused) d.el.pause(); } }
+    if (sess.mode !== 'stream') { setMode('stream'); netTo(sess.hostL, { k: 'need', sid: sess.sid }); }
+    if (sess.aud) sess.aud.muted = !!sess.userPaused;
+  }
+  sessUi(); player.sync();
+}
+// чужая реакция: летит эмодзи, запоминаем «вайб» трека
+function onFriendRx(L, d) {
+  const e = String(d.e || '').slice(0, 8); if (!e) return;
+  const who = (sess && !sess.host && L.uid === sess.hostU && d.by) ? String(d.by).slice(0, 12) : L.uid;   // ведущий пересылает чужие реакции и называет автора
+  const t = byHash(String(d.h || '')); const key = t ? rxKey(t) : String(d.h || ''); if (!key) return;
+  const lst = ((RX.friends[key] ||= {})[who] ||= []); if (!lst.includes(e)) lst.push(e); saveRX();
+  fly(e, H.net.nameOf(who)); repaint();
+}
+function netReact(t, e, pos) {
+  if (!sess) return;
+  const m = { k: 'rx', sid: sess.sid, h: t.h || '', e, pos: pos == null ? -1 : Math.round(pos) };
+  if (sess.host) for (const p of sess.peers.values()) netTo(p.L, m); else if (sess.hostL) netTo(sess.hostL, m);
+}
+// кому-то пришло от ведущего «rx» ретранслировать остальным гостям
+const relayRx = (L, d) => { if (sess?.host && sess.sid === String(d.sid || '')) for (const [u, p] of sess.peers) if (u !== L.uid) netTo(p.L, { k: 'rx', sid: sess.sid, h: d.h, e: d.e, pos: d.pos, by: L.uid }); };
+
+// окно «Вместе» и полоска состояния
+function togetherDlg() {
+  H.modal((card, close) => {
+    card.append(el('h2', '', '🎧 Слушать вместе'));
+    if (sess) {
+      const me = sess.host ? 'Ты ведёшь: что играет у тебя — слышат все.' : 'Ведёт ' + H.net.nameOf(sess.hostU) + ': его музыка играет и у тебя.';
+      card.append(el('p', '', me));
+      if (sess.host) { const lst = el('div', 'mu-pick'); for (const p of sess.peers.values()) { const r = el('div', 'mu-prow'); r.append(el('b', '', p.name), el('span', '', p.mode === 'stream' ? 'по трансляции' : p.mode === 'local' ? 'играет у себя' : 'подключается')); lst.append(r); } if (!sess.peers.size) lst.append(el('p', '', 'Пока никого — жди ответа.')); card.append(lst); }
+    } else card.append(el('p', '', 'Включи музыку и позови друга: вы услышите одно и то же в одну секунду. Если трека у друга нет, он услышит твою трансляцию.'));
+    if (!isGuest()) {
+      const fr = H.net.friends().filter(f => !sess || !sess.peers.has(f.id)); const box = el('div', 'mu-pick');
+      for (const f of fr) { const b = el('button', 'mu-prow'); b.append(el('b', '', f.name), el('span', '', 'позвать')); b.onclick = () => { inviteTo(f.id); close(); }; box.append(b); }
+      if (!fr.length) box.append(el('p', '', 'Сейчас нет друзей онлайн с новым Кинозалом (1.15 или новее).'));
+      card.append(el('h3', 'mu-h2', 'Позвать'), box);
+    }
+    const row = el('div', 'row');
+    if (sess) row.append(H.btnEl(sess.host ? 'Закончить' : 'Выйти', '', () => { endSess(true); close(); }));
+    row.append(H.btnEl('Готово', 'pri', close)); card.append(row);
+  });
+}
+let sessUiT = 0;
+function sessUi() { clearTimeout(sessUiT); sessUiT = setTimeout(() => { if (shown) repaint(); for (const b of player.bars) b.sync(); }, 80); }
+function sessBanner() {
+  if (!sess) return null;
+  const b = el('div', 'mu-sess');
+  const txt = sess.host ? '🎧 Ты ведёшь прослушивание · ' + (sess.peers.size ? [...sess.peers.values()].map(p => p.name).join(', ') : 'ждём друзей')
+    : '🎧 Слушаешь вместе с ' + H.net.nameOf(sess.hostU) + ' · ' + (sess.mode === 'stream' ? 'по трансляции (трека у тебя нет)' : sess.mode === 'local' ? 'играет у тебя' : 'подключаюсь…');
+  b.append(el('span', '', txt), H.btnEl(sess.host ? 'Закончить' : 'Выйти', '', () => endSess(true)));
+  return b;
+}
+
 // ---------- подключение к приложению ----------
 let ready = false;
 async function init() {
   if (ready) return; ready = true;
-  loadPL(); loadCfg();
+  loadPL(); loadCfg(); loadRX();
   player.vol = Math.max(0, Math.min(1, +H.store.get('musicVol', '1') || 1)); 
   player.shuffle = H.store.get('musicShuffle', '0') === '1'; player.repeat = ['off', 'all', 'one'].includes(H.store.get('musicRepeat', 'off')) ? H.store.get('musicRepeat', 'off') : 'off';
   sortBy = sorters[H.store.get('musicSort', 'title')] ? H.store.get('musicSort', 'title') : 'title';
@@ -757,9 +1031,13 @@ async function init() {
   refresh();
 }
 window.kzMusic = {
-  tracks: () => [...lib.values()].map(t => ({ p: t.p, rel: t.rel, dur: t.dur, tagged: t.tagged, busy: t.busy })),
+  // громкость принимаемой трансляции — для проверки, что звук действительно идёт
+  level: async () => { if (!sess?.aud?.srcObject) return -1; const c = new AudioContext(), src = c.createMediaStreamSource(sess.aud.srcObject), an = c.createAnalyser(); src.connect(an); const b = new Float32Array(an.fftSize); let m = 0; for (let i = 0; i < 10; i++) { await new Promise(r => setTimeout(r, 100)); an.getFloatTimeDomainData(b); m = Math.max(m, Math.sqrt(b.reduce((a, x) => a + x * x, 0) / b.length)); } c.close(); return +m.toFixed(4); },
+  onMsg: (L, d) => { if (H) onMusicMsg(L, d); },
+  onCall: c => { if (H) onMusicCall(c); else { try { c.close(); } catch (e) {} } },
+  tracks: () => [...lib.values()].map(t => ({ p: t.p, rel: t.rel, h: !!t.h, dur: t.dur, tagged: t.tagged, busy: t.busy })),
   durAll,
-  debug: () => ({ decks: decks && decks.map(d => ({ rel: d.rel.slice(-14), paused: d.el.paused, g: +d.g.gain.value.toFixed(2), t: +d.el.currentTime.toFixed(1), rate: d.el.playbackRate })), eq: eqNodes.map(n => n.gain.value), xf: cfg.xf, q: player.queue, qi: player.qi, paused: au.paused, err: au.error && au.error.message, code: au.error && au.error.code, src: au.src, t: au.currentTime, dur: au.duration, ready: au.readyState }),
+  debug: () => ({ sess: sess && { host: sess.host, mode: sess.mode, track: sess.track && sess.track.title, aud: !!sess.aud, audOn: !!(sess.aud && !sess.aud.paused && !sess.aud.muted), off: Math.round(sess.off), peers: sess.peers.size }, decks: decks && decks.map(d => ({ rel: d.rel.slice(-14), paused: d.el.paused, g: +d.g.gain.value.toFixed(2), t: +d.el.currentTime.toFixed(1), rate: d.el.playbackRate })), eq: eqNodes.map(n => n.gain.value), xf: cfg.xf, q: player.queue, qi: player.qi, paused: au.paused, err: au.error && au.error.message, code: au.error && au.error.code, src: au.src, t: au.currentTime, dur: au.duration, ready: au.readyState }),
   // H: {store, toast, modal, btnEl, host(): контейнер раздела, side: боковая колонка, openSelf(), close()}
   mount(h) {
     H = h; init();
