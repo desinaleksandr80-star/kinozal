@@ -493,6 +493,19 @@ function setupFiles() {
     log('[файлы] получена папка', to, m.files.length, 'файлов');
     return to;
   });
+  // перетаскивание файла из списка «Файлы» — настоящий перенос Windows: в чат, в зал, на рабочий стол, в проводник, в любую программу.
+  // Файлов, которых нет на диске (небольшие, из переписки), вытаскиваем во временную папку — на каждый случай стираем старое.
+  const dragRoot = () => path.join(app.getPath('temp'), 'kinozal-drag'), dragTmp = new Set();
+  try { for (const d of fs.readdirSync(dragRoot())) { const p = path.join(dragRoot(), d); if (Date.now() - fs.statSync(p).mtimeMs > 864e5) fs.rmSync(p, { recursive: true, force: true }); } } catch (e) {}
+  ipcMain.handle('kz:dragtemp', async (e, name, data) => {
+    const dir = path.join(dragRoot(), Math.random().toString(36).slice(2, 10)); await fsp.mkdir(dir, { recursive: true });
+    const p = path.join(dir, safeName(name)); await fsp.writeFile(p, Buffer.from(data.buffer, data.byteOffset, data.byteLength)); dragTmp.add(p); return p;
+  });
+  const dragIcon = () => { try { const i = nativeImage.createFromPath(path.join(__dirname, 'build', 'icon.png')); return i.isEmpty() ? i : i.resize({ width: 40 }); } catch (er) { return nativeImage.createEmpty(); } };
+  ipcMain.on('kz:dragstart', (e, p) => {
+    p = String(p || ''); if (!path.isAbsolute(p) || !(allowed(p) || dragTmp.has(p))) return;
+    try { e.sender.startDrag({ file: p, icon: dragIcon() }); } catch (er) { log('[файлы] перетаскивание не началось:', er?.message || er); }
+  });
   ipcMain.handle('kz:fshow', (e, p) => {
     p = String(p || '');
     if (!sends.has(p) && !inRoots(p)) return false;

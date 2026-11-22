@@ -223,10 +223,11 @@
 
 /* узкая область — правая панель в зале и маленькое окно */
 @container mu (max-width: 760px){
-  .mu-bar:not(.mini){grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto;row-gap:8px}
-  .mu-bar:not(.mini) .mu-mid{grid-column:1/-1;grid-row:2}
+  .mu-bar:not(.mini){grid-template-columns:auto minmax(0,1fr);grid-template-areas:"cv info" "mid mid" "right right";row-gap:8px;padding:10px 14px}
+  .mu-bar:not(.mini)>.mu-cvh{grid-area:cv}.mu-bar:not(.mini)>.mu-info{grid-area:info}.mu-bar:not(.mini)>.mu-mid{grid-area:mid}.mu-bar:not(.mini)>.mu-right{grid-area:right;justify-content:center}
   .mu-right .mu-vol,.mu-vi{display:none}
   .mu-right{flex-wrap:wrap}
+  .mu-q{flex-basis:100%}.mu-stat{display:none}.mu-tools{margin-left:0}
   .mu-mode span{display:none}.mu-mode{padding:8px 12px}
   .mu-tool{gap:8px}.mu-tool .ftabs{width:100%;overflow-x:auto}
   .mu-chead{flex-direction:column;align-items:flex-start}

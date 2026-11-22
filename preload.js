@@ -10,6 +10,8 @@ const files = {
   done: (id, name, t) => ipcRenderer.invoke('kz:fdone', id, name, t),
   drop: id => ipcRenderer.invoke('kz:fdrop', id),
   show: p => ipcRenderer.invoke('kz:fshow', p),
+  dragOut: p => ipcRenderer.send('kz:dragstart', p),
+  dragTemp: (name, data) => ipcRenderer.invoke('kz:dragtemp', name, data),
   dir: () => ipcRenderer.invoke('kz:fdir'),
   // папки: что это — файл или папка, выбрать папку, опись, чтение и запись склеенного потока
   kind: f => { try { return ipcRenderer.invoke('kz:fkind', webUtils.getPathForFile(f)); } catch (e) { return Promise.resolve(''); } },

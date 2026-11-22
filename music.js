@@ -806,7 +806,7 @@ function paint() {
     const b = el('button', 'mu-mode' + (mode === k ? ' on' : '')); b.append(el('i', '', ic), el('span', '', t));
     if (k === 'together' && sess) b.append(el('u', '', sess.host ? String(sess.peers.size) : '●'));
     if (k === 'bg' && bg.queue.length && !bgEl.paused) b.append(el('u', 'live', ''));
-    b.onclick = () => gotoMode(k); seg.append(b);
+    b.title = t; b.onclick = () => gotoMode(k); seg.append(b);
   }
   hd.append(seg);
   sec.append(hd);

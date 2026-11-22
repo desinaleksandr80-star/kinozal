@@ -996,7 +996,7 @@ function blobUrl(id) { return urls.get(id); }
 async function mediaUrl(m) { if (urls.has(m.id)) return urls.get(m.id); const b = await blobGet(m.id); if (!b) return ''; const u = URL.createObjectURL(b); urls.set(m.id, u); return u; }
 function freeUrls() { stopVoice(); for (const u of urls.values()) URL.revokeObjectURL(u); urls.clear(); }
 function showEmpty() {
-  closePanel(); filesOpen = false; musicApi?.hide();
+  closePanel(true); filesOpen = false; musicApi?.hide();
   const main = $('#mxMain'); main.textContent = ''; root.classList.remove('chat-open');
   const e = el('div', 'mx-empty');
   e.innerHTML = IC.logo;
@@ -2079,35 +2079,79 @@ async function liveItems() {
 const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).size;
 // ---------- музыка (только программа для Windows; сам раздел — в music.js) ----------
 let musicApi = null;
+function swapAnim(h) { if (!h) return; h.classList.remove('sw-in'); void h.offsetWidth; h.classList.add('sw-in'); setTimeout(() => h.classList.remove('sw-in'), 340); }
 function openMusic() {
   if (!musicApi) return;
-  closePanel();
+  closePanel(true); swapAnim($('#mxMain'));
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = false; root.classList.add('chat-open'); renderList(); musicApi.show();
 }
 function closeMusic() { if (panelW === 'music') { closePanel(); return; } musicApi?.hide(); showEmpty(); }
-// «Музыка» и «Файлы» прямо в зале (звонок и Кинозал): правая панель, из зала выходить не нужно
-function closePanel() {
+// «Музыка» и «Файлы» прямо в зале (звонок и Кинозал): панель-«док» справа. Зал сжимается и уступает ей место, а не перекрывается;
+// панель можно растянуть мышью за левый край или раскрыть на весь экран. Смена Музыка ↔ Файлы идёт плавно.
+let panelCfg = { w: 0, full: false }; try { Object.assign(panelCfg, JSON.parse(store.get('panelCfg', '{}'))); } catch (e) {}
+const savePanelCfg = () => store.set('panelCfg', JSON.stringify({ w: panelCfg.w, full: panelCfg.full }));
+const panelWidth = () => Math.min(Math.max(panelCfg.w || Math.round(innerWidth * 0.46), 380), Math.max(380, innerWidth - 320));
+let panelTimer = 0, relayoutRaf = 0;
+function relayout(ms = 380) {   // пока панель едет, подгоняем плитки и видео под меняющуюся ширину зала
+  const t0 = performance.now(); cancelAnimationFrame(relayoutRaf);
+  const tick = () => { window.dispatchEvent(new Event('resize')); if (performance.now() - t0 < ms) relayoutRaf = requestAnimationFrame(tick); };
+  tick();
+}
+function panelApply() {
+  const room = document.getElementById('room'), dr = document.getElementById('rDrawer'); if (!room || !dr) return;
+  const full = panelCfg.full || innerWidth < 900;
+  room.style.setProperty('--rdw', panelWidth() + 'px');
+  room.classList.toggle('panel-open', !!panelW); room.classList.toggle('panel-full', !!panelW && full);
+  dr.classList.toggle('full', full);
+  const fb = document.getElementById('rdFull'); if (fb) { fb.hidden = innerWidth < 900; fb.textContent = panelCfg.full ? '⤡' : '⤢'; fb.title = panelCfg.full ? 'Вернуть боковую панель' : 'Во весь экран'; }
+}
+function closePanel(instant) {
   const dr = document.getElementById('rDrawer'); if (!dr || !panelW) return;
   const w = panelW; panelW = '';
   if (w === 'music') musicApi?.hide(); else { filesOpen = false; fHostEl = null; }
-  dr.hidden = true; const b = document.getElementById('rdBody'); if (b) b.textContent = '';
   for (const id of ['roomMusic', 'roomFiles']) document.getElementById(id)?.classList.remove('on');
+  document.getElementById('room')?.classList.remove('panel-open', 'panel-full');
+  dr.classList.remove('open'); relayout();
+  clearTimeout(panelTimer);
+  const done = () => { if (!panelW) { dr.hidden = true; const b = document.getElementById('rdBody'); if (b) b.textContent = ''; } };
+  if (instant) done(); else panelTimer = setTimeout(done, 360);
 }
 function roomPanel(w) {
   const dr = document.getElementById('rDrawer'), body = document.getElementById('rdBody'); if (!dr || !body) return;
   if (panelW === w) { closePanel(); return; }
-  closePanel();
   if (w === 'music' && !musicApi) return;
-  panelW = w; dr.hidden = false; body.textContent = '';
-  dr.style.top = Math.max(0, document.querySelector('#room .bar')?.getBoundingClientRect().bottom || 0) + 'px';   // шапка зала с кнопками остаётся видна
-  if (w === 'music') musicApi.show(body);
-  else { musicApi?.hide(); fHostEl = body; filesOpen = true; if (!['all', 'live', 'recv', 'routes'].includes(fTab) || (!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all'; renderFiles(); }
-  document.getElementById('roomMusic')?.classList.toggle('on', w === 'music'); document.getElementById('roomFiles')?.classList.toggle('on', w === 'files');
+  const mark = () => { document.getElementById('roomMusic')?.classList.toggle('on', w === 'music'); document.getElementById('roomFiles')?.classList.toggle('on', w === 'files'); };
+  const fill = () => {
+    if (w === 'music') musicApi.show(body);
+    else { musicApi?.hide(); fHostEl = body; filesOpen = true; if (!['all', 'live', 'recv', 'routes'].includes(fTab) || (!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all'; renderFiles(); }
+  };
+  if (panelW) {   // открыта другая: содержимое плавно уезжает вниз и сменяется новым
+    const was = panelW; panelW = w; mark();
+    if (was === 'music') musicApi?.hide(); else { filesOpen = false; fHostEl = null; }
+    body.classList.add('swap');
+    setTimeout(() => { if (panelW !== w) return; body.textContent = ''; fill(); body.classList.remove('swap'); }, 150);
+    return;
+  }
+  panelW = w; mark(); clearTimeout(panelTimer);
+  dr.hidden = false; body.textContent = ''; panelApply(); void dr.offsetWidth;
+  fill(); dr.classList.add('open'); relayout();
 }
+window.kzPanelFull = () => { if (!panelW) return; panelCfg.full = !panelCfg.full; savePanelCfg(); panelApply(); relayout(); };
+window.addEventListener('resize', () => { if (panelW) panelApply(); });
+(() => {   // потянул за левый край — ширина панели
+  const g = document.getElementById('rdGrip'); if (!g) return;
+  g.addEventListener('pointerdown', e => {
+    e.preventDefault(); g.setPointerCapture(e.pointerId);
+    const room = document.getElementById('room'); room.classList.add('dragging');
+    const mv = ev => { panelCfg.w = Math.round(innerWidth - ev.clientX - 10); panelApply(); window.dispatchEvent(new Event('resize')); };
+    const up = () => { g.removeEventListener('pointermove', mv); g.removeEventListener('pointerup', up); room.classList.remove('dragging'); savePanelCfg(); };
+    g.addEventListener('pointermove', mv); g.addEventListener('pointerup', up);
+  });
+})();
 window.kzPanel = roomPanel;
 function openFiles(tab) {
-  closePanel(); musicApi?.hide();
+  closePanel(true); swapAnim($('#mxMain')); musicApi?.hide();
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
   if ((!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all';
@@ -2306,6 +2350,61 @@ async function fillAll(bar, list, gen) {
   }
   if (items.length > fl.shown) { const more = el('button', 'btn fmore', 'Показать ещё ' + Math.min(300, items.length - fl.shown) + ' из ' + (items.length - fl.shown)); more.onclick = () => { fl.shown += 300; renderFiles(); }; list.append(more); }
 }
+// ---------- перетаскивание файлов из списка ----------
+// Взял файл левой кнопкой и потащил — это настоящий перенос Windows: можно бросить в чат, в зал, на рабочий стол, в проводник, в другую программу.
+// Пока тащишь: если вывел за рамки боковой панели в зале — панель закрывается, чтобы открыть то, что за ней; если завис над кнопкой или чатом
+// (например, «← Чаты», потом нужный чат) — он подсвечивается и через полсекунды открывается, не отпуская файл.
+const dnd = {
+  on: false, last: 0, spring: null, springT: 0, outT: 0,
+  begin() { this.on = true; this.last = Date.now(); document.documentElement.classList.add('dnd'); },
+  end() { this.on = false; clearTimeout(this.springT); clearTimeout(this.outT); this.outT = 0; this.spring?.classList.remove('dnd-hot'); this.spring = null; document.documentElement.classList.remove('dnd'); }
+};
+const SPRING_SEL = 'button, [role="button"], .ci, .ftab, .fchip, .mu-mode, .mu-tile';
+const SPRING_NO = /выйти|удалить|убрать|стереть|очистить|отвязать|закончить|остановить|отмена|не сейчас|отправить|заменить|в корзину/i;
+function springOk(b) {
+  if (!b || b.disabled || b.closest('.mx-modal, .menu, .mx-pop, .mx-files, #rDrawer')) return false;   // внутри самой «Музыки» и «Файлов» не переключаем
+  if (b.classList.contains('danger') || b.id === 'leaveBtn') return false;
+  return !SPRING_NO.test((b.textContent || '') + ' ' + (b.title || ''));
+}
+document.addEventListener('dragover', e => {
+  if (!dnd.on) return; dnd.last = Date.now();
+  if (panelW) {   // вынес за рамки панели — закрываем её
+    const dr = document.getElementById('rDrawer');
+    if (dr && !dr.classList.contains('full')) {
+      const r = dr.getBoundingClientRect(), out = e.clientX < r.left - 6 || e.clientX > r.right + 6 || e.clientY < r.top - 6 || e.clientY > r.bottom + 6;
+      if (out) { if (!dnd.outT) dnd.outT = setTimeout(() => { dnd.outT = 0; closePanel(); }, 140); } else if (dnd.outT) { clearTimeout(dnd.outT); dnd.outT = 0; }
+    }
+  }
+  const b = e.target.closest?.(SPRING_SEL), ok = b && springOk(b) ? b : null;
+  if (ok !== dnd.spring) {
+    clearTimeout(dnd.springT); dnd.spring?.classList.remove('dnd-hot'); dnd.spring = ok;
+    if (ok) { ok.classList.add('dnd-hot'); dnd.springT = setTimeout(() => { const x = dnd.spring; dnd.spring = null; x?.classList.remove('dnd-hot'); x?.click(); }, 650); }
+  }
+});
+document.addEventListener('drop', () => { if (dnd.on) setTimeout(() => dnd.end(), 0); });
+document.addEventListener('dragend', () => dnd.end());
+setInterval(() => { if (dnd.on && Date.now() - dnd.last > 1200) dnd.end(); }, 400);
+// Windows начинает перенос только при зажатой кнопке мыши; если кнопку уже отпустили, пока готовился файл, переносить нечего (иначе программа зависла бы в ожидании)
+let mouseDown = false;
+document.addEventListener('mousedown', e => { if (e.button === 0) mouseDown = true; }, true);
+document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; }, true);
+window.addEventListener('blur', () => { mouseDown = false; });
+function dragOut(e, getPath) {
+  if (!DESK || !APP?.files?.dragOut) return;
+  e.preventDefault(); dnd.begin();
+  Promise.resolve().then(getPath).then(p => {
+    if (!p) { dnd.end(); toast('Этот файл ещё не на диске — нечего перетаскивать'); return; }
+    if (!mouseDown) { dnd.end(); return; }
+    if (!window.__kzNoNativeDrag) APP.files.dragOut(p);   // __kzNoNativeDrag — только для проверки без мыши
+  }).catch(() => dnd.end());
+}
+const dragPathOfMsg = async m => {
+  const st = fileState(m); if (st.path && st.k === 'disk') return st.path;
+  if (isMineSrc(m) && S.src[m.id]) return S.src[m.id];
+  const b = m.blob ? await blobGet(m.id) : null; if (!b) return '';
+  return APP.files.dragTemp(fileNameOf(m), new Uint8Array(await b.arrayBuffer()));   // небольшой файл из переписки — во временную папку
+};
+const dragify = (r, getPath) => { if (!DESK) return r; r.draggable = true; r.addEventListener('dragstart', e => dragOut(e, getPath)); return r; };
 function libRow(m) {
   const r = el('div', 'frow file lib'), st = fileState(m), t = el('div', 't'), acts = el('div', 'facts');
   t.append(el('b', '', fileNameOf(m)));
@@ -2316,7 +2415,7 @@ function libRow(m) {
   for (const [txt, f] of fActions(m).slice(1)) acts.append(lnk(txt, f));
   r.append(thumbEl(m, 'fic'), t, acts);
   r.onclick = e => { if (!e.target.closest('button')) openAny(m); };
-  return r;
+  return dragify(r, () => dragPathOfMsg(m));
 }
 function libTile(m) {
   const r = el('div', 'ftile'), st = fileState(m), more = el('button', 'ib fmorebtn', '⋯');
@@ -2330,7 +2429,7 @@ function libTile(m) {
   const cap = el('div', 'cap'); cap.append(el('b', '', fileNameOf(m)), el('span', '', [m.size ? fmtSize(m.size) : '', whoName(m), st.k === 'remote' && m.big ? '☁ не скачано' : ''].filter(Boolean).join(' · ')));
   r.append(thumbEl(m, 'fpic'), cap, more); r.title = fileNameOf(m);
   r.onclick = () => openAny(m);
-  return r;
+  return dragify(r, () => dragPathOfMsg(m));
 }
 
 // --- настройка маршрутов ---
@@ -2480,7 +2579,7 @@ function recvRow(it, m) {
     ...(it.root ? [] : [lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del')]));
   r.append(ic, t, acts); r.onclick = e => { if (!e.target.closest('button')) open1(); };
   r.title = it.dir ? 'Открыть папку' : ['img', 'video', 'audio'].includes(k) ? 'Посмотреть' : 'Открыть';
-  return r;
+  return dragify(r, () => it.path);
 }
 async function openOnDisk(it) {
   if (RISKY.test(it.name) && !confirm('«' + it.name + '» — программа или скрипт. Запускай, только если доверяешь тому, кто прислал. Запустить?')) return;
@@ -3248,10 +3347,10 @@ window.kzOnRoom = (ev, info) => {
   jlog('[зал]', ev, info?.code || '');
   if (ev === 'enter') { callT0 = Date.now(); APP?.inCall?.(true); }
   if (ev === 'enter' || ev === 'show') { root.hidden = true; stopRing(); }
-  if (ev === 'hide') { closePanel(); root.hidden = false; renderList(); updCallUi(); }
+  if (ev === 'hide') { closePanel(true); root.hidden = false; renderList(); updCallUi(); }
   if (ev === 'hostgone') { toast('Звонок завершён'); setTimeout(() => window.kzRoom?.leave(), 1500); }
   if (ev === 'exit') {
-    closePanel(); root.hidden = !S.me; callT0 = 0; updCallUi(); APP?.inCall?.(false);
+    closePanel(true); root.hidden = !S.me; callT0 = 0; updCallUi(); APP?.inCall?.(false);
     if (myCall) { S.ended[myCall.code] = Date.now(); save(); sendChat(myCall.chat, { t: 'callend', code: myCall.code }); myCall = null; }
     refreshCallCards(); if (open) markRead(open);
   }

@@ -662,3 +662,12 @@ html.wall-all #mx>.mx-side{z-index:2}
 .pwbox>div{display:grid;gap:2px}.pwbox span{font-size:13px;color:var(--mute)}
 .profs .pick .btn{min-height:34px!important;padding:4px 12px}
 @media (max-width:760px){.pwbox{grid-template-columns:1fr}}
+
+/* плавная смена разделов (чаты, файлы, музыка) */
+.sw-in>*{animation:mxswap .28s cubic-bezier(.22,.9,.3,1)}
+@keyframes mxswap{from{opacity:0;transform:translateY(12px) scale(.995)}}
+/* перетаскиваешь файл и зависаешь над кнопкой или чатом — они подсвечиваются и через полсекунды открываются */
+html.dnd .dnd-hot{outline:2px solid var(--acc);outline-offset:2px;border-radius:12px;background-image:linear-gradient(90deg,color-mix(in srgb,var(--acc) 38%,transparent),color-mix(in srgb,var(--acc) 38%,transparent));background-repeat:no-repeat;background-size:0 100%;animation:dndfill .65s linear forwards}
+@keyframes dndfill{to{background-size:100% 100%}}
+html.dnd .mx-files .frow.file,html.dnd .mx-files .ftile{cursor:grabbing}
+.mx-files .frow.file[draggable=true],.mx-files .ftile[draggable=true]{cursor:grab}

@@ -179,15 +179,30 @@ button.mini{min-height:32px;padding:4px 10px;font-size:13px;font-weight:600;bord
 .viewsw{display:flex;gap:4px;padding:4px;border-radius:14px;background:#0b1012;border:1px solid var(--line)}
 .toolsw button[hidden]{display:none}
 .toolsw button.on{background:var(--panel2);color:var(--ink)}
-.rdrawer{position:fixed;top:0;right:0;bottom:0;width:min(680px,100vw);z-index:25;background:var(--bg);border-left:1px solid var(--line);box-shadow:-24px 0 70px rgba(0,0,0,.55);display:grid;grid-template-rows:minmax(0,1fr);animation:rdin .2s ease-out}
+/* музыка и файлы в зале: панель-«док» — зал сжимается и уступает ей место, а не перекрывается */
+.room{--rdw:0px;transition:padding-right .34s cubic-bezier(.22,.9,.3,1)}
+.room.panel-open{padding-right:calc(var(--rdw) + 20px)}
+.room.panel-open.panel-full{padding-right:0}
+.room.dragging,.room.dragging .rdrawer{transition:none!important}
+.rdrawer{position:fixed;top:10px;right:10px;bottom:10px;width:var(--rdw);max-width:calc(100vw - 20px);z-index:25;display:grid;grid-template-rows:minmax(0,1fr);border-radius:22px;border:1px solid var(--line);background:var(--bg);box-shadow:0 24px 80px rgba(0,0,0,.6),0 0 0 1px rgba(255,255,255,.03) inset;overflow:hidden;
+  transform:translateX(calc(100% + 30px));opacity:0;transition:transform .34s cubic-bezier(.22,.9,.3,1),opacity .24s ease,width .34s cubic-bezier(.22,.9,.3,1)}
 .rdrawer[hidden]{display:none}
-@keyframes rdin{from{transform:translateX(40px);opacity:0}}
-.rdbody{min-height:0;display:grid;grid-template-rows:minmax(0,1fr);overflow:hidden}
-.rdbody>.mx-files{min-height:0;height:100%}
-.rdx{position:absolute;top:10px;right:14px;z-index:3;width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel2);color:var(--ink);cursor:pointer;display:grid;place-items:center;padding:0;min-height:0;font-size:15px}
+.rdrawer.open{transform:none;opacity:1}
+.rdrawer.full{width:calc(100vw - 20px)}
+.rdbody{min-height:0;display:grid;grid-template-rows:minmax(0,1fr);overflow:hidden;transition:opacity .15s ease,transform .15s ease}
+.rdbody.swap{opacity:0;transform:translateY(10px)}
+.rdbody>.mx-files{min-height:0;height:100%;animation:rdswap .28s cubic-bezier(.22,.9,.3,1)}
+@keyframes rdswap{from{opacity:0;transform:translateY(12px)}}
+.rdgrip{position:absolute;left:0;top:0;bottom:0;width:10px;z-index:4;cursor:ew-resize}
+.rdgrip::after{content:"";position:absolute;left:3px;top:50%;width:4px;height:44px;margin-top:-22px;border-radius:2px;background:var(--line);opacity:0;transition:opacity .15s}
+.rdgrip:hover::after{opacity:1}
+.rdrawer.full .rdgrip{display:none}
+.rdtools{position:absolute;top:10px;right:12px;z-index:3;display:flex;gap:6px}
+.rdx{width:36px;height:36px;border-radius:50%;border:1px solid var(--line);background:var(--panel2);color:var(--ink);cursor:pointer;display:grid;place-items:center;padding:0;min-height:0;font-size:15px}
 .rdx:hover{background:var(--panel)}
-.rdrawer .mx-chead{padding-right:60px}
-.rdrawer .mx-chead .back{display:none!important}
+.rdx[hidden]{display:none}
+.rdrawer .mx-chead{padding-right:100px}
+.rdrawer .mx-chead .back{display:none!important}.rdrawer .mx-chead .back{display:none!important}
 .viewsw button{min-height:36px;padding:6px 14px;border:0;border-radius:10px;background:transparent;font-size:14px;color:var(--mute)}
 .viewsw button.on{background:var(--panel2);color:var(--ink)}
 .callarea{display:none}
@@ -315,7 +330,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
 </div>
 
 <section class="room" id="room" hidden>
-  <aside class="rdrawer" id="rDrawer" hidden aria-label="Музыка и файлы"><button class="rdx" id="rdClose" title="Закрыть" aria-label="Закрыть">✕</button><div class="rdbody" id="rdBody"></div></aside>
+  <aside class="rdrawer" id="rDrawer" hidden aria-label="Музыка и файлы"><div class="rdgrip" id="rdGrip" title="Потяни — изменить ширину"></div><div class="rdtools"><button class="rdx" id="rdFull" title="Во весь экран" aria-label="Во весь экран">⤢</button><button class="rdx" id="rdClose" title="Закрыть" aria-label="Закрыть">✕</button></div><div class="rdbody" id="rdBody"></div></aside>
   <header class="bar">
     <div class="barl"><button class="back" id="backBtn" title="К чатам — звонок продолжится">← Чаты</button><h1>Кинозал</h1></div>
     <div class="viewsw" role="group" aria-label="Что на экране"><button id="viewCine" class="on"><i>🎬 </i>Кинозал</button><button id="viewHall"><i>👥 </i>Только зал</button></div>
@@ -1176,6 +1191,7 @@ $('#viewHall').onclick=()=>setView('hall');
 $('#roomMusic').onclick=()=>window.kzPanel?.('music');
 $('#roomFiles').onclick=()=>window.kzPanel?.('files');
 $('#rdClose').onclick=()=>{const w=document.querySelector('#roomMusic.on')?'music':'files';window.kzPanel?.(w);};
+$('#rdFull').onclick=()=>window.kzPanelFull?.();
 $('#callNoteGo').onclick=()=>setView('cinema');
 $('#hallFs').onclick=()=>toggleFs();
 // своя камера в зале — маленькое окошко поверх, когда есть кто-то ещё
