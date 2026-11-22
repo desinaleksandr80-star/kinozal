@@ -1152,11 +1152,11 @@ function mEls(m, prev, next) {
   if (m.re && !locked) { const q = el('div', 'quote'); q.append(el('b', '', nameOf(m.re.from)), el('span', '', m.re.text || 'Сообщение')); q.onclick = () => jumpTo(m.re.id); b.append(q); }
   if (locked) { b.classList.remove('media'); b.append(capsuleEl(m), metaEl(m)); }
   else if (m.kind === 'text') { b.append(textEl(m.text || '')); b.append(metaEl(m)); }
-  else if (m.kind === 'img') { const i = el('img'); i.alt = 'Фото'; if (m.w && m.h) { i.width = m.w; i.height = m.h; i.style.aspectRatio = m.w + '/' + m.h; i.style.width = Math.min(360, m.w) + 'px'; i.style.height = 'auto'; } mediaUrl(m).then(u => { i.src = u; }); i.onclick = () => photo(m); b.append(i, metaEl(m)); }
+  else if (m.kind === 'img') { const i = el('img'); i.alt = 'Фото'; if (m.w && m.h) { i.width = m.w; i.height = m.h; i.style.aspectRatio = m.w + '/' + m.h; i.style.width = Math.min(360, m.w) + 'px'; i.style.height = 'auto'; } mediaUrl(m).then(u => { i.src = u; }); i.onclick = () => photo(m); dragify(i, () => dragPathOfMsg(m)); b.append(i, metaEl(m)); }
   else if (m.kind === 'voice') { b.append(voiceEl(m), metaEl(m)); }
   else if (m.kind === 'circle') { b.append(circleEl(m)); row.append(b); const mt = metaEl(m); b.append(mt); }
   else if (m.kind === 'call') { b.append(callEl(m), metaEl(m)); }
-  else if (m.kind === 'file') { b.append(fileEl(m), metaEl(m)); }
+  else if (m.kind === 'file') { b.append(dragify(fileEl(m), () => dragPathOfMsg(m)), metaEl(m)); }   // файл из чата можно утащить в другой чат, на стол, в проводник
   else if (m.kind === 'plan') { b.append(planEl(m), metaEl(m)); }
   if (m.open && !locked) b.append(el('div', 'capnote', m.open > Date.now() ? '⏳ откроется ' + whenText(m.open) : '⏳ из капсулы времени'));
   if (hasRx(m)) b.append(rxEl(m));
@@ -2361,8 +2361,12 @@ const dnd = {
 };
 const SPRING_SEL = 'button, [role="button"], .ci, .ftab, .fchip, .mu-mode, .mu-tile';
 const SPRING_NO = /выйти|удалить|убрать|стереть|очистить|отвязать|закончить|остановить|отмена|не сейчас|отправить|заменить|в корзину/i;
+const CANCEL_BTN = /^(отмена|закрыть|назад|✕)$/i;
 function springOk(b) {
-  if (!b || b.disabled || b.closest('.mx-modal, .menu, .mx-pop, .mx-files, #rDrawer')) return false;   // внутри самой «Музыки» и «Файлов» не переключаем
+  if (!b || b.disabled) return false;
+  // в открытых окнах (оформление, настройки…) можно навести на «Отмена»/«Закрыть» — окно закроется, ничего не меняя; остальные кнопки окон не нажимаются
+  if (b.closest('.mx-modal')) return CANCEL_BTN.test((b.textContent || '').trim()) || /^(отмена|закрыть)$/i.test((b.title || '').trim());
+  if (b.closest('.menu, .mx-pop, .mx-files, #rDrawer')) return false;   // внутри самой «Музыки» и «Файлов» не переключаем
   if (b.classList.contains('danger') || b.id === 'leaveBtn') return false;
   return !SPRING_NO.test((b.textContent || '') + ' ' + (b.title || ''));
 }
@@ -2390,7 +2394,7 @@ document.addEventListener('mousedown', e => { if (e.button === 0) mouseDown = tr
 document.addEventListener('mouseup', e => { if (e.button === 0) mouseDown = false; }, true);
 window.addEventListener('blur', () => { mouseDown = false; });
 function dragOut(e, getPath) {
-  if (!DESK || !APP?.files?.dragOut) return;
+  if (!DESK || !APP?.files?.dragOut || e.defaultPrevented) return;   // defaultPrevented — вложенный элемент уже взялся тащить
   e.preventDefault(); dnd.begin();
   Promise.resolve().then(getPath).then(p => {
     if (!p) { dnd.end(); toast('Этот файл ещё не на диске — нечего перетаскивать'); return; }
