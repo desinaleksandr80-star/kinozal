@@ -3,7 +3,6 @@
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const { pathToFileURL } = require('url');
 const fsp = fs.promises;
 
 const AUDIO = /\.(mp3|flac|ogg|oga|opus|wav|m4a|aac|wma|aiff?|ape|wv|mka)$/i;
@@ -14,7 +13,7 @@ function register(protocol) {
   protocol.registerSchemesAsPrivileged([{ scheme: 'kzmusic', privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true, corsEnabled: true, bypassCSP: true } }]);
 }
 
-function setup({ app, ipcMain, dialog, shell, protocol, net, getWin, log, tag }) {
+function setup({ app, ipcMain, dialog, shell, protocol, getWin, log, tag }) {
   const cfgFile = () => path.join(app.getPath('userData'), 'music.json');
   const hashFile = () => path.join(app.getPath('userData'), 'music-hash.json');
   const defRoot = () => path.join(app.getPath('downloads'), 'Кинозал', 'Музыка' + (tag || ''));   // не «Документы»: их часто синхронизирует OneDrive
@@ -25,12 +24,24 @@ function setup({ app, ipcMain, dialog, shell, protocol, net, getWin, log, tag })
   const ok = p => { p = String(p || ''); return path.isAbsolute(p) && inside(p, root()) ? p : ''; };
   const mkroot = () => fsp.mkdir(root(), { recursive: true }).catch(() => {});
 
-  // звук: kzmusic://f/<путь, закодированный> — Range передаём как есть, так работает перемотка
+  // звук: kzmusic://f/<путь, закодированный>. Диапазоны (Range) обрабатываем сами: так у плеера сразу известна длина трека
+  // и работает перемотка, а чужие файлы и пути с «..» не отдаются вообще
+  const MIME = { mp3: 'audio/mpeg', flac: 'audio/flac', ogg: 'audio/ogg', oga: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', m4a: 'audio/mp4', aac: 'audio/aac', wma: 'audio/x-ms-wma', aif: 'audio/aiff', aiff: 'audio/aiff', mka: 'audio/x-matroska' };
   protocol.handle('kzmusic', async req => {
     try {
       const u = new URL(req.url), raw = decodeURIComponent(u.pathname.slice(1)), p = ok(raw);
       if (!p || !AUDIO.test(p)) { log('[музыка] отказ в доступе:', raw, '| папка:', root()); return new Response('нет доступа', { status: 403 }); }
-      return await net.fetch(pathToFileURL(p).toString(), { headers: req.headers });
+      const size = (await fsp.stat(p)).size, m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.get('range') || '');
+      let start = 0, end = size - 1, status = 200;
+      if (m && (m[1] || m[2])) {
+        if (!m[1]) start = Math.max(0, size - +m[2]); else { start = +m[1]; if (m[2]) end = Math.min(size - 1, +m[2]); }
+        if (start > end || start >= size) return new Response(null, { status: 416, headers: { 'Content-Range': 'bytes */' + size } });
+        status = 206;
+      }
+      if (!size) return new Response(null, { status: 200, headers: { 'Content-Length': '0' } });
+      const headers = { 'Content-Type': MIME[path.extname(p).slice(1).toLowerCase()] || 'application/octet-stream', 'Content-Length': String(end - start + 1), 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*' };
+      if (status === 206) headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + size;
+      return new Response(require('stream').Readable.toWeb(fs.createReadStream(p, { start, end })), { status, headers });
     } catch (e) { return new Response('нет файла', { status: 404 }); }
   });
 
@@ -109,6 +120,19 @@ function setup({ app, ipcMain, dialog, shell, protocol, net, getWin, log, tag })
     const r = await dialog.showOpenDialog(getWin(), { title: 'Какую музыку добавить?', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Музыка', extensions: ['mp3', 'flac', 'ogg', 'oga', 'opus', 'wav', 'm4a', 'aac', 'wma', 'aif', 'aiff', 'ape', 'wv', 'mka'] }] });
     if (r.canceled) return 0;
     return addFiles(r.filePaths);
+  });
+  // текст песни рядом с файлом: «Трек.lrc» (с метками времени) или «Трек.txt»
+  ipcMain.handle('kz:mlyrics', async (e, p) => {
+    p = ok(p); if (!p) return '';
+    const base = p.slice(0, p.length - path.extname(p).length);
+    for (const ext of ['.lrc', '.LRC', '.txt']) {
+      try {
+        const b = await fsp.readFile(base + ext); if (b.length > 300e3) continue;
+        let s; try { s = new TextDecoder('utf-8', { fatal: true }).decode(b); } catch (er) { s = new TextDecoder('windows-1251').decode(b); }
+        return s.replace(/^\uFEFF/, '');
+      } catch (er) { /* нет такого файла */ }
+    }
+    return '';
   });
   ipcMain.handle('kz:mshow', (e, p) => { p = ok(p); if (p) shell.showItemInFolder(p); else shell.openPath(root()); return true; });
   ipcMain.handle('kz:mopen', async () => { await mkroot(); return shell.openPath(root()); });

@@ -50,6 +50,7 @@ const music = {
   add: list => ipcRenderer.invoke('kz:madd', list),
   addDropped: fl => ipcRenderer.invoke('kz:madd', [...fl].map(f => { try { return webUtils.getPathForFile(f); } catch (e) { return ''; } })),
   pickFiles: () => ipcRenderer.invoke('kz:mpickfiles'),
+  lyrics: p => ipcRenderer.invoke('kz:mlyrics', p),
   show: p => ipcRenderer.invoke('kz:mshow', p),
   openDir: () => ipcRenderer.invoke('kz:mopen'),
   trash: p => ipcRenderer.invoke('kz:mtrash', p),

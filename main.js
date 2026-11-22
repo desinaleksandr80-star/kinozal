@@ -261,7 +261,7 @@ app.whenReady().then(() => {
   });
 
   setupFiles();
-  kzMusic.setup({ app, ipcMain, dialog, shell, protocol, net, getWin: () => win, log, tag: prof ? '-' + prof.split('=')[1].replace(/[^\w-]/g, '') : '' });
+  kzMusic.setup({ app, ipcMain, dialog, shell, protocol, getWin: () => win, log, tag: prof ? '-' + prof.split('=')[1].replace(/[^\w-]/g, '') : '' });
   createWindow();
   setupTray();
   setupUpdates();

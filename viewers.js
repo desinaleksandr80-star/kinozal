@@ -228,6 +228,7 @@ function id3(u) {
     if (id === 'TIT2') out.title = txt(b); else if (id === 'TPE1') out.artist = txt(b); else if (id === 'TALB') out.album = txt(b);
     else if (id === 'TYER' || id === 'TDRC') out.year = txt(b).slice(0, 4);
     else if (id === 'TRCK') out.track = parseInt(txt(b), 10) || 0;
+    else if (id === 'USLT' && !out.lyrics) { const e = b[0]; let q = 4; if (e === 1 || e === 2) { while (q + 1 < b.length && (b[q] || b[q + 1])) q += 2; q += 2; } else { while (q < b.length && b[q]) q++; q++; } out.lyrics = txt(new Uint8Array([e, ...b.subarray(q)])).slice(0, 20000); }
     else if (id === 'APIC' && !out.cover) {
       const e = b[0]; let q = 1; while (q < b.length && b[q]) q++; const mime = td('latin1').decode(b.subarray(1, q)) || 'image/jpeg'; q += 2;
       if (e === 1 || e === 2) { while (q + 1 < b.length && (b[q] || b[q + 1])) q += 2; q += 2; } else { while (q < b.length && b[q]) q++; q++; }

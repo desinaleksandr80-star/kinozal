@@ -25,7 +25,7 @@
 .mu-sort{margin-left:auto;min-height:38px;border-radius:12px;padding:0 10px;background:var(--field);border:1px solid var(--line2);color:var(--ink);font:600 13px var(--font),sans-serif}
 .mu-list{display:grid;gap:4px}
 .mu-more{justify-self:center;margin-top:8px}
-.mu-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto;gap:12px;align-items:center;padding:6px 10px 6px 6px;border-radius:14px;cursor:pointer;border:1px solid transparent}
+.mu-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto auto;gap:12px;align-items:center;padding:6px 10px 6px 6px;border-radius:14px;cursor:pointer;border:1px solid transparent}
 .mu-row.sm{grid-template-columns:36px minmax(0,1fr) auto;padding:4px 8px 4px 4px}
 .mu-row:hover{background:var(--card);border-color:var(--line2)}
 .mu-row.cur{background:color-mix(in srgb,var(--acc) 12%,var(--card));border-color:color-mix(in srgb,var(--acc) 40%,var(--line2))}
@@ -86,3 +86,25 @@
 .mu-bar.mini .mu-ctl{gap:0}.mu-bar.mini .mu-ib{width:34px;height:34px}.mu-bar.mini .mu-ib.big{width:38px;height:38px}
 #mx.rail .mu-mini{display:none}
 @media (max-width:1000px){.mu-bar:not(.mini){grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto}.mu-bar:not(.mini) .mu-mid{grid-column:1/-1;grid-row:2}.mu-vol,.mu-vi{display:none}}
+
+.mu-d{font-size:12.5px;color:var(--mute);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+/* текст песни */
+.mu-lyr{display:grid;gap:14px;max-width:760px;margin:0 auto;padding:8px 0 40vh}
+.mu-lh{display:grid;gap:2px;padding-bottom:6px;border-bottom:1px solid var(--line2)}
+.mu-lh b{font:700 22px/1.2 var(--hfont),Unbounded,sans-serif}.mu-lh span{color:var(--mute)}
+.mu-lines{display:grid;gap:6px}
+.mu-ln{margin:0;font:600 20px/1.35 var(--font),Manrope,sans-serif;color:var(--mute);transition:color .25s,transform .25s;transform-origin:left center}
+.mu-ln.dim{font-size:15px;font-weight:500}
+.mu-ln.gap{min-height:.9em}
+.mu-ln.syn{cursor:pointer}.mu-ln.syn:hover{color:var(--ink)}
+.mu-ln.on{color:var(--ink);transform:scale(1.04)}
+/* окно «Звук» */
+.mu-snd{width:min(480px,100%)}
+.mu-set{display:flex;justify-content:space-between;align-items:center;gap:12px}
+.mu-set b{display:block}.mu-set span{font-size:12.5px;color:var(--mute)}
+.mu-set .mu-sort{margin-left:0;min-width:150px}
+.mu-eq{display:grid;gap:8px;padding:10px 4px}.mu-eq.off{opacity:.5}
+.mu-band{display:grid;grid-template-columns:64px minmax(0,1fr) 54px;gap:12px;align-items:center;font-size:12.5px;color:var(--mute)}
+.mu-band .mu-vol{width:100%}.mu-band span:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.mu-sleep{display:flex;gap:6px;flex-wrap:wrap}
+.mu-h2{margin:6px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}

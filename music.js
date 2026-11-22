@@ -24,6 +24,8 @@ const IC = {
   note: svg('<path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>'),
   vol: svg('<path d="M11 5 6 9H2v6h4l5 4zM15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/>'),
   back: svg('<path d="M15 5l-7 7 7 7"/>'),
+  sliders: svg('<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>'),
+  lyr: svg('<path d="M4 6h16M4 12h10M4 18h13"/>'),
   cog: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>')
 };
 
@@ -73,22 +75,58 @@ async function thumb(blob) {
   } catch (e) { return null; }
 }
 async function tagJob(t) {
+  t.busy = 1;
   try {
     const g = await readTags(t);
     if (g) {
       if (g.title) t.title = g.title; if (g.artist) t.artist = g.artist; if (g.album) t.album = g.album; if (g.year) t.year = g.year;
       if (g.track) t.track = g.track | 0;
+      if (g.lyrics) t.ly = g.lyrics;
       if (g.cover) { const b = await thumb(g.cover); if (b) { await tx('covers', 'readwrite', s => s.put(b, t.rel)); t.cv = 1; coverUrls.delete(t.rel); } }
     }
   } catch (e) { /* без тегов — останется имя файла */ }
-  t.tagged = 1;
+  t.tagged = 1; delete t.busy;
   await tx('tracks', 'readwrite', s => s.put(t)).catch(() => {});
 }
 async function pool(list, n, f) { let i = 0; await Promise.all(Array.from({ length: Math.min(n, list.length) }, async () => { while (i < list.length) { const x = list[i++]; await f(x); } })); }
+let durBusy = false;
+const key = t => t.rel + '|' + t.size + '|' + t.mtime;
+async function durAll() {   // длина каждого трека: читаем только заголовок файла, один раз
+  if (durBusy) return; durBusy = true;
+  const tried = new Set();
+  try {
+    for (;;) {
+      const todo = [...lib.values()].filter(t => !t.dur && !tried.has(key(t)));   // список могли обновить, пока читали, — берём заново
+      if (!todo.length) break;
+      await pool(todo, 3, t => new Promise(res => {
+        tried.add(key(t));
+        const a = new Audio(); a.preload = 'metadata';
+        const done = () => { clearTimeout(to); a.onloadedmetadata = a.ondurationchange = a.onerror = null; a.removeAttribute('src'); res(); };
+        const to = setTimeout(done, 8000);
+        const got = () => {   // у некоторых файлов длина известна не сразу — ждём durationchange
+          if (!isFinite(a.duration)) return;
+          const c = lib.get(t.rel); if (c) { c.dur = Math.max(1, Math.round(a.duration)); tx('tracks', 'readwrite', s => s.put(c)).catch(() => {}); }
+          done();
+        };
+        a.onloadedmetadata = got; a.ondurationchange = got;
+        a.onerror = done; a.src = MU.url(t.p);
+      }));
+      repaint();
+    }
+  } finally { durBusy = false; }
+}
 let hashing = false;
 async function hashAll() {
   if (hashing) return; hashing = true;
-  try { for (const t of [...lib.values()]) { if (t.h || !lib.has(t.rel)) continue; const h = await MU.hash(t.p).catch(() => ''); if (h) { t.h = h; hashIdx = null; await tx('tracks', 'readwrite', s => s.put(t)).catch(() => {}); } } } finally { hashing = false; }
+  const tried = new Set();
+  try {
+    for (;;) {
+      const t = [...lib.values()].find(x => !x.h && !tried.has(key(x))); if (!t) break;
+      tried.add(key(t));
+      const h = await MU.hash(t.p).catch(() => '');
+      const c = lib.get(t.rel); if (h && c) { c.h = h; hashIdx = null; await tx('tracks', 'readwrite', s => s.put(c)).catch(() => {}); }
+    }
+  } finally { hashing = false; }
 }
 async function refresh() {
   if (scanning) { again = true; return; }
@@ -99,7 +137,7 @@ async function refresh() {
     for (const f of r.files) {
       seen.add(f.rel);
       const old = lib.get(f.rel);
-      if (old && old.size === f.size && old.mtime === f.mtime && old.tagged) { old.p = f.p; continue; }
+      if (old && old.size === f.size && old.mtime === f.mtime && (old.tagged || old.busy)) { old.p = f.p; continue; }   // уже прочитан или читается прямо сейчас
       const t = mkTrack(f, old && old.size === f.size ? old : null); lib.set(f.rel, t); todo.push(t);
     }
     for (const rel of [...lib.keys()]) if (!seen.has(rel)) { lib.delete(rel); tx('tracks', 'readwrite', s => s.delete(rel)).catch(() => {}); tx('covers', 'readwrite', s => s.delete(rel)).catch(() => {}); coverUrls.delete(rel); }
@@ -109,7 +147,7 @@ async function refresh() {
     if (todo.length) repaint();
     cleanQueue();
   } catch (e) { console.warn('[музыка] список не прочитался', e); }
-  finally { scanning = false; paintStatus(); if (again) { again = false; refresh(); } else hashAll(); }
+  finally { scanning = false; paintStatus(); if (again) { again = false; refresh(); } else { durAll(); hashAll(); } }
 }
 const byHash = h => { if (!h) return null; if (!hashIdx) { hashIdx = new Map(); for (const t of lib.values()) if (t.h) hashIdx.set(t.h, t); } return hashIdx.get(h) || null; };
 
@@ -145,12 +183,59 @@ function toggleFav(t) {
 const uid = () => Math.random().toString(36).slice(2, 10);
 
 // ---------- плеер ----------
-const au = new Audio(); au.preload = 'auto';
+// Две «деки» (два <audio>) через Web Audio: пока играет одна, вторая заранее грузит следующий трек.
+// Так получаются переход без паузы (gapless) и плавное перетекание (кроссфейд). Дальше звук идёт через эквалайзер.
+const EQ_BANDS = [60, 230, 910, 3600, 14000];
+const EQ_PRESETS = { flat: ['Ровный', [0, 0, 0, 0, 0]], bass: ['Бас', [6, 4, 0, -1, -1]], voice: ['Голос', [-3, -1, 3, 3, 0]], bright: ['Яркий', [-2, 0, 1, 4, 6]], soft: ['Мягкий', [3, 2, 0, -2, -4]] };
+const sleep = { until: 0, endOfTrack: false, t: 0 };
+let actx = null, master = null, eqNodes = [], decks = null, deckI = 0, nextT = 0, fadeT = 0;
+const idleEl = new Audio();   // пока ничего не играло — на нём читаем «пусто»
+const cfg = { xf: 0, rate: 1, eqOn: false, eq: [0, 0, 0, 0, 0] };   // xf — секунд перетекания, 0 = без паузы
+const active = () => (decks ? decks[deckI].el : idleEl);
+const au = new Proxy({}, {
+  get: (t, k) => { const e = active(), v = e[k]; return typeof v === 'function' ? v.bind(e) : v; },
+  set: (t, k, v) => { active()[k] = v; return true; }
+});
 const player = {
   orig: [], queue: [], qi: -1, shuffle: false, repeat: 'off', bars: new Set(), vol: 1, errs: 0,
   get cur() { return lib.get(this.queue[this.qi]) || null; },
-  sync() { for (const b of this.bars) b.sync(); mediaMeta(); markRows(); }
+  sync() { for (const b of this.bars) b.sync(); mediaMeta(); markRows(); lyricsSync(); }
 };
+function mkDeck() {
+  const el = new Audio(); el.crossOrigin = 'anonymous'; el.preload = 'auto';
+  const g = actx.createGain(), src = actx.createMediaElementSource(el); src.connect(g); g.connect(eqNodes[0]);
+  const d = { el, g, rel: '', tok: 0 }, mine = () => decks && decks[deckI] === d;
+  el.addEventListener('ended', () => { if (!mine()) return; if (sleep.endOfTrack) { sleep.endOfTrack = false; player.sync(); return; } next(true); });
+  el.addEventListener('play', () => { if (mine()) player.sync(); });
+  el.addEventListener('pause', () => { if (mine()) { clearTimeout(nextT); player.sync(); } });
+  el.addEventListener('playing', () => { if (mine()) { player.errs = 0; armNext(); } });
+  el.addEventListener('seeked', () => { if (mine()) armNext(); });
+  el.addEventListener('ratechange', () => { if (mine()) armNext(); });
+  el.addEventListener('error', () => {
+    if (!mine() || !d.rel) return;
+    const t = player.cur; if (!t) return;
+    H.toast('Не получилось сыграть «' + t.title + '»');
+    if (++player.errs < 5 && player.qi + 1 < player.queue.length) { player.qi++; play(); } else { player.errs = 0; player.sync(); }
+  });
+  el.addEventListener('timeupdate', () => { if (mine()) { for (const b of player.bars) b.tick(); lyricsTick(); } });
+  el.addEventListener('durationchange', () => { if (mine()) { for (const b of player.bars) b.tick(); armNext(); const t = player.cur; if (t && !t.dur && isFinite(el.duration)) { t.dur = Math.round(el.duration); tx('tracks', 'readwrite', s => s.put(t)).catch(() => {}); } } });
+  return d;
+}
+function ensureAudio() {
+  if (actx) { if (actx.state === 'suspended') actx.resume().catch(() => {}); return; }
+  actx = new AudioContext();
+  master = actx.createGain(); master.gain.value = player.vol;
+  eqNodes = EQ_BANDS.map((f, i) => { const b = actx.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === EQ_BANDS.length - 1 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1; return b; });
+  for (let i = 0; i < eqNodes.length - 1; i++) eqNodes[i].connect(eqNodes[i + 1]);
+  eqNodes.at(-1).connect(master); master.connect(actx.destination);
+  decks = [mkDeck(), mkDeck()]; deckI = 0; applyEq();
+  // страница уже что-то держала на «пустой» деке — переносить нечего
+}
+function applyEq() { if (!actx) return; eqNodes.forEach((n, i) => { n.gain.setTargetAtTime(cfg.eqOn ? cfg.eq[i] : 0, actx.currentTime, 0.02); }); }
+function saveCfg() { H.store.set('musicCfg', JSON.stringify(cfg)); }
+function loadCfg() { try { const j = JSON.parse(H.store.get('musicCfg', '{}')); if ([0, 3, 6, 10].includes(j.xf)) cfg.xf = j.xf; if (j.rate >= .5 && j.rate <= 2) cfg.rate = j.rate; cfg.eqOn = !!j.eqOn; if (Array.isArray(j.eq) && j.eq.length === 5) cfg.eq = j.eq.map(x => Math.max(-12, Math.min(12, +x || 0))); } catch (e) {} }
+function setRate(r) { cfg.rate = r; saveCfg(); if (decks) for (const d of decks) d.el.playbackRate = r; for (const b of player.bars) b.sync(); }
+
 function reshuffle(keep) {
   const rest = player.orig.filter(r => r !== keep);
   for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
@@ -162,9 +247,50 @@ function setQueue(list, start) {   // list — треки, start — с како
   if (player.shuffle) reshuffle(first); else { player.queue = player.orig.slice(); player.qi = Math.max(0, start); }
   play();
 }
-function play() {
-  const t = player.cur; if (!t) { au.pause(); player.sync(); return; }
-  au.src = MU.url(t.p); au.play().catch(() => {}); player.sync();
+const loadDeck = (d, t) => { d.rel = t.rel; d.el.src = MU.url(t.p); d.el.playbackRate = cfg.rate; };
+function silence(d) { d.fading = false; d.tok++; d.g.gain.cancelScheduledValues(0); d.g.gain.value = 0; d.el.pause(); d.rel = ''; }
+function play() {   // с самого начала трека player.cur — сразу, без перетекания
+  const t = player.cur;
+  if (!t) { if (decks) { silence(decks[0]); silence(decks[1]); } player.sync(); return; }
+  ensureAudio(); clearTimeout(nextT);
+  silence(decks[1 - deckI]);
+  const d = decks[deckI]; d.tok++; d.g.gain.cancelScheduledValues(0); d.g.gain.value = 1;
+  loadDeck(d, t); d.el.play().catch(() => {}); player.sync();
+}
+// какой трек будет следующим по естественному ходу (без побочных эффектов); null — дальше только конец или перемешивание заново
+function planNext() {
+  if (!player.queue.length || player.repeat === 'one') return null;
+  if (player.qi + 1 < player.queue.length) return { qi: player.qi + 1, rel: player.queue[player.qi + 1] };
+  if (player.repeat === 'all' && !player.shuffle && player.queue.length > 1) return { qi: 0, rel: player.queue[0] };
+  return null;
+}
+// готовим вторую деку и ставим таймер на момент перехода
+function armNext() {
+  clearTimeout(nextT);
+  const d = decks?.[deckI]; if (!d || d.el.paused || !isFinite(d.el.duration) || !d.rel) return;
+  if (sleep.endOfTrack) return;   // «после этого трека»: дальше не переходим
+  const plan = planNext(); if (!plan || !lib.has(plan.rel)) return;
+  const o = decks[1 - deckI]; if (o.fading) { nextT = setTimeout(armNext, 400); return; }   // прошлая дека ещё затихает
+  if (o.rel !== plan.rel) { silence(o); loadDeck(o, lib.get(plan.rel)); }
+  const dur = d.el.duration, rate = d.el.playbackRate || 1;
+  const xf = Math.min(cfg.xf, dur * 0.4, 30);
+  const wait = (dur - d.el.currentTime) / rate - xf - 0.06;   // 0,06 с — запас на запуск следующей деки
+  nextT = setTimeout(() => goNext(plan, xf), Math.max(0, wait * 1000));
+}
+function goNext(plan, xf) {
+  const cur = decks[deckI], inn = decks[1 - deckI];
+  if (planNext()?.rel !== plan.rel || inn.rel !== plan.rel) return armNext();   // очередь поменялась
+  player.qi = plan.qi; deckI = 1 - deckI;
+  const now = actx.currentTime, tokOut = ++cur.tok, tokIn = ++inn.tok; cur.fading = true;
+  inn.g.gain.cancelScheduledValues(now); cur.g.gain.cancelScheduledValues(now);
+  if (xf > 0.05) {   // равная мощность: сумма громкостей не проваливается посередине
+    const n = 32, up = new Float32Array(n), down = new Float32Array(n);
+    for (let i = 0; i < n; i++) { const x = i / (n - 1); up[i] = Math.sin(x * Math.PI / 2); down[i] = Math.cos(x * Math.PI / 2); }
+    inn.g.gain.setValueCurveAtTime(up, now, xf); cur.g.gain.setValueCurveAtTime(down, now, xf);
+    setTimeout(() => { if (cur.tok === tokOut) { cur.el.pause(); cur.rel = ''; } cur.fading = false; }, xf * 1000 + 150);
+  } else { inn.g.gain.value = 1; cur.g.gain.value = 0; setTimeout(() => { if (cur.tok === tokOut) { cur.el.pause(); cur.rel = ''; } cur.fading = false; }, 200); }
+  inn.el.currentTime = 0; inn.el.play().catch(() => {});
+  void tokIn; player.sync();
 }
 function cleanQueue() {   // файл удалили — выкидываем из очереди
   const cur = player.queue[player.qi];
@@ -183,27 +309,37 @@ function prev() {
   if (au.currentTime > 3 || player.qi <= 0) { au.currentTime = 0; return; }
   player.qi--; play();
 }
-const toggle = () => { if (!player.cur) return; au.paused ? au.play().catch(() => {}) : au.pause(); };
+function toggle() {
+  if (!player.cur) return;
+  if (!decks || !decks[deckI].rel) { play(); return; }
+  ensureAudio();
+  if (au.paused) au.play().catch(() => {});
+  else { for (const d of decks) d.el.pause(); }   // и деку, которая в этот момент затухает
+}
 function enqueue(t, nextUp) {
   if (!player.queue.length) { setQueue([t], 0); return; }
   const at = nextUp ? player.qi + 1 : player.queue.length;
   player.queue.splice(at, 0, t.rel);
   if (nextUp) { const oi = player.orig.indexOf(player.queue[player.qi]); player.orig.splice(oi + 1, 0, t.rel); } else player.orig.push(t.rel);
-  H.toast(nextUp ? 'Сыграет следующим' : 'Добавлено в очередь'); player.sync(); queuePaint?.();
+  H.toast(nextUp ? 'Сыграет следующим' : 'Добавлено в очередь'); player.sync(); queuePaint?.(); armNext();
 }
-au.addEventListener('ended', () => next(true));
-au.addEventListener('play', () => player.sync());
-au.addEventListener('pause', () => player.sync());
-au.addEventListener('playing', () => { player.errs = 0; });
-au.addEventListener('error', () => {
-  const t = player.cur; if (!t) return;
-  H.toast('Не получилось сыграть «' + t.title + '»');
-  if (++player.errs < 5 && player.qi + 1 < player.queue.length) { player.qi++; play(); } else { player.errs = 0; player.sync(); }
-});
-au.addEventListener('timeupdate', () => { for (const b of player.bars) b.tick(); });
-au.addEventListener('durationchange', () => { for (const b of player.bars) b.tick(); });
 function seekTo(f) { if (isFinite(au.duration)) au.currentTime = Math.max(0, Math.min(1, f)) * au.duration; }
-function setVol(v) { player.vol = Math.max(0, Math.min(1, v)); au.volume = player.vol; H.store.set('musicVol', String(player.vol)); for (const b of player.bars) b.sync(); }
+function setVol(v) { player.vol = Math.max(0, Math.min(1, v)); if (master) master.gain.value = player.vol; H.store.set('musicVol', String(player.vol)); for (const b of player.bars) b.sync(); }
+
+// таймер сна: через заданное время музыка плавно затихает и ставится на паузу
+function setSleep(min) {
+  clearTimeout(sleep.t); sleep.until = 0; sleep.endOfTrack = false;
+  if (min === 'track') { sleep.endOfTrack = true; H.toast('Остановлюсь после этого трека'); }
+  else if (min) { sleep.until = Date.now() + min * 60000; sleep.t = setTimeout(sleepNow, min * 60000); H.toast('Таймер сна: ' + min + ' мин'); }
+  else H.toast('Таймер сна выключен');
+  for (const b of player.bars) b.sync();
+}
+function sleepNow() {
+  sleep.until = 0; sleep.endOfTrack = false;
+  if (!decks) return;
+  const d = decks[deckI], g = d.g.gain, now = actx.currentTime; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0, now + 4);
+  setTimeout(() => { for (const x of decks) x.el.pause(); g.cancelScheduledValues(0); g.value = 1; player.sync(); }, 4100);
+}
 
 // управление из системы: клавиши с мультимедиа, экран блокировки, значок громкости Windows
 let lastMeta = '';
@@ -226,6 +362,7 @@ if ('mediaSession' in navigator) {
 }
 
 // ---------- интерфейс ----------
+let lyricsOpen = false;
 let shown = false, view = { tab: 'tracks', detail: null }, query = '', sortBy = 'title', limit = 200, queuePaint = null;
 let host = null;   // контейнер раздела (#mxMain)
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -243,17 +380,19 @@ function playerBar(mini) {
   seek.oninput = () => { dragging = true; tcur.textContent = fmt(seek.value / 1000 * (au.duration || 0)); };
   seek.onchange = () => { seekTo(seek.value / 1000); dragging = false; };
   const open = () => { if (mini) H.openSelf(); };
-  let shuf, rep, que, vol, fav;
+  let shuf, rep, que, vol, fav, lyr, snd;
   if (mini) { bar.append(cv, info, ctl); bar.onclick = open; }
   else {
     shuf = ibtn(IC.shuffle, 'Перемешать', () => { player.shuffle = !player.shuffle; H.store.set('musicShuffle', player.shuffle ? '1' : '0'); const c = player.queue[player.qi]; if (player.queue.length) { if (player.shuffle) reshuffle(c); else { player.queue = player.orig.slice(); player.qi = Math.max(0, player.queue.indexOf(c)); } } player.sync(); queuePaint?.(); });
     rep = ibtn(IC.repeat, 'Повтор: выкл', () => { player.repeat = { off: 'all', all: 'one', one: 'off' }[player.repeat]; H.store.set('musicRepeat', player.repeat); player.sync(); });
     que = ibtn(IC.queue, 'Очередь', () => queueDlg());
+    lyr = ibtn(IC.lyr, 'Текст песни', () => { lyricsOpen = !lyricsOpen; if (lyricsOpen) view.detail = null; repaint(); });
+    snd = ibtn(IC.sliders, 'Звук: переход между треками, эквалайзер, скорость, таймер сна', () => soundDlg());
     fav = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) toggleFav(t); }, 'fav');
     vol = el('input', 'mu-vol'); vol.type = 'range'; vol.min = 0; vol.max = 100; vol.title = 'Громкость'; vol.oninput = () => setVol(vol.value / 100);
     const mid = el('div', 'mu-mid'), line = el('div', 'mu-line'); line.append(tcur, seek, tall); mid.append(ctl, line);
     const vi = el('span', 'mu-vi'); vi.innerHTML = IC.vol;
-    const right = el('div', 'mu-right'); right.append(fav, shuf, rep, que, vi, vol);
+    const right = el('div', 'mu-right'); right.append(fav, shuf, rep, que, lyr, snd, vi, vol);
     bar.append(cv, info, mid, right);
   }
   bar.sync = () => {
@@ -266,6 +405,8 @@ function playerBar(mini) {
       rep.classList.toggle('on', player.repeat !== 'off'); rep.title = 'Повтор: ' + { off: 'выкл', all: 'очередь', one: 'один трек' }[player.repeat]; rep.dataset.one = player.repeat === 'one' ? '1' : '';
       vol.value = Math.round(player.vol * 100);
       fav.classList.toggle('on', !!t && isFav(t));
+      lyr.classList.toggle('on', lyricsOpen);
+      snd.classList.toggle('on', !!(cfg.xf || cfg.rate !== 1 || cfg.eqOn || sleep.until || sleep.endOfTrack));
     }
     bar.tick();
   };
@@ -301,14 +442,13 @@ const artistsOf = list => {
   return [...m.values()].sort((a, b) => col.compare(a.name, b.name));
 };
 
-function trackRow(t, list, i, extra) {
+function trackRow(t, list, i) {
   const r = el('div', 'mu-row'), cur = player.cur?.rel === t.rel;
   r.dataset.rel = t.rel; if (cur) r.classList.add('cur', au.paused ? 'paused' : 'playing');
   const tx = el('div', 'mu-tx'); tx.append(el('b', '', t.title), el('span', '', [t.artist, t.album].filter(Boolean).join(' · ') || t.rel));
   const play1 = el('div', 'mu-pl'); play1.innerHTML = cur && !au.paused ? IC.pause : IC.play;
   const cv = coverEl(t, 'sm'); cv.append(play1);
-  r.append(cv, tx);
-  if (extra) r.append(extra);
+  r.append(cv, tx, el('span', 'mu-d', t.dur ? fmt(t.dur) : ''));
   const fav = ibtn(IC.heart, isFav(t) ? 'Убрать из любимого' : 'В любимое', () => toggleFav(t), 'fav' + (isFav(t) ? ' on' : ''));
   const more = ibtn(IC.more, 'Ещё', e => trackMenu(t, e.clientX, e.clientY, list));
   r.append(fav, more);
@@ -398,7 +538,7 @@ function queueDlg() {
       list.querySelector('.cur')?.scrollIntoView({ block: 'center' });
     };
     queuePaint = paint;
-    const row = el('div', 'row'); row.append(H.btnEl('Очистить', '', () => { au.pause(); au.removeAttribute('src'); player.orig = []; player.queue = []; player.qi = -1; player.sync(); paint(); }), H.btnEl('Готово', 'pri', close));
+    const row = el('div', 'row'); row.append(H.btnEl('Очистить', '', () => { if (decks) { silence(decks[0]); silence(decks[1]); } player.orig = []; player.queue = []; player.qi = -1; player.sync(); paint(); }), H.btnEl('Готово', 'pri', close));
     card.append(el('h2', '', 'Очередь'), list, row); card.classList.add('mu-qcard'); paint();
   });
 }
@@ -442,7 +582,7 @@ function listView(tracks, opts = {}) {
   const wrap = el('div', 'mu-list');
   if (!tracks.length) { wrap.append(el('div', 'fempty', '')); wrap.firstChild.append(el('b', '', opts.empty || 'Ничего не нашлось')); return wrap; }
   const shown = tracks.slice(0, limit);
-  shown.forEach((t, i) => wrap.append(trackRow(t, tracks, i, opts.extra?.(t))));
+  shown.forEach((t, i) => wrap.append(trackRow(t, tracks, i)));
   if (tracks.length > shown.length) { const more = H.btnEl('Показать ещё ' + Math.min(200, tracks.length - shown.length), '', () => { limit += 200; repaint(); }); more.classList.add('mu-more'); wrap.append(more); }
   return wrap;
 }
@@ -511,7 +651,7 @@ function paint() {
   const hd = head(d ? '' : 'Музыка', d ? () => { view.detail = null; limit = 200; repaint(); } : null);
   if (d) { hd.querySelector('h2').remove(); hd.append(el('h2', '', d.type === 'pl' ? 'Плейлист' : d.type === 'album' ? 'Альбом' : 'Исполнитель')); }
   const tabs = el('div', 'ftabs');
-  for (const [k, t] of [['tracks', 'Треки'], ['albums', 'Альбомы'], ['artists', 'Исполнители'], ['pl', 'Плейлисты']]) { const b = el('button', 'ftab' + (view.tab === k && !d ? ' on' : ''), t); b.onclick = () => { view = { tab: k, detail: null }; limit = 200; repaint(); }; tabs.append(b); }
+  for (const [k, t] of [['tracks', 'Треки'], ['albums', 'Альбомы'], ['artists', 'Исполнители'], ['pl', 'Плейлисты']]) { const b = el('button', 'ftab' + (view.tab === k && !d ? ' on' : ''), t); b.onclick = () => { view = { tab: k, detail: null }; lyricsOpen = false; limit = 200; repaint(); }; tabs.append(b); }
   hd.append(tabs);
   const bar = el('div', 'fbar mu-tool');
   const q = el('input', 'mu-q'); q.type = 'search'; q.placeholder = 'Поиск по названию, исполнителю, альбому'; q.value = query; q.autocomplete = 'off';
@@ -520,7 +660,7 @@ function paint() {
   const tools = el('div', 'mu-tools');
   tools.append(H.btnEl('＋ Добавить', '', async () => { const n = await MU.pickFiles(); if (n) { H.toast('Добавлено: ' + n); refresh(); } }), ibtn(IC.cog, 'Папка с музыкой', settingsDlg));
   bar.append(q, statusEl, tools);
-  const scroll = el('div', 'mu-scroll'); scroll.append(body());
+  const scroll = el('div', 'mu-scroll'); if (lyricsOpen) { const lv = el('div', 'mu-lyr'); lv.dataset.rel = player.cur?.rel || ''; scroll.append(lv); fillLyrics(lv, player.cur); } else scroll.append(body());
   sec.append(hd, bar, scroll, playerBar(false));
   // перетащили файлы из проводника — копируем в папку
   sec.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); sec.classList.add('drop'); } });
@@ -530,12 +670,86 @@ function paint() {
   if (hadQ) { const q2 = sec.querySelector('.mu-q'); q2?.focus(); q2?.setSelectionRange(q2.value.length, q2.value.length); }
 }
 
+// ---------- текст песни ----------
+const lyrCache = new Map();
+function parseLrc(text) {
+  const timed = [], plain = []; let synced = false;
+  for (const raw of text.split(/\r?\n/)) {
+    const ms = [...raw.matchAll(/\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g)], s = raw.replace(/\[[^\]]*\]/g, '').trim();
+    if (ms.length) { synced = true; for (const m of ms) timed.push({ t: +m[1] * 60 + +m[2] + (m[3] ? +('0.' + m[3]) : 0), s }); }
+    else if (!/^\[(ar|ti|al|by|offset|length|re|ve|au):/i.test(raw.trim())) plain.push({ t: -1, s: raw.trim() });
+  }
+  return synced ? { synced: true, lines: timed.sort((a, b) => a.t - b.t) } : { synced: false, lines: plain };
+}
+async function lyricsOf(t) {
+  if (lyrCache.has(t.rel)) return lyrCache.get(t.rel);
+  let txt = await MU.lyrics(t.p).catch(() => ''); if (!txt && t.ly) txt = t.ly;
+  const r = txt && txt.trim() ? parseLrc(txt) : null; lyrCache.set(t.rel, r); return r;
+}
+let lyrBox = null, lyrLines = [], lyrIdx = -1;
+async function fillLyrics(box, t) {
+  lyrBox = box; lyrLines = []; lyrIdx = -1;
+  if (!t) { box.append(el('p', 'mu-ln dim', 'Включи трек — здесь появится его текст')); return; }
+  const head = el('div', 'mu-lh'); head.append(el('b', '', t.title), el('span', '', t.artist || '')); box.append(head);
+  const L = await lyricsOf(t); if (lyrBox !== box) return;
+  if (!L || !L.lines.length) { box.append(el('p', 'mu-ln dim', 'Текста нет. Положи рядом с файлом «' + cleanName(t.rel.split(/[\\/]/).pop()) + '.lrc» (с метками времени — подсветка идёт как в караоке) или «.txt». Текст из тегов файла тоже подхватывается.')); return; }
+  const wrap = el('div', 'mu-lines');
+  for (const l of L.lines) { const p = el('p', 'mu-ln' + (l.s ? '' : ' gap'), l.s || (L.synced ? '♪' : '')); if (L.synced) { p.classList.add('syn'); p.onclick = () => { au.currentTime = l.t; }; } wrap.append(p); }
+  box.append(wrap);
+  lyrLines = L.synced ? L.lines.map((l, i) => ({ t: l.t, e: wrap.children[i] })) : [];
+  lyricsTick();
+}
+function lyricsTick() {
+  if (!lyrBox || !lyrLines.length || !lyrBox.isConnected) return;
+  const c = au.currentTime + 0.15; let i = lyrLines.length - 1; while (i >= 0 && lyrLines[i].t > c) i--;
+  if (i === lyrIdx) return;
+  lyrLines[lyrIdx]?.e.classList.remove('on'); lyrIdx = i;
+  if (i >= 0) { const e = lyrLines[i].e; e.classList.add('on'); e.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+}
+function lyricsSync() {   // сменился трек — обновляем текст
+  if (!lyricsOpen || !shown || !host) return;
+  const box = host.querySelector('.mu-lyr'); if (!box) return;
+  const rel = player.cur?.rel || ''; if (box.dataset.rel === rel) return;
+  box.dataset.rel = rel; box.textContent = ''; fillLyrics(box, player.cur);
+}
+
+// ---------- окно «Звук»: переход между треками, скорость, эквалайзер, таймер сна ----------
+function soundDlg() {
+  H.modal((card, close) => {
+    card.classList.add('mu-snd');
+    const sel = (opts, val, f) => { const s = el('select', 'mu-sort'); for (const [v, t] of opts) { const o = el('option', '', t); o.value = v; s.append(o); } s.value = String(val); s.onchange = () => f(s.value); return s; };
+    const lab = (t, ctl, hint) => { const d = el('div', 'mu-set'); const l = el('div'); l.append(el('b', '', t)); if (hint) l.append(el('span', '', hint)); d.append(l, ctl); return d; };
+    card.append(el('h2', '', 'Звук'));
+    card.append(lab('Переход между треками', sel([[0, 'Без паузы'], [3, 'Плавно, 3 с'], [6, 'Плавно, 6 с'], [10, 'Плавно, 10 с']], cfg.xf, v => { cfg.xf = +v; saveCfg(); armNext(); player.sync(); }), 'Следующий трек готовится заранее'));
+    card.append(lab('Скорость', sel([[0.75, '×0,75'], [0.9, '×0,9'], [1, 'Обычная'], [1.1, '×1,1'], [1.25, '×1,25'], [1.5, '×1,5'], [2, '×2']], cfg.rate, v => setRate(+v)), 'Высота голоса не меняется'));
+    // эквалайзер
+    const eq = el('div', 'mu-eq'), on = el('label', 'switch'), cb = el('input'); cb.type = 'checkbox'; cb.checked = cfg.eqOn;
+    on.append(document.createTextNode('Эквалайзер'), cb);
+    const rows = [], paint = () => { rows.forEach((r, i) => { r.input.value = cfg.eq[i]; r.val.textContent = (cfg.eq[i] > 0 ? '+' : '') + cfg.eq[i] + ' дБ'; r.input.style.setProperty('--p', ((cfg.eq[i] + 12) / 24 * 100) + '%'); }); eq.classList.toggle('off', !cfg.eqOn); };
+    cb.onchange = () => { cfg.eqOn = cb.checked; ensureAudio(); applyEq(); saveCfg(); paint(); player.sync(); };
+    const chips = el('div', 'fchips sm');
+    for (const [k, [name, g]] of Object.entries(EQ_PRESETS)) { const c = el('button', 'fchip', name); c.onclick = () => { cfg.eq = g.slice(); cfg.eqOn = true; cb.checked = true; ensureAudio(); applyEq(); saveCfg(); paint(); player.sync(); }; chips.append(c); }
+    card.append(on, chips, eq);
+    EQ_BANDS.forEach((f, i) => {
+      const r = el('div', 'mu-band'), input = el('input', 'mu-vol'), val = el('span', '', ''); input.type = 'range'; input.min = -12; input.max = 12; input.step = 1;
+      input.oninput = () => { cfg.eq[i] = +input.value; cfg.eqOn = true; cb.checked = true; ensureAudio(); applyEq(); saveCfg(); paint(); player.sync(); };
+      r.append(el('span', '', f >= 1000 ? (f / 1000) + ' кГц' : f + ' Гц'), input, val); eq.append(r); rows.push({ input, val });
+    });
+    paint();
+    // таймер сна
+    const sl = el('div', 'mu-sleep'), st = el('p', 'fhint', ''); const upd = () => { st.textContent = sleep.until ? 'Музыка затихнет через ' + Math.max(1, Math.round((sleep.until - Date.now()) / 60000)) + ' мин' : sleep.endOfTrack ? 'Остановлюсь после этого трека' : 'Таймер сна выключен'; };
+    for (const [v, t] of [[15, '15 мин'], [30, '30 мин'], [45, '45 мин'], [60, '1 час'], ['track', 'После трека'], [0, 'Выкл']]) { const b = el('button', 'fchip', t); b.onclick = () => { setSleep(v); upd(); }; sl.append(b); }
+    card.append(el('h3', 'mu-h2', 'Таймер сна'), sl, st); upd();
+    const row = el('div', 'row'); row.append(H.btnEl('Готово', 'pri', close)); card.append(row);
+  });
+}
+
 // ---------- подключение к приложению ----------
 let ready = false;
 async function init() {
   if (ready) return; ready = true;
-  loadPL();
-  player.vol = Math.max(0, Math.min(1, +H.store.get('musicVol', '1') || 1)); au.volume = player.vol;
+  loadPL(); loadCfg();
+  player.vol = Math.max(0, Math.min(1, +H.store.get('musicVol', '1') || 1)); 
   player.shuffle = H.store.get('musicShuffle', '0') === '1'; player.repeat = ['off', 'all', 'one'].includes(H.store.get('musicRepeat', 'off')) ? H.store.get('musicRepeat', 'off') : 'off';
   sortBy = sorters[H.store.get('musicSort', 'title')] ? H.store.get('musicSort', 'title') : 'title';
   await loadCache().catch(() => {});
@@ -543,7 +757,9 @@ async function init() {
   refresh();
 }
 window.kzMusic = {
-  debug: () => ({ q: player.queue, qi: player.qi, paused: au.paused, err: au.error && au.error.message, code: au.error && au.error.code, src: au.src, t: au.currentTime, dur: au.duration, ready: au.readyState }),
+  tracks: () => [...lib.values()].map(t => ({ p: t.p, rel: t.rel, dur: t.dur, tagged: t.tagged, busy: t.busy })),
+  durAll,
+  debug: () => ({ decks: decks && decks.map(d => ({ rel: d.rel.slice(-14), paused: d.el.paused, g: +d.g.gain.value.toFixed(2), t: +d.el.currentTime.toFixed(1), rate: d.el.playbackRate })), eq: eqNodes.map(n => n.gain.value), xf: cfg.xf, q: player.queue, qi: player.qi, paused: au.paused, err: au.error && au.error.message, code: au.error && au.error.code, src: au.src, t: au.currentTime, dur: au.duration, ready: au.readyState }),
   // H: {store, toast, modal, btnEl, host(): контейнер раздела, side: боковая колонка, openSelf(), close()}
   mount(h) {
     H = h; init();
