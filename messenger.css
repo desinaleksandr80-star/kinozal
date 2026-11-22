@@ -669,5 +669,8 @@ html.wall-all #mx>.mx-side{z-index:2}
 /* перетаскиваешь файл и зависаешь над кнопкой или чатом — они подсвечиваются и через полсекунды открываются */
 html.dnd .dnd-hot{outline:2px solid var(--acc);outline-offset:2px;border-radius:12px;background-image:linear-gradient(90deg,color-mix(in srgb,var(--acc) 38%,transparent),color-mix(in srgb,var(--acc) 38%,transparent));background-repeat:no-repeat;background-size:0 100%;animation:dndfill .65s linear forwards}
 @keyframes dndfill{to{background-size:100% 100%}}
+/* фон вокруг окна: «задержись — вернёмся назад» */
+html.dnd .mx-modal.dnd-hot{outline:none;border-radius:0;background-image:none;animation:none;box-shadow:inset 0 0 0 5px var(--acc),inset 0 0 90px color-mix(in srgb,var(--acc) 30%,transparent)}
+html.dnd .mx-modal.dnd-hot::after{content:"Задержись здесь — окно закроется";position:fixed;left:50%;bottom:28px;transform:translateX(-50%);padding:8px 16px;border-radius:12px;background:var(--acc);color:#fff;font:700 14px var(--font),sans-serif;pointer-events:none}
 html.dnd .mx-files .frow.file,html.dnd .mx-files .ftile{cursor:grabbing}
 .mx-files .frow.file[draggable=true],.mx-files .ftile[draggable=true]{cursor:grab}

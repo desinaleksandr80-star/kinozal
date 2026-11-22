@@ -2379,10 +2379,12 @@ document.addEventListener('dragover', e => {
       if (out) { if (!dnd.outT) dnd.outT = setTimeout(() => { dnd.outT = 0; closePanel(); }, 140); } else if (dnd.outT) { clearTimeout(dnd.outT); dnd.outT = 0; }
     }
   }
-  const b = e.target.closest?.(SPRING_SEL), ok = b && springOk(b) ? b : null;
+  // фон вокруг открытого окна (например, «Кинозал: создать / войти») — «назад»: зависнуть над ним, и окно закроется, как от щелчка мимо
+  const t = e.target, back = t?.classList?.contains('mx-modal') && !t.classList.contains('ring') && !t.classList.contains('out') ? t : null;
+  const b = e.target.closest?.(SPRING_SEL), ok = back || (b && springOk(b) ? b : null);
   if (ok !== dnd.spring) {
     clearTimeout(dnd.springT); dnd.spring?.classList.remove('dnd-hot'); dnd.spring = ok;
-    if (ok) { ok.classList.add('dnd-hot'); dnd.springT = setTimeout(() => { const x = dnd.spring; dnd.spring = null; x?.classList.remove('dnd-hot'); x?.click(); }, 650); }
+    if (ok) { ok.classList.add('dnd-hot'); dnd.springT = setTimeout(() => { const x = dnd.spring; dnd.spring = null; x?.classList.remove('dnd-hot'); if (x?.classList.contains('mx-modal')) x.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 })); else x?.click(); }, 650); }
   }
 });
 document.addEventListener('drop', () => { if (dnd.on) setTimeout(() => dnd.end(), 0); });
