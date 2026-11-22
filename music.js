@@ -168,7 +168,7 @@ function coverEl(ts, cls) {   // ts — трек или список (берёт
 
 // ---------- плейлисты = реакции ----------
 // Плейлист — это «полка» с эмодзи и названием. Реакция на трек — положить его на полку (и убрать обратно).
-// Каждую полку можно назвать как хочется («для дороги»), поменять эмодзи, завести свою. ❤️ Любимое — такая же полка, только её нельзя удалить.
+// Каждую полку можно назвать как хочется («для дороги»), поменять эмодзи, завести свою. Любую полку, и ❤️ Любимое тоже, можно переименовать, переставить, очистить или удалить.
 // Реакцию можно поставить на секунду трека — тогда на перемотке появится метка этой полки.
 let PL = { lists: [] };   // lists: [{id, emoji, name, items: [{r: имя файла, h: хэш, m: [секунды]}]}]
 let FR = {};              // «вайб» друзей: ключ трека → {id друга: [эмодзи]}
@@ -183,8 +183,7 @@ function loadPL() {
     const j = JSON.parse(H.store.get('musicPl2', 'null'));
     if (j && Array.isArray(j.lists)) {
       PL = { lists: j.lists.filter(l => l && l.id).map(l => ({ id: String(l.id), emoji: String(l.emoji || '🎵').slice(0, 8), name: String(l.name || 'Плейлист').slice(0, 40), items: Array.isArray(l.items) ? l.items.map(i => ({ r: String(i.r || ''), h: String(i.h || ''), m: Array.isArray(i.m) ? i.m.map(Number).filter(Number.isFinite) : [] })) : [] })) };
-      if (!PL.lists.some(l => l.id === 'fav')) PL.lists.unshift({ id: 'fav', emoji: '❤️', name: 'Любимое', items: [] });
-      return;
+      return;   // что осталось, то и есть: любую полку, и «Любимое» тоже, можно удалить
     }
   } catch (e) { /* ниже соберём заново */ }
   // первый запуск или переезд со старого устройства хранения: прежние «любимое», плейлисты и реакции становятся полками
@@ -225,9 +224,22 @@ function toggleIn(l, t, pos) {   // pos == null — трек целиком; ч�
   }
   savePL(); repaint(); player.sync();
 }
-const toggleFav = t => { const l = favList(); if (l) toggleIn(l, t); };
-function newList(emoji, name) { const l = { id: uid(), emoji, name, items: [] }; PL.lists.push(l); savePL(); return l; }
-function delList(l) { if (l.id === 'fav') return; PL.lists = PL.lists.filter(x => x !== l); savePL(); }
+const toggleFav = t => { const l = favList() || newList('❤️', 'Любимое', 'fav'); toggleIn(l, t); };   // удалили «Любимое» — сердечко заведёт его заново
+function newList(emoji, name, id) { const l = { id: id || uid(), emoji, name, items: [] }; PL.lists.push(l); savePL(); return l; }
+function delList(l) { PL.lists = PL.lists.filter(x => x !== l); savePL(); }
+function moveList(l, d) { const i = PL.lists.indexOf(l), j = i + d; if (i < 0 || j < 0 || j >= PL.lists.length) return; PL.lists.splice(i, 1); PL.lists.splice(j, 0, l); savePL(); repaint(); }
+// меню полки: всё можно изменить — название, эмодзи, порядок, очистить, удалить (и «Любимое» тоже)
+function listMenu(x, y, l, play) {
+  const items = [];
+  if (play) items.push(['▶', 'Играть', () => play()], ['🌙', 'Фоном', () => { const t = plTracks(l); if (t.length) bgStart({ kind: 'pl', id: l.id, emoji: l.emoji, name: l.name, tracks: t }); }]);
+  const i = PL.lists.indexOf(l);
+  items.push(['✎', 'Название и эмодзи…', () => listDlg(l)]);
+  if (i > 0) items.push(['⬅', 'Поставить раньше', () => moveList(l, -1)]);
+  if (i < PL.lists.length - 1) items.push(['➡', 'Поставить позже', () => moveList(l, 1)]);
+  if (l.items.length) items.push(['🧹', 'Очистить полку', () => { if (confirm('Убрать все треки с полки «' + l.name + '»? Сами файлы останутся.')) { l.items = []; savePL(); repaint(); player.sync(); } }]);
+  items.push(['🗑', 'Удалить полку', () => { if (confirm('Удалить полку «' + l.name + '»? Сами треки останутся на месте.')) { delList(l); if (view.detail?.id === l.id) view.detail = null; repaint(); player.sync(); } }, 'danger']);
+  menuAt(x, y, items);
+}
 
 // окно «Полка»: название и эмодзи (новая или изменить)
 const QUICK_EMOJI = ['🔥', '😢', '💃', '🌙', '🏋️', '🚗', '❤️', '😂', '🎸', '🎧', '☕', '🌅', '🧘', '🎉', '🥃', '🌧️', '💪', '🛏️', '🎹', '🕺'];
@@ -245,7 +257,8 @@ function listDlg(l, then) {
     });
     nm.addEventListener('keydown', e => { if (e.key === 'Enter') save.click(); });
     const row = el('div', 'row');
-    if (l && l.id !== 'fav') row.append(H.btnEl('Удалить полку', '', () => { if (confirm('Удалить полку «' + l.name + '»? Сами треки останутся на месте.')) { delList(l); close(); if (view.detail?.id === l.id) view.detail = null; repaint(); player.sync(); } }));
+    if (l) row.append(H.btnEl('Удалить полку', '', () => { if (confirm('Удалить полку «' + l.name + '»? Сами треки останутся на месте.')) { delList(l); close(); if (view.detail?.id === l.id) view.detail = null; repaint(); player.sync(); } }));
+    if (l && l.items.length) row.append(H.btnEl('Очистить', '', () => { if (confirm('Убрать все треки с полки «' + l.name + '»? Сами файлы останутся.')) { l.items = []; savePL(); close(); repaint(); player.sync(); } }));
     row.append(H.btnEl('Отмена', '', close), save);
     const top = el('div', 'mu-ltop'); top.append(em, nm);
     card.append(el('h2', '', l ? 'Полка' : 'Новая полка'), el('p', '', 'Полка — это плейлист и реакция сразу: положил трек на «🔥 Огонь» — он оказался в этом плейлисте, а друзья в прослушивании увидят твой огонь.'), top, quick, row);
@@ -591,6 +604,7 @@ function tile(c, o = {}) {
   const go = el('div', 'mu-go'); go.innerHTML = o.on && o.playing ? IC.pause : IC.play; art.append(go);
   if (o.menu) { const m = ibtn(IC.more, 'Ещё', e => o.menu(e)); m.classList.add('mu-tm'); art.append(m); }
   b.append(art, el('b', '', c.name), el('span', '', c.sub ? c.sub + ' · ' + countText(c.tracks.length) : countText(c.tracks.length)));
+  if (o.menu) b.oncontextmenu = e => { e.preventDefault(); o.menu(e); };
   b.onclick = e => { if (!o.dim) o.go(e); };
   b.onkeydown = e => { if ((e.key === 'Enter' || e.key === ' ') && !o.dim) { e.preventDefault(); o.go(e); } };
   return b;
@@ -602,7 +616,7 @@ function shelfSection(title, hint, tiles, extra) {
 // полки для выбора: «Вся музыка», плейлисты, альбомы, исполнители; go — что делать с нажатой, cur — какая сейчас выбрана
 function pickerShelves(go, cur, o = {}) {
   const c = collections(query), wrap = el('div', 'mu-shelves');
-  const mk = (x, extra) => tile(x, { on: cur?.kind === x.kind && cur?.id === x.id, playing: o.playing, dim: o.dim || (!x.tracks.length), go: () => go(x), ...extra });
+  const mk = (x, extra) => tile(x, { on: cur?.kind === x.kind && cur?.id === x.id, playing: o.playing, dim: o.dim || (!x.tracks.length), go: () => go(x), ...(x.ref ? { menu: e => listMenu(e.clientX, e.clientY, x.ref, () => go(x)) } : {}), ...extra });
   const base = [mk(c.all)];
   wrap.append(shelfSection('Моя музыка', '', base));
   wrap.append(shelfSection('Плейлисты', 'они же реакции', c.lists.map(x => mk(x)), H.btnEl('＋ Новая полка', '', () => listDlg(null))));
@@ -760,7 +774,7 @@ function myBody() {
     wrap.append(listView(ts, { empty: plFilter.size ? 'На такой полке (или сочетании полок) пока нет треков' : undefined }));
   } else if (view.tab === 'lists') {
     wrap.append(el('p', 'fhint', 'Полка — это и плейлист, и реакция. Положил трек на «🔥 Огонь» — он в этом плейлисте, а в прослушивании вместе друзья увидят твой огонь. Назови полки как хочешь.'));
-    const sec = shelfSection('', '', [...c.lists.map(x => tile(x, { go: () => { view.detail = { type: 'pl', id: x.id }; limit = 200; repaint(); }, menu: e => menuAt(e.clientX, e.clientY, [['▶', 'Играть', () => playColl(x)], ['🌙', 'Фоном', () => { if (x.tracks.length) bgStart(x); }], ['✎', 'Изменить название и эмодзи', () => listDlg(x.ref)]]) })),
+    const sec = shelfSection('', '', [...c.lists.map(x => tile(x, { go: () => { view.detail = { type: 'pl', id: x.id }; limit = 200; repaint(); }, menu: e => listMenu(e.clientX, e.clientY, x.ref, () => playColl(x)) })),
       (() => { const n = el('div', 'mu-tile new'); n.tabIndex = 0; const a = el('div', 'mu-art noc dash'); a.append(el('span', 'mu-em', '＋')); n.append(a, el('b', '', 'Новая полка'), el('span', '', 'эмодзи и своё название')); n.onclick = () => listDlg(null); return n; })()]);
     wrap.append(sec);
   } else if (view.tab === 'albums') {

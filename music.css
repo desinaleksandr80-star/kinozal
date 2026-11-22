@@ -72,7 +72,7 @@
 .mu-go svg{width:18px;height:18px}
 .mu-tile:hover .mu-go,.mu-tile:focus-visible .mu-go,.mu-tile.on .mu-go{opacity:1;transform:none}
 .mu-tile.dim .mu-go{display:none}
-.mu-tm{position:absolute!important;right:6px;top:6px;background:rgba(10,14,16,.55)!important;color:#fff!important;opacity:0;width:32px!important;height:32px!important}
+.mu-tm{position:absolute!important;right:6px;top:6px;background:rgba(10,14,16,.55)!important;color:#fff!important;opacity:.75;width:32px!important;height:32px!important}
 .mu-tile:hover .mu-tm{opacity:1}
 .mu-tile.new b{color:var(--mute)}
 
