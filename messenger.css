@@ -247,7 +247,7 @@
 .mx-card h2{font:700 21px/1.15 var(--hfont),Unbounded,sans-serif}
 .mx-card p{margin:0;color:var(--mute);font-size:14px}
 .mx-card label{margin:0 0 6px;font-size:13px}
-.mx-card input[type=text]{min-height:48px;border-radius:14px;background:var(--field)}
+.mx-card input[type=text],.mx-card input[type=password]{min-height:48px;border-radius:14px;background:var(--field)}
 .mx-card .row{display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-end}
 .mx-card .err{color:#ff9c88;font-size:13px;min-height:1em}
 .picklist{display:grid;gap:4px;max-height:300px;overflow:auto;margin:0 -8px;padding:0 8px}
@@ -265,10 +265,11 @@
 
 /* приветствие */
 .mx-hello{position:fixed;inset:0;z-index:35;display:grid;place-items:center;padding:16px;background:radial-gradient(1000px 600px at 80% 0%,rgba(255,107,74,.16),transparent 60%),radial-gradient(800px 600px at 0% 100%,rgba(95,212,196,.12),transparent 60%),var(--bg)}
-.mx-hello .mx-card{width:min(460px,100%);padding:30px;text-align:center}
+.mx-hello{grid-template-rows:minmax(0,1fr) auto;gap:12px}
+.mx-hello .mx-card{width:min(460px,100%);max-height:100%;padding:30px;text-align:center;align-self:center}
 .mx-hello svg.logo{width:150px;justify-self:center}
 .mx-hello h2{font-size:26px}
-.mx-hello input[type=text]{text-align:center;font-size:17px}
+.mx-hello input[type=text],.mx-hello input[type=password]{text-align:center;font-size:17px}
 
 /* входящий звонок */
 .ring .mx-card{justify-items:center;text-align:center;width:min(360px,100%)}
@@ -656,7 +657,7 @@ html.wall-all #mx>.mx-side{z-index:2}
 .kpg .pc{position:relative;z-index:1}
 /* профили и вход */
 .jtabs{margin:0 auto}
-.hprofs{position:fixed;left:50%;bottom:16px;transform:translateX(-50%);z-index:5;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);color:var(--mute);font-size:13px}
+.hprofs{position:static;grid-row:2;z-index:5;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 32px);color:var(--mute);font-size:13px}
 .pwbox{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:12px 14px;border-radius:14px;background:var(--card);border:1px solid var(--line2)}
 .pwbox>div{display:grid;gap:2px}.pwbox span{font-size:13px;color:var(--mute)}
 .profs .pick .btn{min-height:34px!important;padding:4px 12px}

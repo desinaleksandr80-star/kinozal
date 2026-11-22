@@ -268,7 +268,7 @@ function startPeer() {
   const p = peer = new Peer(myPeer, { config: iceCfg(), debug: 0 });
   p.on('open', () => { if (peer !== p) return; idTaken = 0; setNet('on'); dialAll(); });
   p.on('connection', c => {
-    if (c.metadata?.link === 1) { linkServe(c); return; }   // новое устройство входит в мой профиль по коду
+    if (c.metadata?.link === 1) { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }   // старые версии стучались сюда за входом по коду — теперь вход идёт через сервер
     if (c.metadata?.xfer) { xIncoming(c); return; }          // отправитель большого файла, который я попросил
     const x = parsePeer(c.peer);
     if (!x || (x.u === myId && x.dev === myDev) || S.contacts[x.u]?.state === 'blocked') { setTimeout(() => { try { c.close(); } catch (e) {} }, 100); return; }
@@ -602,119 +602,110 @@ function revokedMe() {
   wipeDevice('Это устройство отвязали от профиля «' + (S.me?.name || '') + '» на основном устройстве — его данные здесь удалены. Можно создать новый профиль или войти снова.');
 }
 
-// ---------- вход в профиль с другого устройства: код из ID профиля и одноразового секрета ----------
-let linkSess = null;   // {secret, exp, tries, paint} — пока открыто окно «Подключить другое устройство»
-const linkMacStr = (nonce, dev, p) => 'link|' + nonce + '|' + dev + '|' + String(p.x) + '.' + String(p.y);
-async function hmac(secret, s) { return hmacRaw(enc(secret), s); }
-async function hmacRaw(bytes, s) { const k = await crypto.subtle.importKey('raw', bytes, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return b64(await crypto.subtle.sign('HMAC', k, enc(s))); }
-// Пароль профиля: на основном устройстве хранится не он сам, а производный ключ PBKDF2 (310 000 итераций, своя соль).
-// Входящее устройство доказывает, что знает пароль (HMAC от одноразового числа), сам пароль по сети не идёт.
+// ---------- вход в профиль по ID и паролю ----------
+// Пароль → PBKDF2 → ключ k (на основном устройстве хранится только он, не сам пароль). Из k отдельно получаются «ключ входа»
+// (сервер хранит его хэш, чтобы отличать верный пароль) и ключ шифрования (сервер его не знает).
+// Основное устройство держит на сервере связи Кинозала (/vault) зашифрованные запасные «места» для новых устройств:
+// готовый ключ устройства и сертификат, подписанный ключом профиля. Новое устройство вводит ID и пароль, забирает одно
+// место и входит в профиль — основное устройство при этом может быть выключено. Самого ключа профиля на сервере нет.
+const VAULT = store.get('vault', '') || 'https://kinozal-signal.kinozal-signal.workers.dev/vault/';   // свой адрес — только для проверки
+const VSLOTS = 10;   // сколько мест держим про запас; основное устройство пополняет их при каждом запуске
+const hmacBytes = async (k, label) => { const key = await crypto.subtle.importKey('raw', k, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']); return new Uint8Array(await crypto.subtle.sign('HMAC', key, enc(label))); };
+const vAuth = async k => b64(await hmacBytes(k, 'kinozal-vault-auth'));
+const vKey = async k => crypto.subtle.importKey('raw', await hmacBytes(k, 'kinozal-vault-key'), 'AES-GCM', false, ['encrypt', 'decrypt']);
+async function vSeal(key, obj) { const iv = rnd(12), ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc(JSON.stringify(obj)))); const o = new Uint8Array(12 + ct.length); o.set(iv); o.set(ct, 12); return b64(o); }
+async function vOpen(key, s) { const u = unb64(s); return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: u.slice(0, 12) }, key, u.slice(12)))); }
+let vSkew = 0;   // на сколько часы сервера отличаются от моих
+async function vFetch(path, body) {
+  const ac = new AbortController(), to = setTimeout(() => ac.abort(), 20000);
+  try {
+    const r = await fetch(VAULT + path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal } : { signal: ac.signal });
+    return { status: r.status, j: await r.json().catch(() => ({})) };
+  } catch (e) { throw new Error('Нет связи с сервером Кинозала — проверь интернет'); }
+  finally { clearTimeout(to); }
+}
 const PWD_IT = 310000;
 async function pwdKey(pw, salt, it) {
   const k = await crypto.subtle.importKey('raw', enc(String(pw).normalize('NFC')), 'PBKDF2', false, ['deriveBits']);
   return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: it }, k, 256));
 }
 async function setPassword(pw) {
-  if (!pw) { delete S.pwd; save(); jlog('[устройства] пароль убран'); return; }
-  const salt = rnd(16); S.pwd = { salt: b64(salt), it: PWD_IT, k: b64(await pwdKey(pw, salt, PWD_IT)) }; S.pwdFail = 0; delete S.pwdLock; save();
-  jlog('[устройства] пароль задан');
+  if (!pw) { delete S.pwd; save(); jlog('[устройства] пароль убран'); vaultSync(); return; }
+  const salt = rnd(16); S.pwd = { salt: b64(salt), it: PWD_IT, k: b64(await pwdKey(pw, salt, PWD_IT)) }; delete S.vaultOn; save();
+  jlog('[устройства] пароль задан'); vaultSync();
 }
-function parseLinkCode(s) { const m = String(s || '').match(/link=([0-9A-Za-z-]{16,24})/); const c = normId(m ? m[1] : s); return c.length === 16 ? { id: c.slice(0, 10), secret: c.slice(10) } : null; }
-// основное устройство: новое устройство постучалось с кодом
-function linkServe(c) {
-  const nonce = b64(rnd(18)); let done = false;
-  const bye = m => { try { c.send(m); } catch (e) {} setTimeout(() => { try { c.close(); } catch (e) {} }, 1500); };
-  const byPwd = c.metadata?.pw === 1;
-  const locked = () => S.pwdLock && Date.now() < S.pwdLock;
-  c.on('open', () => {
-    if (myDev) return bye({ t: 'linkerr', e: 'notmain' });
-    if (byPwd) {
-      if (!S.pwd) return bye({ t: 'linkerr', e: 'nopwd' });
-      if (locked()) return bye({ t: 'linkerr', e: 'locked', until: S.pwdLock });
-      return c.send({ t: 'linkchal', nonce, salt: S.pwd.salt, it: S.pwd.it });
-    }
-    if (!linkSess || Date.now() > linkSess.exp) return bye({ t: 'linkerr', e: 'nosess' });
-    c.send({ t: 'linkchal', nonce });
-  });
-  c.on('data', async d => {
-    if (done || d?.t !== 'linkreq') return; done = true;
-    const s = byPwd ? { tries: 0 } : linkSess;
-    if (byPwd ? !S.pwd || locked() : !s || Date.now() > s.exp) return bye({ t: 'linkerr', e: byPwd ? (S.pwd ? 'locked' : 'nopwd') : 'nosess' });
-    const dpub = cleanPub(d.dpub), dev = String(d.dev || ''), name = clean(d.name, 40) || 'Устройство';
-    const want = byPwd ? await hmacRaw(unb64(S.pwd.k), linkMacStr(nonce, dev, dpub)) : await hmac(s.secret, linkMacStr(nonce, dev, dpub));
-    const ok = /^[0-9a-z]{6}$/.test(dev) && dev === await devIdOf(dpub) && String(d.mac || '') === want;
-    if (!ok && byPwd) {   // неверный пароль: 5 попыток, потом 15 минут тишины
-      S.pwdFail = (S.pwdFail || 0) + 1; jlog('[устройства] неверный пароль, попытка', S.pwdFail);
-      if (S.pwdFail >= 5) { S.pwdFail = 0; S.pwdLock = Date.now() + 15 * 6e4; toast('Кто-то 5 раз ввёл неверный пароль от профиля — вход по паролю закрыт на 15 минут'); }
-      save(); return bye({ t: 'linkerr', e: S.pwdLock && Date.now() < S.pwdLock ? 'locked' : 'pwd', until: S.pwdLock });
-    }
-    if (!ok) { jlog('[устройства] неверный код'); if (++s.tries >= 5) { linkSess = null; s.paint?.('fail', 'Слишком много попыток с неверным кодом — открой это окно заново, будет новый код'); } else s.paint?.('bad'); return bye({ t: 'linkerr', e: 'code' }); }
-    if (byPwd) { S.pwdFail = 0; save(); }
-    if (revSet(myId).has(dev)) return bye({ t: 'linkerr', e: 'revoked' });
-    const cert = await sign(certStr(myId, dev, dpub));
-    (S.devs ||= {})[dev] = { dev, pub: dpub, cert, name, added: Date.now() };
-    if (!byPwd) linkSess = null; save();
-    c.send({ t: 'linkok', profile: myId, ppub: myPub, cert, me: { name: S.me?.name || '', avatar: S.me?.avatar || '', frame: S.me?.frame || null, pts: S.me?.pts || 0 }, pname: devName(), devs: devList() });
-    setTimeout(() => { try { c.close(); } catch (e) {} }, 4000);
-    jlog('[устройства] подключено', dev, name, byPwd ? 'по паролю' : 'по коду');
-    s.paint?.('ok', name); toast('«' + name + '» подключено к профилю' + (byPwd ? ' по паролю' : ''));
-    const m = devsMsg(); for (const u of links.keys()) send(u, m);   // собеседники узнают новое устройство
-    renderDevs();
-  });
+// основное устройство: запрос к хранилищу, подписанный ключом профиля
+async function vaultCall(path, o) {
+  for (let t = 0; t < 2; t++) {
+    const msg = JSON.stringify({ id: myId, ts: Date.now() + vSkew, ...o });
+    const r = await vFetch(myId + path, { ppub: myPub, msg, sig: await sign(msg) });
+    if (r.j?.error === 'time' && r.j.now && !t) { vSkew = r.j.now - Date.now(); continue; }
+    return r;
+  }
 }
-// новое устройство: входит в профиль по коду; оба устройства должны быть в сети
-async function joinProfile(code, dname, status, pw) {
-  let k;
-  if (pw != null) {   // по ID и паролю
-    const id = idFromText(code); if (id.length !== 10) throw new Error('ID — это 10 букв и цифр, например ' + fmtId('7KQ2M9XAB4'));
-    if (!pw) throw new Error('Введи пароль от профиля');
-    k = { id, pw };
-  } else { k = parseLinkCode(code); if (!k) throw new Error('Код — это 16 букв и цифр, например 7KQ2M-9XAB4-H3D8PQ'); }
-  if (typeof Peer === 'undefined') throw new Error('Нет связи с сервером — проверь интернет');
-  const dev = await devIdOf(keys.pub);
-  status('Подключаюсь к сети…');
-  const p = new Peer({ config: iceCfg(), debug: 0 });
-  let r;
+async function newSlot() {   // готовое устройство для будущего входа: ключ и сертификат от ключа профиля
+  const g = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+  const j = await crypto.subtle.exportKey('jwk', g.publicKey), pub = { kty: 'EC', crv: 'P-256', x: j.x, y: j.y }, dev = await devIdOf(pub);
+  return { dev, pub, jwk: await crypto.subtle.exportKey('jwk', g.privateKey), cert: await sign(certStr(myId, dev, pub)) };
+}
+let vaultBusy = false;
+async function vaultSync() {
+  if (myDev || wiping || vaultBusy || !S?.me) return;
+  vaultBusy = true;
   try {
-    await new Promise((res, rej) => { p.on('open', res); p.on('error', e => rej(new Error('Нет связи с сервером — проверь интернет (' + (e.type || e) + ')'))); setTimeout(() => rej(new Error('Нет связи с сервером — проверь интернет')), 20000); });
-    status('Ищу устройство с профилем ' + fmtId(k.id) + '…');
-    r = await new Promise((res, rej) => {
-      const fail = t => { clearTimeout(to); rej(new Error(t)); };
-      const to = setTimeout(() => fail(k.pw ? 'Основное устройство профиля не отвечает — проверь, что на нём открыт Кинозал.' : 'Устройство с профилем не отвечает. Проверь, что на нём открыт Кинозал и окно «Подключить другое устройство».'), 40000);
-      p.on('error', e => fail(e.type === 'peer-unavailable' ? 'Основное устройство профиля ' + fmtId(k.id) + ' сейчас не в сети. Открой на нём Кинозал' + (k.pw ? ' и попробуй ещё раз.' : ': Профиль → «Мои устройства» → «Подключить другое устройство».') : 'Ошибка связи: ' + (e.type || e)));
-      const c = p.connect(pid(k.id), { reliable: true, metadata: { v: 1, link: 1, ...(k.pw ? { pw: 1 } : {}) } });
-      c.on('data', async d => {
-        if (d?.t === 'linkchal') {
-          let key;
-          if (k.pw) { status('Проверяю пароль…'); const it = Math.min(2e6, Math.max(1e5, d.it | 0)); key = await pwdKey(k.pw, unb64(d.salt), it); }
-          else status('Проверяю код…');
-          const msg = linkMacStr(String(d.nonce || ''), dev, keys.pub);
-          c.send({ t: 'linkreq', dev, dpub: keys.pub, name: dname, mac: key ? await hmacRaw(key, msg) : await hmac(k.secret, msg) });
-        }
-        else if (d?.t === 'linkok') { clearTimeout(to); res(d); }
-        else if (d?.t === 'linkerr') fail({
-          code: 'Код не подошёл — проверь его. Если ошибся несколько раз, открой окно подключения на основном устройстве заново.',
-          pwd: 'Пароль не подошёл. После 5 неверных попыток вход по паролю закрывается на 15 минут.',
-          locked: 'Слишком много неверных попыток — вход по паролю закрыт' + (d.until ? ' до ' + new Date(d.until).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ' на 15 минут') + '.',
-          nopwd: 'У этого профиля не задан пароль. На основном устройстве: Профиль → «Мои устройства» → «Пароль для входа». Или войди по одноразовому коду.',
-          nosess: 'На основном устройстве не открыто окно подключения или код устарел. Открой там Профиль → «Мои устройства» → «Подключить другое устройство» и введи новый код.',
-          notmain: 'Это устройство само вошло в профиль с другого. Войти можно только через основное устройство — там, где профиль создан.',
-          revoked: 'Это устройство раньше отвязали от профиля — войти с ним снова нельзя.'
-        }[d.e] || 'Не получилось войти в профиль');
-      });
-      c.on('close', () => fail('Связь оборвалась — попробуй ещё раз'));
-    });
-  } finally { setTimeout(() => { try { p.destroy(); } catch (e) {} }, 300); }
+    if (!S.pwd) {
+      if (S.vaultOn || S.vaultDel) { S.vaultDel = 1; const r = await vaultCall('/put', { op: 'del' }); if (r.j?.ok) { delete S.vaultOn; delete S.vaultDel; save(); } }
+      return;
+    }
+    const k = unb64(S.pwd.k), key = await vKey(k);
+    const me = { name: S.me.name || '', avatar: S.me.avatar || '', frame: S.me.frame || null, pts: S.me.pts || 0 };
+    const base = { op: 'sync', salt: S.pwd.salt, it: S.pwd.it, auth: await vAuth(k), state: await vSeal(key, { ppub: myPub, me, devs: devList(), pname: devName() }) };
+    let r = await vaultCall('/put', base);
+    if (!r.j?.ok) throw new Error('сервер ответил ' + (r.j?.error || r.status));
+    let n = r.j.count;
+    if (n < VSLOTS) {
+      const add = []; for (let i = n; i < VSLOTS; i++) add.push(await vSeal(key, await newSlot()));
+      r = await vaultCall('/put', { ...base, add });
+      if (!r.j?.ok) throw new Error('сервер ответил ' + (r.j?.error || r.status));
+      n = r.j.count;
+    }
+    if (!S.vaultOn) jlog('[вход] данные для входа по паролю на сервере, мест', n);
+    S.vaultOn = { at: Date.now(), n }; save(); renderDevs();
+  } catch (e) { jlog('[вход] данные для входа не обновились:', e?.message || e); }
+  finally { vaultBusy = false; }
+}
+// новое устройство: ID и пароль → одно место из хранилища → вход в профиль
+async function joinProfile(idText, dname, status, pw) {
+  const id = idFromText(idText); if (id.length !== 10) throw new Error('ID — это 10 букв и цифр, например ' + fmtId('7KQ2M9XAB4'));
+  if (!pw) throw new Error('Введи пароль от профиля');
+  status('Ищу профиль ' + fmtId(id) + '…');
+  const info = await vFetch(id + '/info');
+  if (info.status === 404) throw new Error('Профиль ' + fmtId(id) + ' не найден. Проверь ID. Если всё верно — на основном устройстве (обновлённом до последней версии) задай пароль: Профиль → «Мои устройства» → «Пароль для входа» и один раз дай ему побыть в сети.');
+  if (!info.j?.salt) throw new Error('Сервер Кинозала ответил не то, что ожидалось — попробуй позже');
+  status('Проверяю пароль…');
+  const k = await pwdKey(pw, unb64(info.j.salt), Math.min(2e6, Math.max(1e5, info.j.it | 0)));
+  const r = await vFetch(id + '/claim', { auth: await vAuth(k) });
+  if (r.j?.error) throw new Error({
+    pwd: 'Пароль не подошёл' + (r.j.left != null ? ' (осталось попыток: ' + r.j.left + ')' : '') + '. После 5 неверных попыток вход закрывается на 15 минут, потом на дольше.',
+    locked: 'Слишком много неверных попыток — вход закрыт' + (r.j.until ? ' до ' + new Date(r.j.until).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : ' на время') + '.',
+    empty: 'Сейчас на сервере не осталось свободных мест для входа. Открой Кинозал на основном устройстве — оно пополнит их за несколько секунд — и попробуй снова.',
+    none: 'Профиль не найден — на основном устройстве не задан пароль для входа.'
+  }[r.j.error] || 'Не получилось войти в профиль (' + r.j.error + ')');
   status('Проверяю профиль…');
-  const ppub = cleanPub(r.ppub);
-  if (await idFromPub(ppub) !== k.id || !await verify(ppub, String(r.cert || ''), certStr(k.id, dev, keys.pub))) throw new Error('Ответ не похож на настоящий профиль — вход отменён');
-  const me = r.me || {}, devs = {};
-  for (const x of [].concat(r.devs || []).slice(0, 20)) { const p2 = cleanPub(x?.pub), dv = String(x?.dev || ''); if (/^[0-9a-z]{6}$/.test(dv) && await devIdOf(p2) === dv && await verify(ppub, String(x.cert || ''), certStr(k.id, dv, p2))) devs[dv] = { dev: dv, pub: p2, cert: String(x.cert), name: clean(x.name, 40) }; }
+  let slot, st;
+  try { const key = await vKey(k); slot = await vOpen(key, r.j.slot); st = await vOpen(key, r.j.state); } catch (e) { throw new Error('Данные профиля не расшифровались — обнови Кинозал и попробуй ещё раз'); }
+  const ppub = cleanPub(st.ppub), dpub = cleanPub(slot.pub), dev = String(slot.dev || '');
+  if (await idFromPub(ppub) !== id || !/^[0-9a-z]{6}$/.test(dev) || await devIdOf(dpub) !== dev || !await verify(ppub, String(slot.cert || ''), certStr(id, dev, dpub))) throw new Error('Ответ не похож на настоящий профиль — вход отменён');
+  const priv = await crypto.subtle.importKey('jwk', slot.jwk, { name: 'ECDSA', namedCurve: 'P-256' }, !!APP?.backup, ['sign']);
+  const me = st.me || {}, devs = {}, name = clean(dname, 40);
+  for (const x of [].concat(st.devs || []).slice(0, 20)) { const p2 = cleanPub(x?.pub), dv = String(x?.dev || ''); if (/^[0-9a-z]{6}$/.test(dv) && await devIdOf(p2) === dv && await verify(ppub, String(x.cert || ''), certStr(id, dv, p2))) devs[dv] = { dev: dv, pub: p2, cert: String(x.cert), name: clean(x.name, 40) }; }
+  devs[dev] = { dev, pub: dpub, cert: String(slot.cert), name, added: Date.now() };
   wiping = true; clearTimeout(saveT);   // дальше состояние пишем сами и перезапускаемся
-  await kvSet('ident', { profile: k.id, ppub, dev, cert: String(r.cert), name: clean(dname, 40) });
-  await kvSet('state', { me: { id: k.id, name: clean(me.name, 40) || 'Я', avatar: cleanAvatar(me.avatar), frame: window.kzTheme?.cleanFrame(me.frame) || null, pts: +me.pts || 0 }, contacts: {}, groups: {}, chats: {}, ended: {}, devs, pname: clean(r.pname, 40) });
+  await kvSet('keys', { pub: dpub, priv, ...(APP?.backup ? { jwk: slot.jwk } : {}) });
+  await kvSet('ident', { profile: id, ppub, dev, cert: String(slot.cert), name });
+  await kvSet('state', { me: { id, name: clean(me.name, 40) || 'Я', avatar: cleanAvatar(me.avatar), frame: window.kzTheme?.cleanFrame(me.frame) || null, pts: +me.pts || 0 }, contacts: {}, groups: {}, chats: {}, ended: {}, devs, pname: clean(st.pname, 40) });
   if (me.name) store.set('name', clean(me.name, 40));
-  jlog('[устройства] вошёл в профиль', k.id, 'как', dev);
+  jlog('[устройства] вошёл в профиль', id, 'как', dev, 'по паролю');
   status('Готово! Загружаю переписку…');
   await sleep(700); location.hash = ''; location.reload();
 }
@@ -1402,8 +1393,8 @@ function videoThumb(f) {
 // сжать или отправить оригиналами — как в Телеграме
 function askImages(c, files) {
   modal((card, close) => {
-    const grid = el('div', 'imgpick'), urls = [], list = files.slice(0, 10);
-    for (const f of list) { const u = URL.createObjectURL(f); urls.push(u); const i = el('img'); i.src = u; i.alt = ''; grid.append(i); }
+    const grid = el('div', 'imgpick'), urls = [], list = [...files];
+    for (const f of list.slice(0, 12)) { const u = URL.createObjectURL(f); urls.push(u); const i = el('img'); i.src = u; i.alt = ''; grid.append(i); }
     const total = list.reduce((s, f) => s + f.size, 0), free = () => urls.forEach(u => URL.revokeObjectURL(u));
     const sw = el('label', 'switch'), cb = el('input'); cb.type = 'checkbox'; cb.checked = store.get('imgZip', '1') === '1';
     sw.append(document.createTextNode('Сжать — быстрее и меньше весит'), cb);
@@ -1712,7 +1703,7 @@ function zoomable(stage, img, top, close) {
 }
 const dataOr = src => fetch(src).then(r => r.blob());
 async function sendFiles(c, files) {
-  for (const f of [...files].slice(0, 10)) {
+  for (const f of [...files]) {
     if (DESK && !f.type && f.size <= 65536 && await APP.files.kind(f) === 'dir') { await sendDir(c, APP.files.pathOfAny(f)); continue; }   // перетащили папку
     if (!f.size) continue;
     const meta = await makeThumb(f) || {};   // картинка, RAW или видео — с превью, чтобы было видно, что прислали
@@ -2622,7 +2613,7 @@ function setupInput(sec, c) {
 }
 // фото: уменьшаем до 1600 px, WebP; GIF — как есть
 async function sendImages(c, files) {
-  for (const f of [...files].filter(x => /^image\//.test(x.type)).slice(0, 10)) {
+  for (const f of [...files].filter(x => /^image\//.test(x.type))) {
     try {
       if (f.type === 'image/gif' && f.size <= 6e6) { const bm = await createImageBitmap(f).catch(() => null); await post(c, { kind: 'img', w: bm?.width, h: bm?.height }, f); continue; }
       const bm = await createImageBitmap(f); const k = Math.min(1, 1600 / Math.max(bm.width, bm.height));
@@ -3268,8 +3259,8 @@ function avatarPicker(get, set) {
   };
   paint(); return [b, inp];
 }
-// первый экран: создать новый профиль или войти в свой с другого устройства (code — код из ссылки #link=…)
-function helloDlg(code) {
+// первый экран: создать новый профиль или войти в свой по ID и паролю
+function helloDlg() {
   const ov = el('div', 'mx-hello'), card = el('div', 'mx-card'); ov.append(card); document.body.append(ov);
   let why = ''; try { why = sessionStorage.getItem('kinozal-why') || ''; sessionStorage.removeItem('kinozal-why'); } catch (e) {}
   let avatar = '';
@@ -3289,32 +3280,26 @@ function helloDlg(code) {
     if (ANDROID_WEB) { const a = el('a', 'btn', '📲 Удобнее в приложении для Android — уведомления и звонки даже в фоне'); a.href = APK; a.rel = 'noopener'; a.style.textDecoration = 'none'; card.append(a); }
     if (!TOUCH) setTimeout(() => name.focus(), 50);
   };
-  const join = (pre, mode) => {
-    mode = pre ? 'code' : mode || 'pwd';
+  const join = () => {
     card.textContent = ''; card.innerHTML = IC.logo;
-    const tabs = el('div', 'ftabs jtabs');
-    for (const [k, t] of [['pwd', 'По ID и паролю'], ['code', 'По коду']]) { const b2 = el('button', 'ftab' + (mode === k ? ' on' : ''), t); b2.onclick = () => join('', k); tabs.append(b2); }
     const id = el('input'); id.type = 'text'; id.placeholder = 'XXXXX-XXXXX'; id.maxLength = 40; id.autocomplete = 'username'; id.autocapitalize = 'characters'; id.spellcheck = false;
     id.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase';
     const pw = el('input'); pw.type = 'password'; pw.placeholder = 'Пароль'; pw.autocomplete = 'current-password';
-    const inp = el('input'); inp.type = 'text'; inp.placeholder = 'XXXXX-XXXXX-XXXXXX'; inp.maxLength = 200; inp.autocomplete = 'off'; inp.autocapitalize = 'characters'; inp.spellcheck = false;
-    inp.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase'; inp.value = pre || '';
     const dn = el('input'); dn.type = 'text'; dn.maxLength = 40; dn.value = devName(); dn.placeholder = 'Как назвать это устройство';
     const st = el('p'), err = el('div', 'err');
     const back = btnEl('Назад', '', create);
-    const fields = mode === 'pwd' ? [id, pw] : [inp];
+    const fields = [id, pw];
     const go = btnEl('Войти', 'pri', async () => {
       err.textContent = ''; for (const x of [go, back, dn, ...fields]) x.disabled = true;
-      try { mode === 'pwd' ? await joinProfile(id.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }, pw.value) : await joinProfile(inp.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }); }
+      try { await joinProfile(id.value, clean(dn.value, 40) || devName(), t => { st.textContent = t; }, pw.value); }
       catch (e) { st.textContent = ''; err.textContent = e?.message || String(e); for (const x of [go, back, dn, ...fields]) x.disabled = false; }
     });
     for (const x of fields) x.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
     const row = el('div', 'row'); row.style.justifyContent = 'center'; row.append(back, go);
-    card.append(el('h2', '', 'Вход в свой профиль'), tabs);
-    if (mode === 'pwd') card.append(el('p', '', 'Логин — это ID профиля (виден в профиле на основном устройстве), пароль задаётся там же: Профиль → «Мои устройства» → «Пароль для входа». Основное устройство должно быть в сети.'), el('label', '', 'ID профиля'), id, el('label', '', 'Пароль'), pw);
-    else card.append(el('p', '', 'На основном устройстве открой Профиль → «Мои устройства» → «Подключить другое устройство». Введи код оттуда — или наведи камеру телефона на QR-код. Оба устройства должны быть в сети.'), el('label', '', 'Код подключения'), inp);
+    card.append(el('h2', '', 'Вход в свой профиль'));
+    card.append(el('p', '', 'Логин — это ID профиля (виден в профиле на основном устройстве), пароль задаётся там же: Профиль → «Мои устройства» → «Пароль для входа». Основное устройство может быть выключено.'), el('label', '', 'ID профиля'), id, el('label', '', 'Пароль'), pw);
     card.append(el('label', '', 'Название этого устройства'), dn, st, err, row);
-    if (pre) go.click(); else if (!TOUCH) setTimeout(() => fields[0].focus(), 50);
+    if (!TOUCH) setTimeout(() => fields[0].focus(), 50);
   };
   // пришли из «Добавить профиль» в другом профиле: сразу нужный экран и путь назад; другие профили — переключиться
   let add = null; try { add = JSON.parse(sessionStorage.getItem('kinozal-add') || 'null'); sessionStorage.removeItem('kinozal-add'); } catch (e) {}
@@ -3325,7 +3310,7 @@ function helloDlg(code) {
     for (const x of others) { const b2 = el('button', 'fchip', (x.name || 'Профиль') + ' · ' + fmtId(x.id)); b2.onclick = () => { lsSet('kinozal-dropdb', dbName(SLOT)); lsSet('kinozal-slot', x.slot || null); location.hash = ''; location.reload(); }; bar.append(b2); }
     ov.append(bar);
   }
-  if (code) join(code); else if (add?.mode === 'join') join(add.code || '', add.code ? 'code' : 'pwd'); else create();
+  if (add?.mode === 'join') join(); else create();
 }
 // профиль → мои устройства: список, подключить новое, отвязать, выйти из профиля на этом устройстве
 function devicesDlg() {
@@ -3356,32 +3341,20 @@ function devicesDlg() {
     else card.append(el('p', '', 'Профиль можно открыть на телефоне или другом компьютере — переписка, контакты и группы будут одни и те же. Ключ профиля хранится на этом устройстве: не удаляй здесь данные Кинозала, иначе новые устройства подключить будет нельзя.'));
     card.append(list);
     if (!myDev) {
-      const b = btnEl('＋ Подключить другое устройство — одноразовый код', 'pri', () => { close(); linkDlg(); }); card.append(b);
       // пароль: войти с другого устройства по ID и паролю, без кода (основное устройство при этом должно быть в сети)
       const pw = el('div', 'pwbox'), info = el('div');
-      info.append(el('b', '', S.pwd ? '🔑 Пароль для входа задан' : '🔑 Пароль для входа не задан'), el('span', '', S.pwd ? 'С другого устройства: «Войти в свой профиль» → ID ' + fmtId(myId) + ' и пароль.' : 'Задай пароль — и с телефона или другого компьютера можно будет войти по ID ' + fmtId(myId) + ' и паролю, без кода.'));
+      info.append(el('b', '', S.pwd ? '🔑 Пароль для входа задан' : '🔑 Пароль для входа не задан'), el('span', '', S.pwd ? 'С другого устройства: «Войти в свой профиль» → ID ' + fmtId(myId) + ' и пароль. Это устройство при этом может быть выключено. ' + (S.vaultOn ? '✅ Данные для входа лежат на сервере.' : '⏳ Данные для входа ещё загружаются на сервер — не закрывай Кинозал.') : 'Задай пароль — и с телефона или другого компьютера можно будет войти по ID ' + fmtId(myId) + ' и паролю, даже когда это устройство выключено.'));
       pw.append(info, btnEl(S.pwd ? 'Сменить' : 'Задать пароль', S.pwd ? '' : 'pri', () => { close(); passwordDlg(); }));
-      if (S.pwd) pw.append(btnEl('Убрать', '', async () => { if (!confirm('Убрать пароль? Войти с нового устройства можно будет только по одноразовому коду.')) return; await setPassword(''); close(); devicesDlg(); }));
+      if (S.pwd) pw.append(btnEl('Убрать', '', async () => { if (!confirm('Убрать пароль? Войти в профиль с нового устройства будет нельзя, пока не зададишь новый пароль.')) return; await setPassword(''); close(); devicesDlg(); }));
       card.append(pw);
     }
     else card.append(btnEl('🚪 Выйти из профиля на этом устройстве', '', () => {
-      if (!confirm('Выйти из профиля на этом устройстве? Переписка, контакты и настройки профиля здесь удалятся. На других твоих устройствах всё останется, а войти сюда снова можно будет по новому коду.')) return;
+      if (!confirm('Выйти из профиля на этом устройстве? Переписка, контакты и настройки профиля здесь удалятся. На других твоих устройствах всё останется, а войти сюда снова можно будет по ID и паролю.')) return;
       close(); jlog('[устройства] выход из профиля на этом устройстве');
       send(myId, { t: 'bye' });   // основное устройство уберёт меня из списка (если оно сейчас в сети)
       setTimeout(() => wipeDevice('Ты вышел(-ла) из профиля на этом устройстве. Можно создать новый профиль или войти снова.'), 600);
     }));
-    // ввод кода с другого устройства: профиль подключается рядом с текущим (как второй аккаунт), текущий не трогается
-    const ib = el('div', 'pwbox'), ii = el('div'), cin = el('input');
-    cin.type = 'text'; cin.placeholder = 'XXXXX-XXXXX-XXXXXX'; cin.maxLength = 200; cin.autocomplete = 'off'; cin.autocapitalize = 'characters'; cin.spellcheck = false;
-    cin.style.cssText = 'letter-spacing:.1em;font-weight:700;text-transform:uppercase';
-    const cgo = btnEl('Войти', 'pri', () => {
-      if (!cin.value.trim()) { cin.focus(); return; }
-      close(); addProfile('join', cin.value.trim());
-    });
-    cin.addEventListener('keydown', e => { if (e.key === 'Enter') cgo.click(); });
-    ii.append(el('b', '', '🔑 Ввести код с другого устройства'), el('span', '', 'Код подключения из окна «Подключить другое устройство» на твоём основном устройстве. Профиль откроется рядом с текущим — переключаться между ними можно в «Профиль → Профили на этом устройстве».'), cin);
-    ib.append(ii, cgo);
-    card.append(ib, btnEl('Войти в профиль по ID и паролю', '', () => { close(); addProfile('join'); }));
+    card.append(btnEl('Войти в другой профиль по ID и паролю', '', () => { close(); addProfile('join'); }));
     const row = el('div', 'row'); row.append(btnEl('Готово', '', close)); card.append(row);
     devsPaint = paint; paint();
   });
@@ -3389,47 +3362,16 @@ function devicesDlg() {
 // основное устройство: задать или сменить пароль для входа с других устройств
 function passwordDlg() {
   modal((card, close) => {
-    const a = el('input'), b2 = el('input'); a.type = b2.type = 'password'; a.placeholder = 'Новый пароль (не меньше 6 символов)'; b2.placeholder = 'Ещё раз'; a.autocomplete = b2.autocomplete = 'new-password';
+    const a = el('input'), b2 = el('input'); a.type = b2.type = 'password'; a.placeholder = 'Новый пароль (не меньше 8 символов)'; b2.placeholder = 'Ещё раз'; a.autocomplete = b2.autocomplete = 'new-password';
     const err = el('div', 'err');
     const ok = btnEl('Сохранить', 'pri', async () => {
-      if (a.value.length < 6) { err.textContent = 'Пароль — не меньше 6 символов'; a.focus(); return; }
+      if (a.value.length < 8) { err.textContent = 'Пароль — не меньше 8 символов: его можно подбирать через сервер, длинный подобрать нельзя'; a.focus(); return; }
       if (a.value !== b2.value) { err.textContent = 'Пароли не совпадают'; b2.focus(); return; }
       ok.disabled = true; await setPassword(a.value); toast('Пароль задан. Войти: «Войти в свой профиль» → ID ' + fmtId(myId) + ' и пароль'); close(); devicesDlg();
     });
     b2.addEventListener('keydown', e => { if (e.key === 'Enter') ok.click(); });
     const row = el('div', 'row'); row.append(btnEl('Отмена', '', () => { close(); devicesDlg(); }), ok);
-    card.append(el('h2', '', 'Пароль для входа'), el('p', '', 'С ним на телефоне или другом компьютере можно войти в этот профиль по ID ' + fmtId(myId) + ' и паролю. Сам пароль никуда не отправляется и здесь не хранится — только его отпечаток. Вход возможен, только пока это устройство в сети; после 5 неверных попыток он закрывается на 15 минут.'), a, b2, err, row);
-  });
-}
-// основное устройство: показать одноразовый код и QR для входа с нового устройства
-function linkDlg() {
-  if (myDev) return;
-  modal((card, close) => {
-    card.style.justifyItems = 'center'; card.style.textAlign = 'center';
-    const secret = b32(rnd(4)).slice(0, 6), code = myId + secret, link = WEB + '#link=' + code;
-    const s = linkSess = { secret, exp: Date.now() + 10 * 6e4, tries: 0 };
-    const box = el('div', 'qrbox');
-    try { const q = qrcode(0, 'M'); q.addData(link); q.make(); box.innerHTML = q.createSvgTag({ cellSize: 6, margin: 3, scalable: true }); } catch (e) { box.textContent = link; }
-    const cd = el('div', 'idcard'), ct = el('div'); ct.append(el('span', 'lab', 'Код подключения'), el('code', '', fmtId(myId) + '-' + secret)); cd.append(ct, btnEl('Скопировать', '', () => navigator.clipboard.writeText(fmtId(myId) + '-' + secret).then(() => toast('Код скопирован')).catch(() => {})));
-    const stt = el('p'), err = el('div', 'err');
-    const left0 = () => Math.max(0, Math.round((s.exp - Date.now()) / 1000));
-    const wait = () => { stt.textContent = net === 'on' ? 'Жду новое устройство… Код действует ещё ' + fmtDur(left0()) + '.' : 'Нет связи с сетью — код заработает, как только Кинозал подключится.'; };
-    s.paint = (k, t) => {
-      if (k === 'ok') { clearInterval(tm); box.remove(); cd.remove(); err.textContent = ''; stt.textContent = '✅ «' + t + '» подключено к профилю. Переписка, контакты и группы перенесутся туда, пока оба устройства в сети.'; }
-      else if (k === 'bad') err.textContent = 'Кто-то ввёл неверный код — проверь, что он набран без ошибок.';
-      else if (k === 'fail') { clearInterval(tm); box.remove(); cd.remove(); stt.textContent = ''; err.textContent = t; }
-    };
-    const tm = setInterval(() => {
-      if (!card.isConnected) { clearInterval(tm); if (linkSess === s) linkSess = null; return; }
-      if (linkSess !== s) return;
-      if (Date.now() > s.exp) { clearInterval(tm); linkSess = null; box.remove(); cd.remove(); stt.textContent = 'Код устарел — открой это окно заново, будет новый.'; return; }
-      wait();
-    }, 1000);
-    wait();
-    const row = el('div', 'row'); row.style.justifyContent = 'center'; row.append(btnEl('Готово', 'pri', close));
-    card.append(el('h2', '', 'Подключить другое устройство'),
-      el('p', '', 'На новом устройстве открой Кинозал — программу, приложение для Android или сайт ' + WEB.replace(/^https:\/\//, '') + ' — и нажми «Войти в профиль с другого устройства». Введи этот код или наведи камеру телефона на QR-код. Не закрывай это окно, пока устройство не подключится.'),
-      box, cd, stt, err, row);
+    card.append(el('h2', '', 'Пароль для входа'), el('p', '', 'С ним на телефоне или другом компьютере можно войти в этот профиль по ID ' + fmtId(myId) + ' и паролю. Это устройство при этом может быть выключено: на сервере Кинозала лежат только зашифрованные запасные места для новых устройств (сам пароль и ключ профиля туда не попадают, расшифровать их без пароля нельзя). Чтобы мест хватало, открывай Кинозал на этом устройстве хотя бы раз в пару недель. После 5 неверных попыток вход закрывается на 15 минут, потом на дольше.'), a, b2, err, row);
   });
 }
 function addContactDlg() {
@@ -3742,14 +3684,13 @@ function boot() {
   if (restored) setTimeout(() => toast('Профиль восстановлен из запасной копии — переписка догрузится от собеседников'), 1500);
   try { renderMe(); renderList(); showEmpty(); } catch (e) { console.error('[мессенджер] отрисовка: ' + (e?.stack || e)); }
   startPeer(); tickAlerts();
+  if (!myDev) { setTimeout(vaultSync, 5000); setInterval(vaultSync, 30 * 6e4); }   // данные для входа по паролю: пополняем запасные места
   // пришли по ссылке: #add=ID — новый собеседник, #КОД — сразу в зал
   const go = () => {
     const h = location.hash.slice(1); if (!h) return;
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     const a = h.match(/add=([0-9A-Za-z-]{10,13})/);
-    const lk = /link=/.test(h) && parseLinkCode(h);
     if (a) { const e = addContact(normId(a[1])); if (e) toast(e); else toast('Собеседник добавлен — напиши ему'); }
-    else if (lk) { if (lk.id === myId) toast('Это устройство уже в этом профиле'); else if (confirm('Войти в профиль ' + fmtId(lk.id) + ' на этом устройстве? Он добавится рядом с «' + (S.me?.name || '') + '» — переключаться можно в Профиле.')) addProfile('join', h.match(/link=([0-9A-Za-z-]{16,24})/)?.[1] || ''); }
     else if (/^[A-Za-z0-9]{5}$/.test(h) && window.kzRoom && !window.kzRoom.busy) { toast('Подключаюсь к залу ' + h.toUpperCase() + '…'); window.kzRoom.join(h.toUpperCase(), S.me.name).then(ok => { if (!ok) toast('Зал с таким кодом не найден'); }); }
   };
   go(); window.addEventListener('hashchange', go);
@@ -3759,8 +3700,8 @@ function boot() {
     if (S.me && root.hidden && room?.hidden && !document.querySelector('.mx-hello')) { console.warn('[мессенджер] экран был пустым — показываю чаты'); root.hidden = false; renderList(); }
   }, 2000);
 }
-window.__mx = { get S() { return S; }, myId, myDev, myPeer, links, isOn, openChat, post, devicesDlg, linkDlg, get linkSess() { return linkSess; }, get open() { return open; } }; // для диагностики
-if (S.me) boot(); else helloDlg((location.hash.match(/link=([0-9A-Za-z-]{16,24})/) || [])[1] || '');
+window.__mx = { get S() { return S; }, myId, myDev, myPeer, links, isOn, openChat, post, devicesDlg, vaultSync, setPassword, get open() { return open; } }; // для диагностики
+if (S.me) boot(); else helloDlg();
 })().catch(e => {
   // не оставляем пустой тёмный экран: показываем, что случилось, и кнопку перезапуска
   console.error('[мессенджер] не запустился: ' + (e?.stack || e));
