@@ -39,6 +39,24 @@ const files = {
   watch: cb => { ipcRenderer.removeAllListeners('kz:fchanged'); ipcRenderer.on('kz:fchanged', () => cb()); return ipcRenderer.invoke('kz:fwatch'); }
 };
 
+// музыка: своя папка, список, звук по kzmusic://, слежение
+const music = {
+  root: () => ipcRenderer.invoke('kz:mroot'),
+  pick: () => ipcRenderer.invoke('kz:mpick'),
+  reset: () => ipcRenderer.invoke('kz:mreset'),
+  scan: () => ipcRenderer.invoke('kz:mscan'),
+  read: (p, off, len) => ipcRenderer.invoke('kz:mread', p, off, len),
+  hash: p => ipcRenderer.invoke('kz:mhash', p),
+  add: list => ipcRenderer.invoke('kz:madd', list),
+  addDropped: fl => ipcRenderer.invoke('kz:madd', [...fl].map(f => { try { return webUtils.getPathForFile(f); } catch (e) { return ''; } })),
+  pickFiles: () => ipcRenderer.invoke('kz:mpickfiles'),
+  show: p => ipcRenderer.invoke('kz:mshow', p),
+  openDir: () => ipcRenderer.invoke('kz:mopen'),
+  trash: p => ipcRenderer.invoke('kz:mtrash', p),
+  url: p => 'kzmusic://f/' + encodeURIComponent(p),
+  watch: cb => { ipcRenderer.removeAllListeners('kz:mchanged'); ipcRenderer.on('kz:mchanged', () => cb()); return ipcRenderer.invoke('kz:mwatch'); }
+};
+
 contextBridge.exposeInMainWorld('kinozalApp', {
   getSources: () => ipcRenderer.invoke('kz:sources'),
   pick: (id, audio) => ipcRenderer.invoke('kz:pick', id, audio),
@@ -58,5 +76,6 @@ contextBridge.exposeInMainWorld('kinozalApp', {
   readLog: () => ipcRenderer.invoke('kz:readLog'),
   crashed: () => ipcRenderer.invoke('kz:crashed'),
   log: (...a) => ipcRenderer.send('kz:log', ...a),
-  files
+  files,
+  music
 });

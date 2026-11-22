@@ -1,5 +1,7 @@
 // Кинозал — настольное приложение (Electron)
-const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification, screen, dialog } = require('electron');
+const { app, BrowserWindow, session, desktopCapturer, ipcMain, shell, Tray, Menu, nativeImage, Notification, screen, dialog, protocol, net } = require('electron');
+const kzMusic = require('./music-main.js');
+kzMusic.register(protocol);   // схему kzmusic: надо объявить до готовности приложения
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -259,6 +261,7 @@ app.whenReady().then(() => {
   });
 
   setupFiles();
+  kzMusic.setup({ app, ipcMain, dialog, shell, protocol, net, getWin: () => win, log, tag: prof ? '-' + prof.split('=')[1].replace(/[^\w-]/g, '') : '' });
   createWindow();
   setupTray();
   setupUpdates();

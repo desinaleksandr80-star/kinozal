@@ -49,6 +49,7 @@ const IC = {
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
   pen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 19.5l1-4.2L15.8 5a2.1 2.1 0 0 1 3 0l.2.2a2.1 2.1 0 0 1 0 3L8.7 18.5z"/><path d="M13.6 7.2l3.2 3.2"/></svg>',
+  music: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M3 10h18"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 20 20"/></svg>',
   up: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 15l6-6 6 6"/></svg>',
@@ -842,7 +843,7 @@ async function createGroup(name, list) {
 const root = el('div'); root.id = 'mx'; root.hidden = true;
 root.innerHTML = `
 <aside class="mx-side">
-  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxFiles" title="Файлы: передачи, полученное, отправленное">${IC.folder}<b hidden></b></button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
+  <div class="mx-top"><button class="me" id="mxMe" title="Профиль и настройки"></button><h1 id="mxProf" title="Профиль и настройки"><span id="mxName">Профиль</span><small id="mxNet"></small></h1><button class="ib" id="mxTheme" title="Оформление: темы, обои, неон">${IC.palette}</button><button class="ib cine" id="mxCine" title="Кинозал — смотреть вместе без добавления в друзья">${IC.film}</button><button class="ib" id="mxFiles" title="Файлы: передачи, полученное, отправленное">${IC.folder}<b hidden></b></button><button class="ib" id="mxMusic" title="Музыка" hidden>${IC.music}</button><button class="ib" id="mxAdd" title="Добавить собеседника">${IC.add}</button></div>
   <div class="mx-callbar" id="mxCallbar" hidden><i class="pulse"></i><span>Идёт звонок</span><b>Вернуться →</b></div>
   <div class="mx-sec"><span>Чаты</span><button class="ib lay" id="mxLay" title="Список чатов: ширина, сторона, компактный вид">${IC.dots}</button></div>
   <div class="mx-search"><input id="mxQ" type="search" placeholder="Поиск" autocomplete="off"></div>
@@ -858,6 +859,7 @@ setNet(net);
 $('#mxQ').oninput = () => { renderList(); clearTimeout(globalFind.t); globalFind.t = setTimeout(globalFind, 220); };
 $('#mxAdd').onclick = () => addContactDlg();
 $('#mxFiles').onclick = () => filesOpen ? closeFiles() : openFiles();
+$('#mxMusic').onclick = () => musicApi?.shown ? closeMusic() : openMusic();
 $('#mxTheme').onclick = () => openTheme();
 $('#mxMe').onclick = $('#mxProf').onclick = () => settingsDlg();
 $('#mxCine').onclick = () => codeDlg('cinema');
@@ -992,7 +994,7 @@ function blobUrl(id) { return urls.get(id); }
 async function mediaUrl(m) { if (urls.has(m.id)) return urls.get(m.id); const b = await blobGet(m.id); if (!b) return ''; const u = URL.createObjectURL(b); urls.set(m.id, u); return u; }
 function freeUrls() { stopVoice(); for (const u of urls.values()) URL.revokeObjectURL(u); urls.clear(); }
 function showEmpty() {
-  filesOpen = false;
+  filesOpen = false; musicApi?.hide();
   const main = $('#mxMain'); main.textContent = ''; root.classList.remove('chat-open');
   const e = el('div', 'mx-empty');
   e.innerHTML = IC.logo;
@@ -1015,7 +1017,7 @@ async function copyInvite() {
 }
 async function openChat(c) {
   if (!S.chats[c] && !isDm(c) && !S.groups[c]) return;
-  filesOpen = false;
+  filesOpen = false; musicApi?.hide();
   ensureChat(c);
   if (open !== c) { freeUrls(); open = c; enterChat = true; }
   root.classList.add('chat-open');
@@ -2072,7 +2074,16 @@ async function liveItems() {
   return { rx, tx };
 }
 const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).size;
+// ---------- музыка (только программа для Windows; сам раздел — в music.js) ----------
+let musicApi = null;
+function openMusic() {
+  if (!musicApi) return;
+  if (open) { freeUrls(); open = null; find = null; }
+  filesOpen = false; root.classList.add('chat-open'); renderList(); musicApi.show();
+}
+function closeMusic() { musicApi?.hide(); showEmpty(); }
 function openFiles(tab) {
+  musicApi?.hide();
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
   if ((!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all';
@@ -3699,6 +3710,10 @@ function boot() {
     const room = document.getElementById('room');
     if (S.me && root.hidden && room?.hidden && !document.querySelector('.mx-hello')) { console.warn('[мессенджер] экран был пустым — показываю чаты'); root.hidden = false; renderList(); }
   }, 2000);
+}
+if (DESK && window.kzMusic) {
+  musicApi = window.kzMusic.mount({ store, toast, modal, btnEl: (...a) => btnEl(...a), host: () => $('#mxMain'), side: root.querySelector('.mx-side'), openSelf: openMusic, close: closeMusic });
+  if (musicApi) $('#mxMusic').hidden = false;
 }
 window.__mx = { get S() { return S; }, myId, myDev, myPeer, links, isOn, openChat, post, devicesDlg, vaultSync, setPassword, get open() { return open; } }; // для диагностики
 if (S.me) boot(); else helloDlg();
