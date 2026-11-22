@@ -24,6 +24,7 @@
 <script src="vendor/peerjs.min.js"></script>
 <script src="vendor/qrcode.js"></script>
 <script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
+<script src="signal.js"></script>
 <style>
 :root{color-scheme:dark;--bg:#0e1416;--panel:#162023;--panel2:#1c282b;--line:#2a3639;--ink:#eef3f1;--mute:#93a5a3;--acc:#ff6b4a;--acc2:#5fd4c4}
 *{box-sizing:border-box;min-width:0}
@@ -1258,6 +1259,7 @@ function tune(c,o){
     }
   };
   apply();
+  c.on?.('kzswitch',()=>{n=0;apply();});  // собеседник нашёлся через другой сервер связи — соединение новое
 }
 function callCam(id){
   if(camCalls.has(id))return;

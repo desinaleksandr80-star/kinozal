@@ -37,6 +37,7 @@
       "preload.js",
       "index.html",
       "messenger.js",
+      "signal.js",
       "rawprev.js",
       "viewers.js",
       "messenger.css",
