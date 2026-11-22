@@ -1364,62 +1364,154 @@ function bgCard() {
 
 
 // ---------- «шторка»: маленькая вкладка сверху по центру ----------
-// Нажми или потяни вниз — раскроется окошко музыки, как на телефоне: что играет, перемотка, переключение треков, быстрый выбор полки.
-// Доступна везде: в чатах, в зале, поверх всего. Потяни вверх, нажми мимо или Esc — свернётся.
+// Смысл: сидишь в Кинозале или болтаешь в чате — и за секунду добираешься до музыки: переключил, поменял, подкрутил громкость, закрыл. Без возни.
+// Нажми на вкладку или потяни вниз — окошко: что играет, ⏮ ⏯ ⏭, громкость, «дальше» и полоса подборок — нажал на любую, и музыка сменилась.
+// Остальное (очередь, поиск, полка, звук) — по одной кнопке, без вкладок и меню. Цвета подстраиваются под обложку.
+// Потяни вверх (за вкладку или за ручку внизу), нажми мимо или Esc — свернётся. Пока открыта: пробел — пауза, ← → — перемотка, ↑ ↓ или колесо — громкость.
 let shadeApi = null;
+const tintCache = new Map();
+async function coverTint(t) {   // средний «живой» цвет обложки → оттенок и насыщенность
+  const fb = { h: hue(t.title, '🎵'), s: 38 };
+  if (!t.cv) return fb;
+  if (tintCache.has(t.rel)) return tintCache.get(t.rel);
+  const u = await coverOf(t); if (!u) return fb;
+  const v = await new Promise(res => {
+    const im = new Image(); im.onload = () => {
+      try {
+        const c = document.createElement('canvas'); c.width = c.height = 20; const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(im, 0, 0, 20, 20);
+        const d = g.getImageData(0, 0, 20, 20).data; let R = 0, G = 0, B = 0, W = 0;
+        for (let i = 0; i < d.length; i += 4) { const r0 = d[i], g0 = d[i + 1], b0 = d[i + 2], mx = Math.max(r0, g0, b0), mn = Math.min(r0, g0, b0), sat = mx ? (mx - mn) / mx : 0, w = 0.15 + sat * sat * 3 + (mx > 40 && mx < 235 ? 0.3 : 0); R += r0 * w; G += g0 * w; B += b0 * w; W += w; }
+        R /= W; G /= W; B /= W; const mx = Math.max(R, G, B), mn = Math.min(R, G, B), dl = mx - mn;
+        let h = 0; if (dl) { h = mx === R ? ((G - B) / dl) % 6 : mx === G ? (B - R) / dl + 2 : (R - G) / dl + 4; h = Math.round(h * 60); if (h < 0) h += 360; }
+        res({ h, s: Math.round(Math.max(26, Math.min(70, (mx ? dl / mx : 0) * 100))) });
+      } catch (e) { res(fb); }
+    }; im.onerror = () => res(fb); im.src = u;
+  });
+  tintCache.set(t.rel, v); return v;
+}
 function buildShade() {
   if (shadeApi) return shadeApi;
   const root = el('div', 'mu-shade'); root.id = 'kzShade';
   const handle = el('button', 'mu-sh-h'); handle.type = 'button'; handle.title = 'Музыка — нажми или потяни вниз'; handle.setAttribute('aria-label', 'Музыка');
-  handle.innerHTML = '<span class="eq"><i></i><i></i><i></i></span><svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
-  const sheet = el('div', 'mu-sh-s'); sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', 'Музыка');
-  root.append(sheet, handle);
+  const hEq = el('span', 'eq'); hEq.innerHTML = '<i></i><i></i><i></i>';
+  const hTt = el('span', 'ttl'), hCh = el('span', 'chev'); hCh.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>';
+  handle.append(hEq, hTt, hCh);
+  const sheet = el('div', 'mu-sh-s'); sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', 'Музыка'); sheet.tabIndex = -1;
+  const back = el('div', 'mu-sh-bgimg');
+  const sess1 = el('div', 'mu-sh-sess'); sess1.hidden = true;
+  const panes = el('div', 'mu-sh-panes');
+  const grab = el('button', 'mu-sh-grab'); grab.type = 'button'; grab.title = 'Потяни вверх — свернуть'; grab.setAttribute('aria-label', 'Свернуть'); grab.append(el('i'));
+  sheet.append(back, sess1, panes, grab); root.append(sheet, handle);
+  let pane = 'main';
 
-  // — что играет
+  // ===== главное: что играет, управление, громкость, подборки =====
+  const main = el('section', 'mu-sh-pane main');
   const top = el('div', 'mu-sh-top'), cv = el('div', 'mu-sh-cv'), info = el('div', 'mu-sh-info'), tt = el('b'), ar = el('span'), al = el('small');
   info.append(tt, ar, al);
   const full = ibtn('⤢', 'Открыть «Музыку» целиком', () => openFull(), 'mu-sh-full');
   top.append(cv, info, full);
-  // — перемотка
-  const seek = el('input', 'mu-seek'); seek.type = 'range'; seek.min = 0; seek.max = 1000; seek.value = 0;
+  const seek = el('input', 'mu-seek'); seek.type = 'range'; seek.min = 0; seek.max = 1000; seek.value = 0; seek.setAttribute('aria-label', 'Перемотка');
   const tcur = el('span', 'mu-t', '0:00'), tall = el('span', 'mu-t', '0:00'), line = el('div', 'mu-line'); line.append(tcur, seek, tall);
   let dragging = false;
   seek.oninput = () => { dragging = true; tcur.textContent = fmt(seek.value / 1000 * (au.duration || 0)); };
   seek.onchange = () => { if (isGuest()) { guestBlock(); dragging = false; return; } seekTo(seek.value / 1000); dragging = false; };
-  // — кнопки
   const shuf = ibtn(IC.shuffle, 'Перемешать', () => { player.shuffle = !player.shuffle; H.store.set('musicShuffle', player.shuffle ? '1' : '0'); const c = player.queue[player.qi]; if (player.queue.length) { if (player.shuffle) reshuffle(c); else { player.queue = player.orig.slice(); player.qi = Math.max(0, player.queue.indexOf(c)); } } player.sync(); });
   const prv = ibtn(IC.prev, 'Предыдущий', prev), play1 = ibtn(IC.play, 'Играть / пауза', toggle, 'big'), nxt = ibtn(IC.next, 'Следующий', () => next(false));
   const rep = ibtn(IC.repeat, 'Повтор', () => { player.repeat = { off: 'all', all: 'one', one: 'off' }[player.repeat]; H.store.set('musicRepeat', player.repeat); player.sync(); });
   const ctl = el('div', 'mu-sh-ctl'); ctl.append(shuf, prv, play1, nxt, rep);
-  // — инструменты и громкость
-  const fav = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } } }, 'fav');
-  const shelf = ibtn('🏷️', 'На полку', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 10, t, null); }, 'shelf');
-  const que = ibtn(IC.queue, 'Очередь', () => queueDlg()), snd = ibtn(IC.sliders, 'Звук', () => soundDlg());
-  const vi = el('span', 'mu-vi'); vi.innerHTML = IC.vol; const vol = el('input', 'mu-vol'); vol.type = 'range'; vol.min = 0; vol.max = 100; vol.oninput = () => setVol(vol.value / 100);
-  const tools = el('div', 'mu-sh-tools'); tools.append(fav, shelf, que, snd, vi, vol);
-  // — фон
+  // громкость — всегда на виду
+  const mute = ibtn(IC.vol, 'Выключить звук', () => { if (player.vol > 0) { mute.dataset.v = String(player.vol); setVol(0); } else setVol(+mute.dataset.v || 0.8); }, 'mute');
+  const vol = el('input', 'mu-vol'); vol.type = 'range'; vol.min = 0; vol.max = 100; vol.setAttribute('aria-label', 'Громкость'); vol.oninput = () => setVol(vol.value / 100);
+  const volRow = el('div', 'mu-sh-vol'); volRow.append(mute, vol);
+  const nextUp = el('button', 'mu-sh-next'); nextUp.type = 'button'; nextUp.hidden = true; nextUp.title = 'Переключить на следующий'; nextUp.onclick = () => next(false);
+  // подборки: нажал — музыка сменилась
+  const picksH = el('div', 'mu-sh-ph'), picks = el('div', 'mu-sh-pg');
+  picksH.append(el('h4', '', 'Включить'));
+  const srchBtn = ibtn('🔎', 'Найти трек', () => setPane('search'), 'mu-sh-sbtn'); picksH.append(srchBtn);
+  const tools = el('div', 'mu-sh-tools');
+  const qBtn = ibtn(IC.queue, 'Очередь', () => setPane('queue')), shBtn = ibtn('🏷️', 'Положить трек на полку', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 12, t, null); }), sndBtn = ibtn(IC.sliders, 'Звук: переходы, эквалайзер, скорость, таймер сна', () => soundDlg());
+  const favBtn = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } } }, 'fav');
+  tools.append(favBtn, shBtn, qBtn, sndBtn);
+  // фон
   const bgRow = el('div', 'mu-sh-bg'), bgt = el('div'), bgb = el('b'), bgs = el('span'); bgt.append(bgb, bgs);
   const bgp = ibtn(IC.play, 'Фон: играть / пауза', bgToggle), bgn = ibtn(IC.next, 'Фон: следующий', bgNext), bgx = ibtn('✕', 'Остановить фон', bgStop);
   const bgv = el('input', 'mu-vol'); bgv.type = 'range'; bgv.min = 0; bgv.max = 100; bgv.title = 'Громкость фона'; bgv.oninput = () => setBgVol(bgv.value / 100);
   bgRow.append(el('i', '', '🌙'), bgt, bgp, bgn, bgv, bgx);
-  // — быстрый выбор
-  const picks = el('div', 'mu-sh-picks'), pk = el('div', 'mu-sh-pg');
-  picks.append(el('h4', '', 'Включить'), pk);
-  const foot = el('div', 'mu-sh-foot'); foot.append(H.btnEl('🎵 Вся музыка', '', () => openFull()), H.btnEl('🎧 Вместе', '', () => { gotoMode('together'); openFull(); }));
-  sheet.append(top, line, ctl, tools, bgRow, picks, foot);
+  main.append(top, line, ctl, volRow, nextUp, picksH, picks, tools, bgRow);
 
-  // — состояние
+  // ===== очередь (по кнопке, со стрелкой назад) =====
+  const subHead = (title, onBack) => { const h = el('div', 'mu-sh-sub'); h.append(ibtn(IC.back, 'Назад', onBack), el('b', '', title)); return h; };
+  const qp = el('section', 'mu-sh-pane queue'), qlist = el('div', 'mu-sh-ql'), qfoot = el('div', 'mu-sh-qf');
+  qfoot.append(H.btnEl('Очистить очередь', '', () => { if (guestBlock()) return; if (decks) { silence(decks[0]); silence(decks[1]); } player.orig = []; player.queue = []; player.qi = -1; player.sync(); }));
+  qp.append(subHead('Очередь', () => setPane('main')), qlist, qfoot);
+  const paintQueue = () => {
+    qlist.textContent = '';
+    if (!player.queue.length) { qlist.append(el('p', 'mu-sh-empty', 'Очередь пуста.')); qfoot.hidden = true; return; }
+    qfoot.hidden = false;
+    player.queue.forEach((rel, i) => {
+      const t = lib.get(rel); if (!t) return;
+      const r0 = el('div', 'mu-row sm' + (i === player.qi ? ' cur' : '') + (i < player.qi ? ' done' : '')), tx0 = el('div', 'mu-tx'); tx0.append(el('b', '', t.title), el('span', '', t.artist || ''));
+      r0.append(coverEl(t, 'sm'), tx0);
+      if (i !== player.qi) r0.append(ibtn('✕', 'Убрать из очереди', () => { if (guestBlock()) return; player.queue.splice(i, 1); player.orig = player.orig.filter(x => x !== rel); if (i < player.qi) player.qi--; player.sync(); }));
+      r0.onclick = () => { if (guestBlock()) return; player.qi = i; play(); };
+      qlist.append(r0);
+    });
+    qlist.querySelector('.cur')?.scrollIntoView({ block: 'center' });
+  };
+
+  // ===== поиск трека =====
+  const sp = el('section', 'mu-sh-pane search'), sq = el('input', 'mu-q'); sq.type = 'search'; sq.placeholder = 'Название, исполнитель, альбом'; sq.autocomplete = 'off';
+  const sres = el('div', 'mu-sh-res'); sp.append(subHead('Поиск', () => setPane('main')), sq, sres);
+  const paintSearch = () => {
+    sres.textContent = ''; const qv = sq.value.trim().toLowerCase();
+    if (!qv) { sres.append(el('p', 'mu-sh-empty', 'Начни вводить — нажми на трек, и он заиграет.')); return; }
+    const ws = qv.split(/\s+/), found = sortTracks(allTracks().filter(t => ws.every(w => text(t).includes(w)))).slice(0, 40);
+    if (!found.length) { sres.append(el('p', 'mu-sh-empty', 'Ничего не нашлось.')); return; }
+    found.forEach((t, i) => { const r0 = el('div', 'mu-row sm' + (player.cur?.rel === t.rel ? ' cur' : '')), tx0 = el('div', 'mu-tx'); tx0.append(el('b', '', t.title), el('span', '', [t.artist, t.album].filter(Boolean).join(' · '))); r0.append(coverEl(t, 'sm'), tx0, el('span', 'mu-d', t.dur ? fmt(t.dur) : '')); r0.onclick = () => { if (guestBlock()) return; player.src = null; setQueue(found, i); setPane('main'); }; sres.append(r0); });
+  };
+  sq.oninput = paintSearch;
+  panes.append(main, qp, sp);
+  function setPane(k) {
+    pane = k; main.hidden = k !== 'main'; qp.hidden = k !== 'queue'; sp.hidden = k !== 'search';
+    if (k === 'queue') paintQueue();
+    if (k === 'search') { sq.value = ''; paintSearch(); if (!TOUCH) setTimeout(() => sq.focus(), 60); }
+  }
+  const fillPicks = () => {
+    const sl = picks.scrollLeft; picks.textContent = '';
+    const c = collections(''), all = [c.all, ...c.lists.filter(x => x.tracks.length), ...c.albums.slice(0, 8), ...c.artists.slice(0, 6)].slice(0, 22);
+    for (const x of all) { const t = tile(x, { on: player.src?.kind === x.kind && player.src?.id === x.id, playing: !au.paused, go: () => { playColl(x); } }); t.classList.add('sm'); picks.append(t); }
+    picksH.hidden = picks.hidden = !all.length; picks.scrollLeft = sl;
+  };
+
+  // ===== состояние =====
+  let tintFor = '';
   const bar = { mini: true };
+  const paintSess = () => {
+    sess1.textContent = ''; sess1.hidden = !sess; if (!sess) return;
+    const txt = sess.host ? '🎧 Ты включаешь для всех · ' + (sess.peers.size ? sess.peers.size + ' ' + plural(sess.peers.size, 'слушатель', 'слушателя', 'слушателей') : 'ждём друзей') : '🎧 Слушаешь вместе с ' + H.net.nameOf(sess.hostU) + (sess.mode === 'stream' ? ' · по трансляции' : '');
+    sess1.append(el('span', '', txt), H.btnEl(sess.host ? 'Закончить' : 'Выйти', '', () => endSess(true)));
+  };
   bar.sync = () => {
-    const t = player.cur, playing = !!t && !au.paused;
+    const t = player.cur, playing = !!t && !au.paused, gt = isGuest() ? sess.track : null;
     root.classList.toggle('playing', playing); root.classList.toggle('idle', !t);
+    hTt.textContent = t ? t.title : gt ? gt.title : '';
     cv.textContent = ''; cv.append(coverEl(t || null, 'xl'));
-    tt.textContent = t ? t.title : (isGuest() && sess.track ? sess.track.title : 'Ничего не играет'); ar.textContent = t ? (t.artist || '') : (isGuest() && sess.track ? sess.track.artist || '' : 'Выбери, что включить, ниже');
+    tt.textContent = t ? t.title : gt ? gt.title : 'Ничего не играет'; ar.textContent = t ? (t.artist || '') : gt ? gt.artist || '' : 'Выбери, что включить, ниже';
     al.textContent = t?.album || '';
     play1.innerHTML = au.paused ? IC.play : IC.pause;
     shuf.classList.toggle('on', player.shuffle); rep.classList.toggle('on', player.repeat !== 'off'); rep.dataset.one = player.repeat === 'one' ? '1' : '';
-    fav.classList.toggle('on', !!t && isFav(t)); vol.value = Math.round(player.vol * 100);
+    vol.value = Math.round(player.vol * 100); vol.style.setProperty('--p', Math.round(player.vol * 100) + '%'); mute.innerHTML = player.vol > 0 ? IC.vol : '🔇'; mute.title = player.vol > 0 ? 'Выключить звук' : 'Включить звук';
+    const pn = planNext(), nt = pn && lib.get(pn.rel) || (player.queue[player.qi + 1] && lib.get(player.queue[player.qi + 1]));
+    nextUp.hidden = !nt; if (nt) nextUp.textContent = 'Дальше: ' + nt.title + (nt.artist ? ' — ' + nt.artist : '');
+    favBtn.classList.toggle('on', !!t && isFav(t)); sndBtn.classList.toggle('on', !!(cfg.xf || cfg.rate !== 1 || cfg.eqOn || sleep.until || sleep.endOfTrack));
     sheet.classList.toggle('noplay', !t);
+    paintSess();
+    if (t && tintFor !== t.rel) {   // цвета окошка — из обложки
+      tintFor = t.rel; const rel = t.rel;
+      coverTint(t).then(v => { if (tintFor === rel) { sheet.style.setProperty('--sh-h', v.h); sheet.style.setProperty('--sh-s', v.s + '%'); } });
+      coverOf(t).then(u => { if (tintFor === rel) back.style.backgroundImage = u ? 'url("' + u + '")' : 'none'; });
+    } else if (!t) { tintFor = ''; back.style.backgroundImage = 'none'; }
+    if (isOpen) { if (pane === 'queue') paintQueue(); fillPicks(); }
     bar.tick();
   };
   bar.tick = () => {
@@ -1431,52 +1523,52 @@ function buildShade() {
   player.bars.add(bar);
   const bgBar = { perm: true, sync() { const t = bgCur(); bgRow.hidden = !bg.queue.length; bgb.textContent = t ? t.title : ''; bgs.textContent = t ? (bg.src?.emoji || '') + ' ' + (bg.src?.name || '') : ''; bgp.innerHTML = bgEl.paused ? IC.play : IC.pause; bgv.value = Math.round(bg.vol * 100); } };
   bgBars.add(bgBar);
-  const fillPicks = () => {
-    pk.textContent = '';
-    const c = collections(''), all = [c.all, ...c.lists.filter(x => x.tracks.length), ...c.albums.slice(0, 6)].slice(0, 14);
-    for (const x of all) {
-      const t = tile(x, { on: player.src?.kind === x.kind && player.src?.id === x.id, playing: !au.paused, go: () => { playColl(x); } });
-      t.classList.add('sm'); pk.append(t);
-    }
-    picks.hidden = !all.length;
-  };
 
-  // — открытие и закрытие: нажатие или потянуть вниз
+  // ===== открытие и закрытие: нажатие или потянуть =====
   let isOpen = false, drag = null;
   const setOpen = o => {
     isOpen = o; sheet.style.transform = ''; sheet.style.transition = '';
     root.classList.toggle('open', o);
-    if (o) { bar.sync(); bgBar.sync(); fillPicks(); }
+    if (o) { setPane('main'); bar.sync(); bgBar.sync(); fillPicks(); setTimeout(() => sheet.focus({ preventScroll: true }), 30); }
   };
   const openFull = () => {
     setOpen(false);
     const inRoom = window.kzRoom?.inRoom && !document.getElementById('room')?.hidden;
     if (inRoom && window.kzPanel) { if (!document.getElementById('roomMusic')?.classList.contains('on')) window.kzPanel('music'); } else H.openSelf();
   };
-  handle.addEventListener('pointerdown', e => {
-    if (e.button) return; drag = { y0: e.clientY, moved: false, open: isOpen };
-    try { handle.setPointerCapture(e.pointerId); } catch (er) {}
-    if (!isOpen) { bar.sync(); bgBar.sync(); fillPicks(); }
-  });
-  handle.addEventListener('pointermove', e => {
+  const hgt = () => sheet.offsetHeight + 24;
+  const startDrag = (e, fromOpen) => { if (e.button) return; drag = { y0: e.clientY, moved: false, open: fromOpen, src: e.currentTarget }; try { e.currentTarget.setPointerCapture(e.pointerId); } catch (er) {} if (!isOpen) { setPane('main'); bar.sync(); bgBar.sync(); fillPicks(); } };
+  const moveDrag = e => {
     if (!drag) return; const dy = e.clientY - drag.y0;
     if (!drag.moved && Math.abs(dy) < 5) return;
     drag.moved = true; drag.dy = dy; sheet.style.transition = 'none'; root.classList.add('pulling');
-    const h = sheet.offsetHeight + 24, base = drag.open ? 0 : -h;
+    const h = hgt(), base = drag.open ? 0 : -h;
     sheet.style.transform = 'translateY(' + Math.max(-h, Math.min(0, base + dy)) + 'px)';
-  });
-  const end = e => {
-    if (!drag) return; const d = drag; drag = null; root.classList.remove('pulling');
-    if (!d.moved) { setOpen(!isOpen); return; }
-    const h = sheet.offsetHeight + 24;
-    setOpen(d.open ? d.dy > -h * 0.25 : d.dy > h * 0.3);   // потянул на треть вниз — раскрылась; потянул вверх на четверть — свернулась
   };
-  handle.addEventListener('pointerup', end); handle.addEventListener('pointercancel', end);
+  const endDrag = () => {
+    if (!drag) return; const d = drag; drag = null; root.classList.remove('pulling');
+    if (!d.moved) { if (d.src === handle) setOpen(!isOpen); else setOpen(false); return; }
+    const h = hgt(); setOpen(d.open ? d.dy > -h * 0.25 : d.dy > h * 0.3);   // потянул на треть вниз — раскрылась; вверх на четверть — свернулась
+  };
+  handle.addEventListener('pointerdown', e => startDrag(e, isOpen));
+  grab.addEventListener('pointerdown', e => startDrag(e, true));
+  for (const el0 of [handle, grab]) { el0.addEventListener('pointermove', moveDrag); el0.addEventListener('pointerup', endDrag); el0.addEventListener('pointercancel', endDrag); }
   document.addEventListener('pointerdown', e => { if (isOpen && !drag && !root.contains(e.target) && !e.target.closest?.('.mx-modal, .mx-pop')) setOpen(false); }, true);
-  document.addEventListener('keydown', e => { if (e.key === 'Escape' && isOpen && !document.querySelector('.mx-modal')) setOpen(false); });
+  document.addEventListener('keydown', e => {
+    if (!isOpen || document.querySelector('.mx-modal')) return;
+    if (e.key === 'Escape') { if (pane !== 'main') setPane('main'); else setOpen(false); return; }
+    if (/^(input|textarea|select)$/i.test(e.target?.tagName || '') && e.target.type !== 'range') return;
+    if (e.key === ' ' && !/^button$/i.test(e.target?.tagName || '')) { e.preventDefault(); toggle(); }
+    else if (e.key === 'ArrowRight' && !isGuest() && player.cur) { e.preventDefault(); au.currentTime = Math.min((au.duration || 1e9), au.currentTime + 5); }
+    else if (e.key === 'ArrowLeft' && !isGuest() && player.cur) { e.preventDefault(); au.currentTime = Math.max(0, au.currentTime - 5); }
+    else if (e.key === 'ArrowUp' && e.target.type !== 'range') { e.preventDefault(); setVol(player.vol + 0.05); }
+    else if (e.key === 'ArrowDown' && e.target.type !== 'range') { e.preventDefault(); setVol(player.vol - 0.05); }
+  });
+  const wheel = e => { e.preventDefault(); setVol(player.vol + (e.deltaY < 0 ? 0.04 : -0.04)); };   // колесо над обложкой, ручкой и громкостью
+  cv.addEventListener('wheel', wheel, { passive: false }); volRow.addEventListener('wheel', wheel, { passive: false }); handle.addEventListener('wheel', wheel, { passive: false });
   document.body.append(root);
-  bar.sync(); bgBar.sync();
-  shadeApi = { open: () => setOpen(true), close: () => setOpen(false), get isOpen() { return isOpen; } };
+  setPane('main'); bar.sync(); bgBar.sync();
+  shadeApi = { open: () => setOpen(true), close: () => setOpen(false), get isOpen() { return isOpen; }, refresh: () => { if (isOpen) paintSess(); } };
   return shadeApi;
 }
 
@@ -1499,7 +1591,7 @@ window.kzMusic = {
   onMsg: (L, d) => { if (H) onMusicMsg(L, d); },
   activity: allowJoin => (H ? activity(allowJoin) : null),
   joinFrom: (u, sid, a) => { if (H) joinFrom(u, sid, a); },
-  actsChanged: () => { if (shown && mode === 'together') repaint(); },
+  actsChanged: () => { if (shown && mode === 'together') repaint(); shadeApi?.refresh(); },
   onCall: c => { if (H) onMusicCall(c); else { try { c.close(); } catch (e) {} } },
   tracks: () => [...lib.values()].map(t => ({ p: t.p, rel: t.rel, h: !!t.h, dur: t.dur, tagged: t.tagged, busy: t.busy })),
   durAll,
