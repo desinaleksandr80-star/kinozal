@@ -311,9 +311,20 @@ let actx = null, master = null, eqNodes = [], decks = null, deckI = 0, nextT = 0
 const idleEl = new Audio();   // пока ничего не играло — на нём читаем «пусто»
 const cfg = { xf: 0, rate: 1, eqOn: false, eq: [0, 0, 0, 0, 0] };   // xf — секунд перетекания, 0 = без паузы
 const active = () => (decks ? decks[deckI].el : idleEl);
+// au — «текущий трек» для всего остального кода. Перемотка, пауза и запуск через него идут мягко (см. softSeek/softPause/softPlay),
+// а позиция и «на паузе» — с учётом того, что уже попросили, но ещё не успело случиться (затухание длится доли секунды)
 const au = new Proxy({}, {
-  get: (t, k) => { const e = active(), v = e[k]; return typeof v === 'function' ? v.bind(e) : v; },
-  set: (t, k, v) => { active()[k] = v; return true; }
+  get: (t, k) => {
+    const d = decks?.[deckI];
+    if (d) {
+      if (k === 'currentTime') return pos(d);
+      if (k === 'paused') return !playing(d);
+      if (k === 'play') return () => { softPlay(d); return Promise.resolve(); };
+      if (k === 'pause') return () => softPause(d);
+    }
+    const e = active(), v = e[k]; return typeof v === 'function' ? v.bind(e) : v;
+  },
+  set: (t, k, v) => { const d = decks?.[deckI]; if (d && k === 'currentTime') softSeek(d, +v); else active()[k] = v; return true; }
 });
 const player = {
   orig: [], queue: [], qi: -1, shuffle: false, repeat: 'off', bars: new Set(), vol: 1, errs: 0, src: null,
@@ -337,8 +348,15 @@ function listenTick(el0) {
 function mkDeck() {
   const el = new Audio(); el.crossOrigin = 'anonymous'; el.preload = 'auto';
   const g = actx.createGain(), src = actx.createMediaElementSource(el); src.connect(g); g.connect(eqNodes[0]);
-  const d = { el, g, rel: '', tok: 0 }, mine = () => decks && decks[deckI] === d;
-  el.addEventListener('ended', () => { if (mine()) listenFlush(); if (!mine()) return; if (sleep.endOfTrack) { sleep.endOfTrack = false; player.sync(); return; } next(true); });
+  // tok — поколение действий с декой (устаревшие таймеры сверяются с ним); st — отложенный старт; pend — куда перемотать;
+  // pausing/seekTok/stopping — какое действие сейчас в полёте (равно tok); fadeTill — до какого момента дека ещё затихает
+  const d = { el, g, rel: '', tok: 0, st: null, pend: null, pausing: 0, seekTok: 0, stopping: 0, fadeTill: 0, aim: 1 }, mine = () => decks && decks[deckI] === d && !d.st;   // пока ждём старта, события догорающего старого трека не наши
+  el.addEventListener('ended', () => {
+    if (mine()) listenFlush(); if (!mine()) return;
+    if (sleep.endOfTrack) { sleep.endOfTrack = false; player.sync(); return; }
+    if (d.pausing === d.tok) { player.sync(); return; }   // трек кончился, пока затухал в паузу (или в сон) — дальше не идём
+    next(true);
+  });
   el.addEventListener('play', () => { if (mine()) player.sync(); });
   el.addEventListener('pause', () => { if (mine()) { clearTimeout(nextT); listenFlush(); player.sync(); } });
   el.addEventListener('playing', () => { if (mine()) { player.errs = 0; armNext(); } });
@@ -374,22 +392,124 @@ function reshuffle(keep) {
   for (let i = rest.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [rest[i], rest[j]] = [rest[j], rest[i]]; }
   player.queue = keep ? [keep, ...rest] : rest; player.qi = keep ? 0 : -1;
 }
-function setQueue(list, start) {   // list — треки, start — с какого начать
+function setQueue(list, start, opt) {   // list — треки, start — с какого начать; opt — как в play()
   if (isGuest() && !sess.internal) { guestBlock(); return; }
   player.orig = list.map(t => t.rel);
   const first = list[start]?.rel;
   if (player.shuffle) reshuffle(first); else { player.queue = player.orig.slice(); player.qi = Math.max(0, start); }
-  play();
+  play(opt);
 }
 const loadDeck = (d, t) => { d.rel = t.rel; d.el.src = MU.url(t.p); d.el.playbackRate = cfg.rate; };
-function silence(d) { d.fading = false; d.tok++; d.g.gain.cancelScheduledValues(0); d.g.gain.value = 0; d.el.pause(); d.rel = ''; }
-function play() {   // с самого начала трека player.cur — сразу, без перетекания
+
+// --- мягкий звук: ни одного резкого скачка громкости на звучащей деке ---
+// Щелчок — это мгновенный скачок волны: оборванный src, перемотка, пауза или gain 0↔1 посреди звука.
+// Поэтому перед любым таким действием деку за ~20 мс уводим в тишину, делаем дело и так же плавно возвращаем.
+const FADE = 18, RISE = 40;   // мс: затухание перед действием и нарастание после
+function holdParam(p, now) {   // заморозить параметр на его настоящем значении — следующая рампа поедет отсюда, без скачка
+  try { if (p.cancelAndHoldAtTime) { p.cancelAndHoldAtTime(now); return; } } catch (e) {}
+  const v = p.value; p.cancelScheduledValues(now); p.setValueAtTime(v, now);
+}
+function rampTo(p, v, ms, at = 0) {   // плавно к v (экспонента, ~98% за ms), начиная через at секунд
+  if (!actx || !p) return;
+  const now = actx.currentTime; holdParam(p, now);
+  p.setTargetAtTime(v, now + at, Math.max(0.001, ms / 4000));
+}
+function fadeTo(d, v, ms, at) { d.aim = v; rampTo(d.g.gain, v, ms, at); }   // aim — куда громкость деки едет сейчас
+function setGain(d, v) { d.aim = v; const p = d.g.gain; p.cancelScheduledValues(0); p.setValueAtTime(v, actx.currentTime); }   // мгновенно — только когда деку не слышно
+// деку не слышно: стоит, или громкость уже в нуле и туда же едет (gain.value отстаёт на буфер звуковой карты — одной ему не верим)
+const quiet = d => d.el.paused || (d.aim === 0 && d.g.gain.value < 0.01);
+const playing = d => (d.st ? d.st.play : !d.el.paused && d.pausing !== d.tok);   // играет (или вот-вот заиграет) и не затухает в паузу
+const pos = d => (d.st ? d.st.pos : d.pend ?? d.el.currentTime);   // позиция с учётом ещё не выполненной перемотки
+const curDeck = () => decks?.[deckI] || null;
+function hush(d) { d.st = null; d.pend = null; d.tok++; d.fadeTill = 0; setGain(d, 0); d.el.pause(); d.rel = ''; }   // сразу (деку и так не слышно)
+function silence(d) {   // плавно погасить деку и освободить её
+  d.st = null; d.pend = null; d.rel = '';
+  if (quiet(d)) { hush(d); return; }
+  if (d.stopping === d.tok) return;   // уже гаснет
+  const tok = ++d.tok; d.stopping = tok; d.fadeTill = performance.now() + FADE * 2 + 5;
+  fadeTo(d, 0, FADE);
+  setTimeout(() => { if (d.tok === tok) hush(d); }, FADE * 2);
+}
+function softPause(d) {   // затухание → пауза
+  if (!d) return;
+  if (d.st) { d.st.play = false; return; }
+  if (d.el.paused || d.pausing === d.tok) return;
+  const tok = ++d.tok; d.pausing = tok;
+  if (d === curDeck()) clearTimeout(nextT);   // за время затухания не перескочить на следующий трек
+  fadeTo(d, 0, FADE);
+  setTimeout(() => {
+    if (d.tok !== tok) return;
+    d.el.pause();
+    if (d.pend != null) { d.el.currentTime = d.pend; d.pend = null; }   // перемотку, попавшую на затухание, делаем уже в тишине
+  }, FADE * 2);
+}
+function softPlay(d) {   // старт с нуля громкости → нарастание
+  if (!d) return;
+  if (d.st) { d.st.play = true; return; }
+  if (!d.el.paused) {
+    if (d.seekTok === d.tok) return;   // идёт перемотка — громкость поднимет она
+    const t = d.pend; d.pend = null; d.tok++;   // отменяем начатое затухание паузы
+    if (t != null) softSeek(d, t); else { fadeTo(d, 1, FADE); if (d === curDeck()) armNext(); }
+    return;
+  }
+  const tok = ++d.tok;
+  if (d.pend != null) { d.el.currentTime = d.pend; d.pend = null; }
+  setGain(d, 0);
+  d.el.play().then(() => { if (d.tok === tok) fadeTo(d, 1, RISE, 0.012); }).catch(() => {});
+}
+function softSeek(d, t) {   // затухание → перемотка → (когда перемоталось) нарастание
+  if (!d || !isFinite(t)) return;
+  t = Math.max(0, t);
+  if (d.st) { d.st.pos = t; return; }
+  if (!actx || d.el.paused) { d.el.currentTime = t; d.pend = null; return; }   // тишина — прыгаем сразу
+  if (d.pausing === d.tok || (d.seekTok === d.tok && d.pend != null)) { d.pend = t; return; }   // и так затухаем — просто новая цель
+  const tok = ++d.tok; d.seekTok = tok; d.pend = t;
+  if (d === curDeck()) clearTimeout(nextT);   // переход заново поставит «seeked»
+  fadeTo(d, 0, FADE);
+  setTimeout(() => {
+    if (d.tok !== tok) return;   // перебило другое действие: pend подхватит пауза или запуск
+    const to = d.pend; d.pend = null; if (to == null) return;
+    let done = false;
+    const up = () => {
+      if (done || d.tok !== tok) return;
+      if (d.el.seeking) { setTimeout(up, 120); return; }
+      done = true; if (!d.el.paused) fadeTo(d, 1, RISE, 0.01);
+    };
+    d.el.addEventListener('seeked', up, { once: true }); setTimeout(up, 700);
+    d.el.currentTime = to;
+  }, FADE * 2);
+}
+function seekBy(dt) { const d = curDeck(); if (!d) return; const dur = d.el.duration; softSeek(d, Math.min(isFinite(dur) ? dur : 1e9, Math.max(0, pos(d) + dt))); }
+function pauseAll() { if (!decks) return; softPause(decks[deckI]); const o = decks[1 - deckI]; if (!quiet(o)) silence(o); }   // и деку, которая в этот момент затухает
+// поставить трек t на деку d. Если дека ещё звучит (очень частые «следующий»), сначала даём ей догаснуть — src не рвём на звуке.
+// opt.pos — с какой секунды, opt.paused — только загрузить. До настоящего старта пауза/перемотка просто правят d.st.
+function startDeck(d, t, opt = {}) {
+  const pre = d.rel === t.rel && !!d.el.getAttribute('src') && !d.el.error;   // уже загружен заранее (armNext)
+  const st = d.st = { play: !opt.paused, pos: Math.max(0, +opt.pos || 0) };
+  d.rel = t.rel; d.pend = null; d.stopping = 0;
+  let wait = 0;
+  if (!quiet(d)) { d.tok++; fadeTo(d, 0, FADE); wait = FADE * 2 + 4; }
+  d.fadeTill = wait ? performance.now() + wait : 0;
+  const go = () => {
+    if (d.st !== st) return;
+    d.st = null; d.fadeTill = 0;
+    const tok = ++d.tok;
+    d.el.pause(); setGain(d, 0);
+    if (pre) d.el.playbackRate = cfg.rate; else loadDeck(d, t);
+    if (Math.abs(d.el.currentTime - st.pos) > 0.001) d.el.currentTime = st.pos;   // лишняя перемотка на «прогретой» деке — лишняя задержка
+    if (!st.play) { player.sync(); return; }
+    d.el.play().then(() => { if (d.tok === tok) fadeTo(d, 1, RISE, 0.012); }).catch(() => {});
+  };
+  if (wait) setTimeout(go, wait); else go();
+}
+function play(opt) {   // трек player.cur с начала (или с opt.pos): старый быстро гаснет на своей деке, новый нарастает на другой
   const t = player.cur;
   if (!t) { if (decks) { silence(decks[0]); silence(decks[1]); } player.sync(); return; }
   ensureAudio(); clearTimeout(nextT);
-  silence(decks[1 - deckI]);
-  const d = decks[deckI]; d.tok++; d.g.gain.cancelScheduledValues(0); d.g.gain.value = 1;
-  loadDeck(d, t); d.el.play().catch(() => {}); player.sync();
+  const a = decks[deckI], b = decks[1 - deckI];
+  const d = quiet(b) || !quiet(a) ? b : a, o = d === a ? b : a;   // берём тихую деку; играющую не трогаем, пока она не догаснет
+  silence(o);
+  deckI = decks.indexOf(d); startDeck(d, t, opt); player.sync();
 }
 // какой трек будет следующим по естественному ходу (без побочных эффектов); null — дальше только конец или перемешивание заново
 function planNext() {
@@ -401,11 +521,15 @@ function planNext() {
 // готовим вторую деку и ставим таймер на момент перехода
 function armNext() {
   clearTimeout(nextT);
-  const d = decks?.[deckI]; if (!d || d.el.paused || !isFinite(d.el.duration) || !d.rel) return;
+  const d = decks?.[deckI]; if (!d || d.st || !playing(d) || !isFinite(d.el.duration) || !d.rel) return;
   if (sleep.endOfTrack) return;   // «после этого трека»: дальше не переходим
   const plan = planNext(); if (!plan || !lib.has(plan.rel)) return;
-  const o = decks[1 - deckI]; if (o.fading) { nextT = setTimeout(armNext, 400); return; }   // прошлая дека ещё затихает
-  if (o.rel !== plan.rel) { silence(o); loadDeck(o, lib.get(plan.rel)); }
+  const o = decks[1 - deckI], left = o.fadeTill - performance.now();
+  if (left > 0 || o.st) { nextT = setTimeout(armNext, Math.min(400, Math.max(20, left + 20))); return; }   // прошлая дека ещё затихает
+  if (o.rel !== plan.rel) {
+    if (!quiet(o)) { silence(o); nextT = setTimeout(armNext, FADE * 2 + 30); return; }   // src звучащей деки не рвём
+    hush(o); loadDeck(o, lib.get(plan.rel));
+  }
   const dur = d.el.duration, rate = d.el.playbackRate || 1;
   const xf = Math.min(cfg.xf, dur * 0.4, 30);
   const wait = (dur - d.el.currentTime) / rate - xf - 0.06;   // 0,06 с — запас на запуск следующей деки
@@ -414,17 +538,28 @@ function armNext() {
 function goNext(plan, xf) {
   const cur = decks[deckI], inn = decks[1 - deckI];
   if (planNext()?.rel !== plan.rel || inn.rel !== plan.rel) return armNext();   // очередь поменялась
+  if (cur.st || inn.st || !inn.el.paused) { player.qi = plan.qi; play(); return; }   // вторая дека чем-то занята — обычное мягкое переключение
   player.qi = plan.qi; deckI = 1 - deckI;
-  const now = actx.currentTime, tokOut = ++cur.tok, tokIn = ++inn.tok; cur.fading = true;
-  inn.g.gain.cancelScheduledValues(now); cur.g.gain.cancelScheduledValues(now);
+  const now = actx.currentTime, tokOut = ++cur.tok; inn.tok++; cur.stopping = tokOut; cur.pend = inn.pend = null;
+  const ce = cur.el, left = isFinite(ce.duration) ? Math.max(0, (ce.duration - ce.currentTime) / (ce.playbackRate || 1)) : 0;
+  let off;
   if (xf > 0.05) {   // равная мощность: сумма громкостей не проваливается посередине
-    const n = 32, up = new Float32Array(n), down = new Float32Array(n);
-    for (let i = 0; i < n; i++) { const x = i / (n - 1); up[i] = Math.sin(x * Math.PI / 2); down[i] = Math.cos(x * Math.PI / 2); }
-    inn.g.gain.setValueCurveAtTime(up, now, xf); cur.g.gain.setValueCurveAtTime(down, now, xf);
-    setTimeout(() => { if (cur.tok === tokOut) { cur.el.pause(); cur.rel = ''; } cur.fading = false; }, xf * 1000 + 150);
-  } else { inn.g.gain.value = 1; cur.g.gain.value = 0; setTimeout(() => { if (cur.tok === tokOut) { cur.el.pause(); cur.rel = ''; } cur.fading = false; }, 200); }
-  inn.el.currentTime = 0; inn.el.play().catch(() => {});
-  void tokIn; player.sync();
+    const n = 32, up = new Float32Array(n), down = new Float32Array(n), c0 = Math.min(1, cur.g.gain.value);   // старая дека — от её настоящей громкости, без скачка
+    for (let i = 0; i < n; i++) { const x = i / (n - 1); up[i] = Math.sin(x * Math.PI / 2); down[i] = c0 * Math.cos(x * Math.PI / 2); }
+    inn.aim = 1; cur.aim = 0;
+    try { inn.g.gain.cancelScheduledValues(0); cur.g.gain.cancelScheduledValues(now); inn.g.gain.setValueCurveAtTime(up, now, xf); cur.g.gain.setValueCurveAtTime(down, now, xf); }
+    catch (e) { fadeTo(inn, 1, xf * 1000); fadeTo(cur, 0, xf * 1000); }
+    off = xf * 1000 + 150;
+  } else {   // без паузы: новая дека стоит в начале трека (скачок на паузе неслышен), а старая доигрывает свои последние мс сама —
+    setGain(inn, 1);   // раньше её громкость обрывали в 0 за 60 мс до конца — отсюда был щелчок
+    fadeTo(cur, 0, 15, Math.max(0, left - 0.012));   // самый хвост гаснет микро-рампой на случай, если файл обрывается не в тишину
+    off = left * 1000 + 200;
+  }
+  cur.fadeTill = performance.now() + off;
+  setTimeout(() => { if (cur.tok === tokOut) hush(cur); }, off);
+  if (inn.el.currentTime > 0.001) inn.el.currentTime = 0;   // заранее загруженная дека и так в начале — лишняя перемотка дала бы задержку
+  inn.el.play().catch(() => {});
+  player.sync();
 }
 function cleanQueue() {   // файл удалили — выкидываем из очереди
   const cur = player.queue[player.qi];
@@ -434,29 +569,31 @@ function cleanQueue() {   // файл удалили — выкидываем и
 function next(auto) {
   if (!auto && guestBlock()) return;
   if (!player.queue.length) return;
-  if (auto && player.repeat === 'one') { au.currentTime = 0; au.play().catch(() => {}); return; }
+  const d = curDeck();
+  if (auto && player.repeat === 'one') { if (d) { softSeek(d, 0); softPlay(d); } return; }
   if (player.qi + 1 < player.queue.length) { player.qi++; play(); return; }
   if (player.repeat === 'all' || (!auto && player.repeat !== 'off')) { if (player.shuffle) reshuffle(null); else player.qi = 0; play(); return; }
   if (!auto) { player.qi = 0; play(); return; }
-  au.pause(); au.currentTime = 0; player.sync();   // дошли до конца очереди
+  if (d) { softPause(d); softSeek(d, 0); } player.sync();   // дошли до конца очереди
 }
 function prev() {
   if (guestBlock()) return;
-  if (au.currentTime > 3 || player.qi <= 0) { au.currentTime = 0; return; }
+  const d = curDeck();
+  if ((d ? pos(d) : 0) > 3 || player.qi <= 0) { if (d) softSeek(d, 0); return; }   // в начало этого же трека — тоже через затухание
   player.qi--; play();
 }
 function toggle() {
   if (isGuest()) {   // гость может приглушить себе: пауза у себя ведущему не мешает
     if (sess.mode === 'stream') { sess.userPaused = !sess.userPaused; if (sess.aud) sess.aud.muted = sess.userPaused; sessUi(); player.sync(); return; }
     if (!player.cur) return;
-    if (!au.paused) { sess.userPaused = true; au.pause(); } else { sess.userPaused = false; if (sess.hostL) netTo(sess.hostL, { k: 'ping', sid: sess.sid, c: Date.now() }); au.play().catch(() => {}); }
+    const d = curDeck();   // au.pause()/au.play() и так мягкие — здесь то же самое явно
+    if (d && playing(d)) { sess.userPaused = true; softPause(d); } else { sess.userPaused = false; if (sess.hostL) netTo(sess.hostL, { k: 'ping', sid: sess.sid, c: Date.now() }); softPlay(d); }
     return;
   }
   if (!player.cur) return;
   if (!decks || !decks[deckI].rel) { play(); return; }
   ensureAudio();
-  if (au.paused) au.play().catch(() => {});
-  else { for (const d of decks) d.el.pause(); }   // и деку, которая в этот момент затухает
+  if (playing(decks[deckI])) pauseAll(); else softPlay(decks[deckI]);
 }
 function enqueue(t, nextUp) {
   if (guestBlock()) return;
@@ -466,8 +603,8 @@ function enqueue(t, nextUp) {
   if (nextUp) { const oi = player.orig.indexOf(player.queue[player.qi]); player.orig.splice(oi + 1, 0, t.rel); } else player.orig.push(t.rel);
   H.toast(nextUp ? 'Сыграет следующим' : 'Добавлено в очередь'); player.sync(); queuePaint?.(); armNext();
 }
-function seekTo(f) { if (isFinite(au.duration)) au.currentTime = Math.max(0, Math.min(1, f)) * au.duration; }
-function setVol(v) { player.vol = Math.max(0, Math.min(1, v)); if (master) master.gain.value = player.vol; H.store.set('musicVol', String(player.vol)); for (const b of player.bars) b.sync(); }
+function seekTo(f) { const d = curDeck(); if (d && isFinite(d.el.duration)) softSeek(d, Math.max(0, Math.min(1, f)) * d.el.duration); }   // ползунок зовёт на «change», а не на каждое «input»
+function setVol(v) { player.vol = Math.max(0, Math.min(1, v)); if (master) rampTo(master.gain, player.vol, 25); H.store.set('musicVol', String(player.vol)); for (const b of player.bars) b.sync(); }
 
 // таймер сна: через заданное время музыка плавно затихает и ставится на паузу
 function setSleep(min) {
@@ -480,8 +617,18 @@ function setSleep(min) {
 function sleepNow() {
   sleep.until = 0; sleep.endOfTrack = false;
   if (!decks) return;
-  const d = decks[deckI], g = d.g.gain, now = actx.currentTime; g.cancelScheduledValues(now); g.setValueAtTime(g.value, now); g.linearRampToValueAtTime(0, now + 4);
-  setTimeout(() => { for (const x of decks) x.el.pause(); g.cancelScheduledValues(0); g.value = 1; player.sync(); }, 4100);
+  const d = decks[deckI], o = decks[1 - deckI];
+  if (!quiet(o)) silence(o);
+  if (d.st) { d.st.play = false; return; }
+  if (!playing(d)) return;
+  clearTimeout(nextT);   // иначе переход на следующий трек вернул бы полную громкость
+  const tok = ++d.tok; d.pausing = tok;   // как пауза, только длинная: нажали «играть» во время затухания — оно отменится
+  fadeTo(d, 0, 3200);   // за 4 с почти в ноль (−45 дБ), дальше пауза уже не слышна
+  setTimeout(() => {
+    if (d.tok !== tok) return;
+    d.el.pause(); if (d.pend != null) { d.el.currentTime = d.pend; d.pend = null; }
+    player.sync();   // громкость поднимет softPlay при следующем запуске
+  }, 4100);
 }
 
 // управление из системы: клавиши с мультимедиа, экран блокировки, значок громкости Windows
@@ -496,11 +643,11 @@ async function mediaMeta() {
 }
 if ('mediaSession' in navigator) {
   const set = (n, f) => { try { navigator.mediaSession.setActionHandler(n, f); } catch (e) {} };
-  set('play', () => au.play().catch(() => {})); set('pause', () => au.pause());
+  set('play', () => softPlay(curDeck())); set('pause', pauseAll);
   set('previoustrack', prev); set('nexttrack', () => next(false));
-  set('seekto', d => { if (isFinite(d.seekTime)) au.currentTime = d.seekTime; });
-  set('seekbackward', d => { au.currentTime = Math.max(0, au.currentTime - (d.seekOffset || 10)); });
-  set('seekforward', d => { au.currentTime = Math.min(au.duration || 1e9, au.currentTime + (d.seekOffset || 10)); });
+  set('seekto', d => { if (isFinite(d.seekTime)) softSeek(curDeck(), d.seekTime); });
+  set('seekbackward', d => seekBy(-(d.seekOffset || 10)));
+  set('seekforward', d => seekBy(d.seekOffset || 10));
   setInterval(() => { try { if (player.cur && isFinite(au.duration) && !au.paused) navigator.mediaSession.setPositionState({ duration: au.duration, position: Math.min(au.currentTime, au.duration), playbackRate: au.playbackRate }); } catch (e) {} }, 1000);
 }
 
@@ -1218,8 +1365,8 @@ function applySt(st) {
     if (sess.aud) sess.aud.muted = true;
     const changed = player.cur?.rel !== local.rel || !decks || !decks[deckI].rel;
     if (changed) {
-      setSessMode('local'); sess.internal = true; player.src = null; setQueue([local], 0); sess.internal = false;   // setQueue сам запускает; ниже подгоняем позицию и паузу
-      sess.hold = Date.now() + 1500; au.currentTime = target; if (!st.playing || sess.userPaused) au.pause();
+      sess.hold = Date.now() + 1500;   // setQueue сам запускает — сразу с нужной секунды и (если надо) на паузе, без прыжка
+      setSessMode('local'); sess.internal = true; player.src = null; setQueue([local], 0, { pos: target, paused: !st.playing || sess.userPaused }); sess.internal = false;
     } else {
       setSessMode('local');
       if (au.playbackRate !== (st.rate || 1)) for (const d of decks) d.el.playbackRate = st.rate || 1;
@@ -1230,7 +1377,7 @@ function applySt(st) {
       }
     }
   } else {
-    if (decks) { for (const d of decks) { if (!d.el.paused) d.el.pause(); } }
+    pauseAll();
     if (sess.mode !== 'stream') { setSessMode('stream'); netTo(sess.hostL, { k: 'need', sid: sess.sid }); }
     if (sess.aud) sess.aud.muted = !!sess.userPaused;
   }
