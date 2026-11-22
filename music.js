@@ -823,10 +823,9 @@ function trackRow(t, list, i) {
   const play1 = el('div', 'mu-pl'); play1.innerHTML = cur && !au.paused ? IC.pause : IC.play;
   const cv = coverEl(t, 'sm'); cv.append(play1);
   r.append(cv, tx, el('span', 'mu-d', t.dur ? fmt(t.dur) : ''));
-  const shelf = ibtn('🏷️', 'На полку', e => shelfPalette(e.clientX - 150, e.clientY + 8, t, null), 'shelf');
   const fav = ibtn(IC.heart, isFav(t) ? 'Убрать из любимого' : 'В любимое', () => { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } }, 'fav' + (isFav(t) ? ' on' : ''));
   const more = ibtn(IC.more, 'Ещё', e => trackMenu(t, e.clientX, e.clientY, list));
-  r.append(shelf, fav, more);
+  r.append(fav, more);
   r.onclick = () => { if (player.cur?.rel === t.rel) toggle(); else { if (guestBlock()) return; player.src = null; setQueue(list, i); } };   // «текущий ли» — на момент нажатия: трек мог смениться после отрисовки
   r.oncontextmenu = e => { e.preventDefault(); trackMenu(t, e.clientX, e.clientY, list); };
   return r;
