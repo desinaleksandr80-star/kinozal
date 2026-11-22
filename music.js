@@ -1003,6 +1003,48 @@ function bgBody() {
 let gen = 0, paintT = 0;
 function repaint() { if (!shown) return; clearTimeout(paintT); paintT = setTimeout(paint, 60); }
 function gotoMode(m) { mode = m; H.store.set('musicMode', m); view.detail = null; lyricsOpen = false; limit = 200; repaint(); }
+// ---------- перетаскивание музыки из проводника: одно подключение на любое место, где показана музыка ----------
+// node — раздел «Музыка», панель в зале или лист шторки; opts.offer — после добавления предложить сыграть, если тишина
+function wireMusicDrop(node, opts) {
+  if (!node || node._muDrop) return; node._muDrop = true; opts = opts || {};
+  if (getComputedStyle(node).position === 'static') node.style.position = 'relative';
+  let depth = 0, busy = false, ov = null, hideT = 0;
+  const isFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+  // уже по типу видно, что это не музыка (картинка, видео…) — пусть работает прежняя отправка в чат/зал
+  const notMusic = e => { const it = [...(e.dataTransfer?.items || [])].filter(i => i.kind === 'file'); return it.length > 0 && it.every(i => i.type && !/^audio\//i.test(i.type) && i.type !== 'application/ogg'); };
+  const mk = () => {
+    if (ov) return ov;
+    ov = el('div', 'mu-dropov'); const b = el('div', 'mu-dropbox'), ic = el('i', '', '♪'), t = el('b'), s = el('span');
+    b.append(ic, t, s); ov.append(b); ov._t = t; ov._s = s; ov._b = b; node.append(ov); return ov;
+  };
+  const show = (t, s, btn) => { clearTimeout(hideT); const o = mk(); o._t.textContent = t; o._s.textContent = s || ''; o._b.querySelector('button')?.remove(); if (btn) o._b.append(btn); o.classList.add('on'); o.classList.toggle('res', !!btn || busy); };
+  const hide = () => { clearTimeout(hideT); ov?.classList.remove('on', 'res'); ov?.remove(); ov = null; };
+  const take = e => { if (busy || !isFiles(e) || notMusic(e)) return false; e.preventDefault(); e.stopPropagation(); return true; };
+  node.addEventListener('dragenter', e => { if (!take(e)) return; if (++depth === 1) show('Отпусти — добавлю в музыку', 'Подойдут mp3, flac, m4a, ogg, wav… и целые папки'); });
+  node.addEventListener('dragover', e => { if (take(e)) e.dataTransfer.dropEffect = 'copy'; });
+  node.addEventListener('dragleave', e => { if (busy || !isFiles(e)) return; if (--depth <= 0) { depth = 0; hide(); } });
+  node.addEventListener('drop', async e => {
+    if (!take(e)) return; depth = 0;
+    const files = e.dataTransfer.files; if (!files || !files.length) { hide(); return; }
+    busy = true; show('Добавляю…', files.length > 50 ? 'Файлов много — подожди немного' : '');
+    const before = new Set(lib.keys()); let n = 0, fresh = [];
+    try {
+      n = await MU.addDropped(files) || 0;
+      if (n) {
+        await refresh();
+        for (let i = 0; i < 100 && scanning; i++) await new Promise(r => setTimeout(r, 200));
+        fresh = [...lib.values()].filter(t => !before.has(t.rel));
+      }
+    } catch (err) { console.warn('[музыка] перетаскивание', err); }
+    busy = false;
+    H.toast(n ? 'Добавлено: ' + n : 'Подходящей музыки не нашлось');
+    if (n && opts.offer && !player.cur && fresh.length && !isGuest()) {
+      const go = H.btnEl('▶ Сыграть', 'pri', () => { hide(); setQueue(fresh, 0); });
+      show('Добавлено: ' + n, 'Включить добавленное?', go); hideT = setTimeout(hide, 8000);
+    } else { show(n ? 'Добавлено: ' + n : 'Подходящей музыки не нашлось', ''); hideT = setTimeout(hide, 1400); }
+  });
+}
+
 function paint() {
   if (!shown || !host) return; gen++;
   for (const b of [...player.bars]) if (!b.mini) player.bars.delete(b);   // панели прошлой отрисовки
@@ -1041,9 +1083,7 @@ function paint() {
   sec.append(scroll);
   if (mode !== 'bg' || player.cur) sec.append(playerBar(false));
   // перетащили файлы из проводника — копируем в папку
-  sec.addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) { e.preventDefault(); sec.classList.add('drop'); } });
-  sec.addEventListener('dragleave', e => { if (e.target === sec) sec.classList.remove('drop'); });
-  sec.addEventListener('drop', async e => { e.preventDefault(); sec.classList.remove('drop'); const n = await MU.addDropped(e.dataTransfer.files); H.toast(n ? 'Добавлено: ' + n : 'Подходящей музыки не нашлось'); refresh(); });
+  wireMusicDrop(sec);
   host.textContent = ''; host.append(sec); scroll.scrollTop = keepTop;
   if (hadQ) { const q2 = sec.querySelector('.mu-q'); q2?.focus(); q2?.setSelectionRange(q2.value.length, q2.value.length); }
 }
@@ -1891,7 +1931,7 @@ function buildShade() {
   const sess1 = el('div', 'mu-sh-sess'); sess1.hidden = true;
   const panes = el('div', 'mu-sh-panes');
   const grab = el('button', 'mu-sh-grab'); grab.type = 'button'; grab.title = 'Потяни вверх — свернуть'; grab.setAttribute('aria-label', 'Свернуть'); grab.append(el('i'));
-  sheet.append(back, sess1, panes, grab); root.append(sheet, handle);
+  sheet.append(back, sess1, panes, grab); root.append(sheet, handle); wireMusicDrop(sheet, { offer: true });
   let pane = 'main';
 
   // ===== главное: что играет, управление, громкость, подборки =====
@@ -1971,7 +2011,7 @@ function buildShade() {
     if (k === 'sound') { sndP.replaceChildren(subHead('Звук', () => setPane('main')), soundBody()); sheet.scrollTop = 0; }
     else if (sndP.firstChild) sndP.textContent = '';
     if (k === 'queue') paintQueue();
-    if (k === 'search') { sq.value = ''; paintSearch(); if (!TOUCH) setTimeout(() => sq.focus(), 60); }
+    if (k === 'search') { sq.value = ''; paintSearch(); if (!matchMedia("(pointer:coarse)").matches) setTimeout(() => sq.focus(), 60); }
   }
   const fillPicks = () => {
     const sl = picks.scrollLeft; picks.textContent = '';

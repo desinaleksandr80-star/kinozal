@@ -107,11 +107,23 @@ function setup({ app, ipcMain, dialog, shell, protocol, getWin, log, tag }) {
   };
   async function addFiles(list) {
     await mkroot(); let n = 0;
-    for (let p of list) {
-      p = String(p || ''); if (!path.isAbsolute(p) || !AUDIO.test(p)) continue;
-      if (inside(p, root())) continue;   // и так уже в библиотеке
-      const st = await fsp.stat(p).catch(() => null); if (!st || !st.isFile()) continue;
+    const one = async p => {
+      if (inside(p, root())) return;   // и так уже в библиотеке
+      const st = await fsp.stat(p).catch(() => null); if (!st || !st.isFile()) return;
       await fsp.copyFile(p, freeName(root(), path.basename(p))); n++;
+    };
+    const dir = async (d, depth) => {   // перетащили папку — берём музыку из неё
+      if (depth > 6 || inside(d, root()) || n >= 5000) return;
+      for (const en of await fsp.readdir(d, { withFileTypes: true }).catch(() => [])) {
+        if (en.name.startsWith('.')) continue;
+        const f = path.join(d, en.name);
+        if (en.isDirectory()) await dir(f, depth + 1); else if (en.isFile() && AUDIO.test(en.name)) await one(f).catch(() => {});
+      }
+    };
+    for (let p of list) {
+      p = String(p || ''); if (!path.isAbsolute(p)) continue;
+      if (AUDIO.test(p)) await one(p).catch(() => {});
+      else { const st = await fsp.stat(p).catch(() => null); if (st && st.isDirectory()) await dir(p, 0); }
     }
     log('[музыка] добавлено файлов', n); return n;
   }

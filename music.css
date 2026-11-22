@@ -479,3 +479,14 @@ body:has(.mx-hello) .mu-shade{display:none}
 .mu-sh-q .mu-bgq{background:rgba(111,125,255,.16)}
 @media (max-width:420px){.mu-note-o{grid-template-columns:1fr}}
 @media (prefers-reduced-motion:reduce){.mu-note,.mu-bgq{animation:none!important}}
+
+/* перетаскивание музыки из проводника: подсказка поверх раздела / панели / шторки (wireMusicDrop) */
+.mu-dropov{position:absolute;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg,#0b0b10) 72%,transparent);backdrop-filter:blur(4px);border:2px dashed var(--acc);border-radius:inherit;pointer-events:none}
+.mu-dropov.on{display:flex}
+.mu-dropov.res{pointer-events:auto}
+.mu-dropbox{display:flex;flex-direction:column;align-items:center;gap:6px;padding:18px 26px;text-align:center;color:var(--ink);max-width:80%}
+.mu-dropbox i{font-style:normal;font-size:34px;line-height:1;color:var(--acc);animation:muDropBob 1.1s ease-in-out infinite}
+.mu-dropbox b{font:700 15px var(--hfont),Unbounded,sans-serif}
+.mu-dropbox span{font-size:12px;opacity:.7}
+.mu-dropbox button{margin-top:8px}
+@keyframes muDropBob{50%{transform:translateY(-4px) scale(1.08)}}
