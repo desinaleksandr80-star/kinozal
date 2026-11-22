@@ -134,6 +134,33 @@ function setup({ app, ipcMain, dialog, shell, protocol, getWin, log, tag }) {
     }
     return '';
   });
+  // трек, который друг докачивает во время совместного прослушивания: пишем в «Общая от друзей», сверяем SHA-256 и только тогда оставляем
+  const saves = new Map();
+  const safeName = s => (String(s || 'трек').replace(/[\/:*?"<>|\x00-\x1f]/g, '_').replace(/[. ]+$/, '').trim().slice(0, 120)) || 'трек';
+  ipcMain.handle('kz:msaveopen', async (e, id, name) => {
+    id = String(id || ''); if (!/^[\w-]{3,40}$/.test(id) || saves.size > 4) return false;
+    let n = safeName(name); if (!AUDIO.test(n)) n += '.mp3';
+    const dir = path.join(root(), 'Общая от друзей'); await fsp.mkdir(dir, { recursive: true });
+    const to = freeName(dir, n), tmp = to + '.part', h = await fsp.open(tmp, 'w');
+    saves.set(id, { h, tmp, to, got: 0 }); return true;
+  });
+  ipcMain.handle('kz:msavewrite', async (e, id, off, data) => {
+    const s = saves.get(String(id)); if (!s) return false;
+    const b = Buffer.from(data.buffer, data.byteOffset, data.byteLength); if (s.got + b.length > 400e6) return false;
+    await s.h.write(b, 0, b.length, Math.max(0, +off || 0)); s.got += b.length; return true;
+  });
+  ipcMain.handle('kz:msavedone', async (e, id, want) => {
+    id = String(id); const s = saves.get(id); if (!s) return { ok: false };
+    saves.delete(id); await s.h.close().catch(() => {});
+    const h = crypto.createHash('sha256');
+    try { await new Promise((res, rej) => { const st = fs.createReadStream(s.tmp); st.on('data', c => h.update(c)); st.on('end', res); st.on('error', rej); }); } catch (er) { await fsp.unlink(s.tmp).catch(() => {}); return { ok: false }; }
+    const hex = h.digest('hex');
+    if (want && hex !== String(want)) { await fsp.unlink(s.tmp).catch(() => {}); log('[музыка] докачанный файл не прошёл проверку', s.to); return { ok: false, hash: hex }; }
+    await fsp.rename(s.tmp, s.to); const st = await fsp.stat(s.to);
+    hashes[s.to + '|' + st.size + '|' + Math.round(st.mtimeMs)] = hex; saveHashes();   // хэш уже известен — второй раз файл читать не надо
+    log('[музыка] докачан файл', s.to); return { ok: true, hash: hex, p: s.to };
+  });
+  ipcMain.handle('kz:msavedrop', async (e, id) => { id = String(id); const s = saves.get(id); if (!s) return false; saves.delete(id); await s.h.close().catch(() => {}); await fsp.unlink(s.tmp).catch(() => {}); return true; });
   ipcMain.handle('kz:mshow', (e, p) => { p = ok(p); if (p) shell.showItemInFolder(p); else shell.openPath(root()); return true; });
   ipcMain.handle('kz:mopen', async () => { await mkroot(); return shell.openPath(root()); });
   ipcMain.handle('kz:mtrash', async (e, p) => { p = ok(p); if (!p) return false; await shell.trashItem(p); log('[музыка] в корзину', p); return true; });
@@ -144,7 +171,9 @@ function setup({ app, ipcMain, dialog, shell, protocol, getWin, log, tag }) {
     try { watcher?.close(); } catch (e) {} watcher = null; if (!watching) return;
     mkroot().then(() => {
       try {
-        watcher = fs.watch(root(), { recursive: true }, () => { clearTimeout(watchT); watchT = setTimeout(() => { const w = getWin(); if (w && !w.isDestroyed()) w.webContents.send('kz:mchanged'); }, 800); });
+        watcher = fs.watch(root(), { recursive: true }, (ev, f) => {
+          if (String(f || '').endsWith('.part')) return;   // файл ещё докачивается
+          clearTimeout(watchT); watchT = setTimeout(() => { const w = getWin(); if (w && !w.isDestroyed()) w.webContents.send('kz:mchanged'); }, 800); });
         watcher.on('error', () => {});
       } catch (e) {}
     });

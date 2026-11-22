@@ -1,8 +1,38 @@
-/* Кинозал — раздел «Музыка» */
-.mx-files.mu{grid-template-rows:auto auto minmax(0,1fr) auto}
+/* Кинозал — раздел «Музыка»: три режима, карточки-«полки», плеер, фон, прослушивание вместе */
+.mx-files.mu{grid-template-rows:auto auto minmax(0,1fr) auto;container-type:inline-size;container-name:mu;position:relative}
 .mu.drop{outline:2px dashed var(--acc);outline-offset:-8px}
+.mu [hidden]{display:none!important}
+
+/* шапка и режимы */
+.mu-head{flex-wrap:wrap;row-gap:10px}
+.mu-head h2{margin:0;font:700 18px var(--hfont),Unbounded,sans-serif;color:var(--ink)}
 .mu-head .mu-back{margin-right:-4px}
-.mu-ib{width:38px;height:38px;border-radius:50%;border:0;background:transparent;color:var(--ink);display:inline-grid;place-items:center;cursor:pointer;padding:0;flex:none;transition:background .15s,color .15s,transform .12s}
+.mu-modes{display:flex;gap:4px;padding:4px;margin-left:auto;border-radius:16px;background:rgba(127,127,127,.12)}
+.mu-mode{position:relative;display:flex;align-items:center;gap:8px;border:0;background:none;color:var(--mute);font:700 13.5px var(--font),sans-serif;padding:8px 14px;border-radius:12px;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.mu-mode i{font-style:normal;font-size:16px}
+.mu-mode:hover{color:var(--ink)}
+.mu-mode.on{background:var(--card);color:var(--ink);box-shadow:0 1px 6px rgba(0,0,0,.3)}
+.mu-mode u{text-decoration:none;min-width:18px;height:18px;border-radius:9px;background:var(--acc);color:#fff;font-size:11px;display:inline-grid;place-items:center;padding:0 5px}
+.mu-mode u.live{width:8px;min-width:8px;height:8px;padding:0;background:#5fd4c4;animation:mupulse 1.6s infinite}
+@keyframes mupulse{50%{opacity:.35}}
+.mu-gap{height:4px}
+
+/* панель инструментов «Моей музыки» */
+.mu-tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.mu-tool .ftabs{margin-left:0}
+.mu-q{flex:1 1 180px;min-height:40px;border-radius:12px;padding:0 14px;background:var(--field);border:1px solid var(--line2);color:var(--ink);font:500 14px var(--font),sans-serif}
+.mu-stat{color:var(--mute);font-size:13px;white-space:nowrap}
+.mu-tools{display:flex;align-items:center;gap:6px;margin-left:auto}
+.mu-tools .btn{min-height:36px!important;padding:6px 12px}
+.mu-scroll{overflow-y:auto;padding:14px 18px 28px;min-height:0}
+.mu-body{display:grid;gap:16px;align-content:start}
+.mu-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.mu-act .btn{min-height:38px!important;padding:6px 14px}
+.mu-sort{margin-left:auto;min-height:38px;border-radius:12px;padding:0 10px;background:var(--field);border:1px solid var(--line2);color:var(--ink);font:600 13px var(--font),sans-serif}
+.fchips{display:flex;gap:6px;flex-wrap:wrap}
+
+/* кнопки */
+.mu-ib{width:38px;height:38px;border-radius:50%;border:0;background:transparent;color:var(--ink);display:inline-grid;place-items:center;cursor:pointer;padding:0;flex:none;transition:background .15s,color .15s,transform .12s;font-size:16px;line-height:1}
 .mu-ib svg{width:20px;height:20px}
 .mu-ib:hover{background:var(--btnh)}
 .mu-ib:active{transform:scale(.92)}
@@ -11,21 +41,53 @@
 .mu-ib.big:hover{background:color-mix(in srgb,var(--acc),#fff 12%)}
 .mu-ib.big svg{width:22px;height:22px}
 .mu-ib.fav.on{color:#ff5a7a}.mu-ib.fav.on svg{fill:#ff5a7a}
+.mu-ib.rx,.mu-ib.shelf{font-size:17px}
 .mu-ib[data-one="1"]::after{content:"1";position:absolute;font:800 9px sans-serif;margin:-14px -14px 0 0}
-.mu-tool{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.mu-q{flex:1 1 240px;min-height:40px;border-radius:12px;padding:0 14px;background:var(--field);border:1px solid var(--line2);color:var(--ink);font:500 14px var(--font),sans-serif}
-.mu-stat{color:var(--mute);font-size:13px;white-space:nowrap}
-.mu-tools{display:flex;align-items:center;gap:6px;margin-left:auto}
-.mu-tools .btn{min-height:36px!important;padding:6px 12px}
-.mu-scroll{overflow-y:auto;padding:12px 16px 24px;min-height:0}
-.mu-body{display:grid;gap:12px;align-content:start}
-.mu-h{margin:2px 2px 0;font:700 20px/1.2 var(--hfont),Unbounded,sans-serif;color:var(--ink)}
-.mu-act{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.mu-act .btn{min-height:38px!important;padding:6px 14px}
-.mu-sort{margin-left:auto;min-height:38px;border-radius:12px;padding:0 10px;background:var(--field);border:1px solid var(--line2);color:var(--ink);font:600 13px var(--font),sans-serif}
-.mu-list{display:grid;gap:4px}
+
+/* ячейки-«полки» */
+.mu-shelves{display:grid;gap:26px}
+.mu-shelf header{display:flex;align-items:baseline;gap:10px;margin:0 2px 10px}
+.mu-shelf h3{margin:0;font:700 16px var(--hfont),Unbounded,sans-serif;color:var(--ink)}
+.mu-shelf header span{font-size:12.5px;color:var(--mute)}
+.mu-shelf header .btn{margin-left:auto;min-height:32px!important;padding:3px 12px;font-size:13px}
+.mu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:20px 18px}
+.mu-tile{display:grid;gap:3px;align-content:start;cursor:pointer;outline:none;border-radius:20px;padding:8px;margin:-8px;transition:background .15s}
+.mu-tile:hover,.mu-tile:focus-visible{background:color-mix(in srgb,var(--card),transparent 20%)}
+.mu-tile b{margin-top:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700}
+.mu-tile>span{font-size:12.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mu-tile.dim{opacity:.45;cursor:default}
+.mu-tile.on .mu-art{box-shadow:0 0 0 2.5px var(--acc),0 10px 28px rgba(0,0,0,.35)}
+.mu-tile.on b{color:var(--acc)}
+.mu-art{position:relative;aspect-ratio:1;border-radius:16px;overflow:hidden;background:linear-gradient(145deg,hsl(var(--h) 55% 34%),hsl(calc(var(--h) + 45) 60% 22%));box-shadow:0 6px 20px rgba(0,0,0,.28);transition:transform .18s,box-shadow .18s}
+.mu-tile:hover .mu-art{transform:translateY(-2px);box-shadow:0 12px 30px rgba(0,0,0,.4)}
+.mu-art.noc{display:grid;place-items:center}
+.mu-art .mu-em{font-size:clamp(40px,7cqw,64px);filter:drop-shadow(0 4px 10px rgba(0,0,0,.35))}
+.mu-art.dash{background:transparent;border:2px dashed var(--line2);box-shadow:none}
+.mu-art.dash .mu-em{color:var(--mute);filter:none}
+.mu-art.mos{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr}
+.mu-art .mu-cv.fill{position:absolute;inset:0;width:100%;height:100%;border-radius:0}
+.mu-art .mu-cv.mi{width:100%;height:100%;border-radius:0}
+.mu-badge{position:absolute;left:8px;bottom:8px;font-size:18px;padding:2px 7px;border-radius:12px;background:rgba(10,14,16,.62);backdrop-filter:blur(6px)}
+.mu-go{position:absolute;right:10px;bottom:10px;width:42px;height:42px;border-radius:50%;background:var(--acc);color:#fff;display:grid;place-items:center;opacity:0;transform:translateY(8px) scale(.9);transition:opacity .16s,transform .16s;box-shadow:0 6px 16px rgba(0,0,0,.4)}
+.mu-go svg{width:18px;height:18px}
+.mu-tile:hover .mu-go,.mu-tile:focus-visible .mu-go,.mu-tile.on .mu-go{opacity:1;transform:none}
+.mu-tile.dim .mu-go{display:none}
+.mu-tm{position:absolute!important;right:6px;top:6px;background:rgba(10,14,16,.55)!important;color:#fff!important;opacity:0;width:32px!important;height:32px!important}
+.mu-tile:hover .mu-tm{opacity:1}
+.mu-tile.new b{color:var(--mute)}
+
+/* шапка подборки */
+.mu-chead{display:flex;gap:22px;align-items:flex-end;padding:4px 2px 6px}
+.mu-art.big{width:clamp(130px,26cqw,200px);flex:none;border-radius:20px}
+.mu-cinfo{display:grid;gap:8px;min-width:0}
+.mu-cinfo small{font:700 11px var(--font),sans-serif;letter-spacing:.08em;text-transform:uppercase;color:var(--mute)}
+.mu-cinfo h2{margin:0;font:700 clamp(22px,4cqw,34px)/1.1 var(--hfont),Unbounded,sans-serif;color:var(--ink)}
+.mu-cinfo>span{color:var(--mute);font-size:13.5px}
+
+/* список треков */
+.mu-list{display:grid;gap:3px}
 .mu-more{justify-self:center;margin-top:8px}
-.mu-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto auto;gap:12px;align-items:center;padding:6px 10px 6px 6px;border-radius:14px;cursor:pointer;border:1px solid transparent}
+.mu-row{display:grid;grid-template-columns:44px minmax(0,1fr) auto auto auto auto;gap:10px;align-items:center;padding:6px 8px 6px 6px;border-radius:14px;cursor:pointer;border:1px solid transparent}
 .mu-row.sm{grid-template-columns:36px minmax(0,1fr) auto;padding:4px 8px 4px 4px}
 .mu-row:hover{background:var(--card);border-color:var(--line2)}
 .mu-row.cur{background:color-mix(in srgb,var(--acc) 12%,var(--card));border-color:color-mix(in srgb,var(--acc) 40%,var(--line2))}
@@ -34,22 +96,19 @@
 .mu-tx{min-width:0}
 .mu-tx b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:700}
 .mu-tx span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:var(--mute)}
+.mu-tx b .mu-rxs{display:inline}
 .mu-row .mu-ib{opacity:0}
 .mu-row:hover .mu-ib,.mu-row .mu-ib.fav.on,.mu-row:focus-within .mu-ib,.mu-row.cur .mu-ib{opacity:1}
+.mu-d{font-size:12.5px;color:var(--mute);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+.mu-rxs{margin-left:8px;font-style:normal;white-space:nowrap}
+.mu-rxs i{font-style:normal;margin-right:2px;font-size:13px}.mu-rxs i.fr{opacity:.55;font-size:11px}
 .mu-cv{position:relative;display:grid;place-items:center;width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,color-mix(in srgb,var(--acc) 28%,var(--card)),color-mix(in srgb,var(--acc2) 22%,var(--card)));color:color-mix(in srgb,var(--ink) 55%,transparent);background-size:cover;background-position:center;overflow:hidden;flex:none}
 .mu-cv svg{width:55%;height:55%}
 .mu-cv.has>svg{display:none}
 .mu-cv.sm{width:36px;height:36px;border-radius:9px}
-.mu-cv.lg{width:100%;height:auto;aspect-ratio:1;border-radius:14px;font-size:44px}
-.mu-cv.add{font-size:40px;border:2px dashed var(--line2);background:transparent}
 .mu-pl{position:absolute;inset:0;display:grid;place-items:center;background:rgba(0,0,0,.55);color:#fff;opacity:0;transition:opacity .12s}
 .mu-pl svg{width:50%;height:50%}
 .mu-row:hover .mu-pl,.mu-row.playing .mu-pl{opacity:1}
-.mu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
-.mu-card{display:grid;gap:4px;align-content:start;text-align:left;border:0;background:none;padding:8px;border-radius:16px;cursor:pointer;color:var(--ink);font:inherit}
-.mu-card:hover{background:var(--card)}
-.mu-card b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px}
-.mu-card span{font-size:12.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mu-empty{padding:64px 20px}
 .mu-path{display:block;padding:10px 12px;border-radius:12px;background:var(--field);word-break:break-all;font-size:13px}
 .mu-pick{display:grid;gap:6px;max-height:40vh;overflow-y:auto}
@@ -60,11 +119,33 @@
 .mu-queue{display:grid;gap:2px;max-height:56vh;overflow-y:auto}
 .mu-queue .mu-row .mu-ib{opacity:1}
 
+/* полки: палитра и окно */
+.mu-pal{width:min(344px,calc(100vw - 16px));padding:10px;display:grid;gap:8px}
+.mu-pt{font-size:12.5px;color:var(--mute);padding:2px 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mu-pg{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.mu-pc{display:grid;gap:2px;justify-items:center;padding:8px 2px 6px;border-radius:14px;border:1px solid var(--line2);background:var(--btn);color:var(--ink);cursor:pointer;font:inherit;min-width:0}
+.mu-pc i{font-style:normal;font-size:24px;line-height:1.1}
+.mu-pc span{font-size:10.5px;color:var(--mute);max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mu-pc:hover{background:var(--btnh);transform:translateY(-1px)}
+.mu-pc.on{border-color:var(--acc);background:color-mix(in srgb,var(--acc) 16%,var(--btn));box-shadow:inset 0 0 0 1px var(--acc)}
+.mu-pc.on span{color:var(--ink)}
+.mu-pc.add{border-style:dashed;background:transparent}
+.mu-ldlg{width:min(460px,100%)}
+.mu-ltop{display:grid;grid-template-columns:76px 1fr;gap:10px}
+.mu-ldlg .mu-emo{text-align:center;font-size:30px;min-height:56px!important;padding:0}
+.mu-ldlg input[type=text]{min-height:56px}
+.mu-quick{display:flex;flex-wrap:wrap;gap:6px}
+.mu-quick button{width:40px;height:40px;border-radius:12px;border:1px solid var(--line2);background:var(--btn);font-size:20px;cursor:pointer}
+.mu-quick button:hover{background:var(--btnh);transform:scale(1.08)}
+.mu-fly{position:fixed;bottom:96px;z-index:90;font-size:38px;pointer-events:none;animation:mufly 2.7s ease-out forwards;text-align:center}
+.mu-fly small{display:block;font-size:11px;color:var(--ink);background:var(--card);border-radius:8px;padding:1px 6px;margin-top:2px}
+@keyframes mufly{0%{opacity:0;transform:translateY(0) scale(.6)}12%{opacity:1;transform:translateY(-30px) scale(1.15)}100%{opacity:0;transform:translateY(-260px) scale(1)}}
+
 /* панель плеера */
 .mu-bar{display:grid;grid-template-columns:minmax(180px,1fr) minmax(280px,2fr) minmax(180px,1fr);gap:16px;align-items:center;padding:10px 16px;border-top:1px solid var(--line2);background:color-mix(in srgb,var(--side) 94%,transparent);backdrop-filter:blur(10px)}
+.mu-bar[hidden],.mu-mini[hidden]{display:none}
 .mu-bar .mu-cvh{display:flex}.mu-bar .mu-cvh .mu-cv{width:52px;height:52px}
-.mu-bar>.mu-cvh,.mu-bar>.mu-info{grid-row:1}
-.mu-bar:not(.mini){grid-template-columns:auto minmax(0,1fr) minmax(300px,2fr) auto}
+.mu-bar:not(.mini){grid-template-columns:auto minmax(150px,1fr) minmax(260px,2fr) auto}
 .mu-bar.idle .mu-ctl .mu-ib,.mu-bar.idle .mu-seek{opacity:.45;pointer-events:none}
 .mu-info{min-width:0;display:grid}
 .mu-info b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -79,15 +160,46 @@
 .mu-vol{width:90px;background:var(--line2)}
 .mu-seek::-webkit-slider-thumb,.mu-vol::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--ink);border:0;transition:transform .12s}
 .mu-seek::-webkit-slider-thumb:hover,.mu-vol::-webkit-slider-thumb:hover{transform:scale(1.25)}
-.mu-mini{grid-row:6;padding:8px 82px 10px 10px;border-top:1px solid var(--line2);background:color-mix(in srgb,var(--side) 90%,transparent)}
-.mu-mini[hidden]{display:none}
+.mu-sk{position:relative;display:grid}
+.mu-ticks{position:absolute;left:0;right:0;top:-14px;height:14px;pointer-events:none}
+.mu-tick{position:absolute;transform:translateX(-50%);font-style:normal;font-size:12px;cursor:pointer;pointer-events:auto}
+.mu-mini{grid-row:6;display:grid;gap:6px;padding:8px 82px 10px 10px;border-top:1px solid var(--line2);background:color-mix(in srgb,var(--side) 90%,transparent)}
 .mu-bar.mini{grid-template-columns:44px minmax(0,1fr) auto;gap:10px;padding:6px 8px;border:0;border-radius:14px;background:var(--card);cursor:pointer}
 .mu-bar.mini .mu-cvh .mu-cv{width:44px;height:44px}
 .mu-bar.mini .mu-ctl{gap:0}.mu-bar.mini .mu-ib{width:34px;height:34px}.mu-bar.mini .mu-ib.big{width:38px;height:38px}
+.mu-bgbar.mini{grid-template-columns:36px minmax(0,1fr) auto auto;background:color-mix(in srgb,var(--card),#3a4a9a 14%)}
+.mu-bgbar.mini .mu-cvh .mu-cv{width:36px;height:36px}.mu-bgbar.mini .mu-ib.big{width:34px;height:34px}
 #mx.rail .mu-mini{display:none}
-@media (max-width:1000px){.mu-bar:not(.mini){grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto}.mu-bar:not(.mini) .mu-mid{grid-column:1/-1;grid-row:2}.mu-vol,.mu-vi{display:none}}
 
-.mu-d{font-size:12.5px;color:var(--mute);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
+/* карточки состояния: «Вместе» и «Фон» */
+.mu-sc{display:grid;gap:14px;padding:18px;border-radius:22px;border:1px solid color-mix(in srgb,var(--acc2) 38%,var(--line2));background:linear-gradient(135deg,color-mix(in srgb,var(--acc2) 18%,var(--card)),var(--card) 70%)}
+.mu-bgc{border-color:color-mix(in srgb,#6f7dff 40%,var(--line2));background:linear-gradient(135deg,color-mix(in srgb,#6f7dff 20%,var(--card)),var(--card) 70%)}
+.mu-sch{display:flex;gap:14px;align-items:center}
+.mu-sch>div:last-child{display:grid;gap:2px;min-width:0}
+.mu-sch b{font:700 18px/1.2 var(--hfont),Unbounded,sans-serif;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mu-sch span{color:var(--mute);font-size:13.5px}
+.mu-sci{width:52px;height:52px;border-radius:16px;display:grid;place-items:center;font-size:26px;background:rgba(255,255,255,.07);flex:none}
+.mu-how{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mu-how>div{display:grid;gap:3px;padding:12px 14px;border-radius:16px;background:rgba(127,127,127,.1)}
+.mu-how i{font-style:normal;font-size:22px}.mu-how span{font-size:12.5px;color:var(--mute)}
+.mu-peers{display:flex;flex-wrap:wrap;gap:8px}
+.mu-peer{display:grid;gap:1px;padding:8px 14px;border-radius:14px;background:rgba(127,127,127,.12)}
+.mu-peer span{font-size:12px;color:var(--mute)}
+.mu-pref{display:flex;gap:4px;padding:4px;border-radius:14px;background:rgba(127,127,127,.14);width:max-content;max-width:100%}
+.mu-pref button{border:0;background:none;color:var(--mute);font:700 13px var(--font),sans-serif;padding:8px 14px;border-radius:10px;cursor:pointer;white-space:nowrap}
+.mu-pref button.on{background:var(--card);color:var(--ink)}
+.mu-dl{display:grid;gap:6px;font-size:13px;color:var(--mute)}
+.mu-dl i{display:block;height:6px;border-radius:3px;background:linear-gradient(90deg,var(--acc) var(--p,0%),var(--line2) var(--p,0%))}
+.mu-bgrow{display:flex;align-items:center;gap:22px;flex-wrap:wrap}
+.mu-bgvol{display:grid;gap:6px;min-width:190px;flex:1;font-size:13px;color:var(--mute)}
+.mu-bgvol .mu-vol{width:100%}
+.mu-bgopts{display:flex;gap:22px;flex-wrap:wrap}
+.mu-opt{display:grid;grid-template-columns:44px 1fr;grid-template-rows:auto auto;column-gap:12px;text-align:left;padding:14px 16px;border-radius:18px;border:1px solid var(--line2);background:var(--btn);color:var(--ink);cursor:pointer;font:inherit}
+.mu-opt:hover{background:var(--btnh);border-color:color-mix(in srgb,var(--acc) 50%,var(--line2))}
+.mu-opt i{grid-row:1/3;font-style:normal;font-size:28px;align-self:center}
+.mu-opt span{font-size:12.5px;color:var(--mute)}
+.mu-inv{width:min(500px,100%)}
+
 /* текст песни */
 .mu-lyr{display:grid;gap:14px;max-width:760px;margin:0 auto;padding:8px 0 40vh}
 .mu-lh{display:grid;gap:2px;padding-bottom:6px;border-bottom:1px solid var(--line2)}
@@ -109,22 +221,22 @@
 .mu-sleep{display:flex;gap:6px;flex-wrap:wrap}
 .mu-h2{margin:6px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
 
-/* реакции */
-.mu-rxs{margin-left:8px;font-style:normal;white-space:nowrap}
-.mu-rxs i{font-style:normal;margin-right:2px;font-size:13px}.mu-rxs i.fr{opacity:.55;font-size:11px}
-.mu-pal{display:flex;flex-wrap:wrap;gap:4px;padding:8px;max-width:288px}
-.mu-pal button{width:44px;height:44px;border-radius:12px;border:1px solid var(--line2);background:var(--btn);font-size:22px;cursor:pointer}
-.mu-pal button:hover{background:var(--btnh);transform:scale(1.08)}.mu-pal button.on{border-color:var(--acc);box-shadow:inset 0 0 0 1px var(--acc)}
-.mu-ib.rx{font-size:18px;line-height:1}
-.mu-sk{position:relative;display:grid}
-.mu-ticks{position:absolute;left:0;right:0;top:-14px;height:14px;pointer-events:none}
-.mu-tick{position:absolute;transform:translateX(-50%);font-style:normal;font-size:12px;cursor:pointer;pointer-events:auto}
-.mu-fly{position:fixed;bottom:96px;z-index:90;font-size:38px;pointer-events:none;animation:mufly 2.7s ease-out forwards;text-align:center}
-.mu-fly small{display:block;font-size:11px;color:var(--ink);background:var(--card);border-radius:8px;padding:1px 6px;margin-top:2px}
-@keyframes mufly{0%{opacity:0;transform:translateY(0) scale(.6)}12%{opacity:1;transform:translateY(-30px) scale(1.15)}100%{opacity:0;transform:translateY(-260px) scale(1)}}
-.fchips{display:flex;gap:6px;flex-wrap:wrap}
-/* слушать вместе */
-.mu-sess{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;margin-bottom:10px;border-radius:14px;background:linear-gradient(90deg,color-mix(in srgb,var(--acc2) 24%,var(--card)),color-mix(in srgb,var(--acc2) 10%,var(--card)));border:1px solid color-mix(in srgb,var(--acc2) 40%,var(--line2))}
-.mu-sess .btn{min-height:34px!important;padding:4px 12px}
-
-.mu-tx b .mu-rxs{display:inline}
+/* узкая область — правая панель в зале и маленькое окно */
+@container mu (max-width: 760px){
+  .mu-bar:not(.mini){grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto;row-gap:8px}
+  .mu-bar:not(.mini) .mu-mid{grid-column:1/-1;grid-row:2}
+  .mu-right .mu-vol,.mu-vi{display:none}
+  .mu-right{flex-wrap:wrap}
+  .mu-mode span{display:none}.mu-mode{padding:8px 12px}
+  .mu-tool{gap:8px}.mu-tool .ftabs{width:100%;overflow-x:auto}
+  .mu-chead{flex-direction:column;align-items:flex-start}
+  .mu-how{grid-template-columns:1fr}
+  .mu-row{grid-template-columns:44px minmax(0,1fr) auto auto auto}
+  .mu-row .mu-d{display:none}
+  .mu-grid{grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+}
+@container mu (max-width: 520px){
+  .mu-head h2{display:none}
+  .mu-modes{margin-left:0;flex:1}.mu-mode{flex:1;justify-content:center}
+  .mu-scroll{padding:12px 12px 24px}
+}

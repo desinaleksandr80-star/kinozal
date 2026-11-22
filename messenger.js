@@ -996,7 +996,7 @@ function blobUrl(id) { return urls.get(id); }
 async function mediaUrl(m) { if (urls.has(m.id)) return urls.get(m.id); const b = await blobGet(m.id); if (!b) return ''; const u = URL.createObjectURL(b); urls.set(m.id, u); return u; }
 function freeUrls() { stopVoice(); for (const u of urls.values()) URL.revokeObjectURL(u); urls.clear(); }
 function showEmpty() {
-  filesOpen = false; musicApi?.hide();
+  closePanel(); filesOpen = false; musicApi?.hide();
   const main = $('#mxMain'); main.textContent = ''; root.classList.remove('chat-open');
   const e = el('div', 'mx-empty');
   e.innerHTML = IC.logo;
@@ -2062,6 +2062,7 @@ function xPaint(id) {
 
 // ---------- раздел «Файлы»: передачи со всех чатов, полученное, отправленное ----------
 // Не проводник по всему диску: только то, что прошло через Кинозал, — с тем, кто прислал и из какого чата.
+let fHostEl = null, panelW = '';   // правая панель в зале: куда рисовать «Файлы» и что открыто ('music' | 'files')
 let filesOpen = false, fTab = store.get('fTab', 'all'), fPath = '', fQ = '', fSort = store.get('fSort', 'date'), fGen = 0;
 const FICON = { img: '🖼', video: '🎬', audio: '🎵', arc: '🗜', doc: '📄', exe: '⚙️', dir: '📁', raw: '📷' };
 const fKind = n => isRawName(n) ? 'raw' : /\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(n) ? 'img' : /\.(mp4|webm|mkv|mov|m4v|avi)$/i.test(n) ? 'video' : /\.(mp3|ogg|opus|wav|flac|m4a|aac)$/i.test(n) ? 'audio' : /\.(zip|rar|7z|tar|gz|jar|mrpack)$/i.test(n) ? 'arc' : RISKY.test(n) ? 'exe' : 'doc';
@@ -2080,12 +2081,33 @@ const liveCount = () => dls.size + new Set([...ups.values()].map(o => o.m.id)).s
 let musicApi = null;
 function openMusic() {
   if (!musicApi) return;
+  closePanel();
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = false; root.classList.add('chat-open'); renderList(); musicApi.show();
 }
-function closeMusic() { musicApi?.hide(); showEmpty(); }
+function closeMusic() { if (panelW === 'music') { closePanel(); return; } musicApi?.hide(); showEmpty(); }
+// «Музыка» и «Файлы» прямо в зале (звонок и Кинозал): правая панель, из зала выходить не нужно
+function closePanel() {
+  const dr = document.getElementById('rDrawer'); if (!dr || !panelW) return;
+  const w = panelW; panelW = '';
+  if (w === 'music') musicApi?.hide(); else { filesOpen = false; fHostEl = null; }
+  dr.hidden = true; const b = document.getElementById('rdBody'); if (b) b.textContent = '';
+  for (const id of ['roomMusic', 'roomFiles']) document.getElementById(id)?.classList.remove('on');
+}
+function roomPanel(w) {
+  const dr = document.getElementById('rDrawer'), body = document.getElementById('rdBody'); if (!dr || !body) return;
+  if (panelW === w) { closePanel(); return; }
+  closePanel();
+  if (w === 'music' && !musicApi) return;
+  panelW = w; dr.hidden = false; body.textContent = '';
+  dr.style.top = Math.max(0, document.querySelector('#room .bar')?.getBoundingClientRect().bottom || 0) + 'px';   // шапка зала с кнопками остаётся видна
+  if (w === 'music') musicApi.show(body);
+  else { musicApi?.hide(); fHostEl = body; filesOpen = true; if (!['all', 'live', 'recv', 'routes'].includes(fTab) || (!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all'; renderFiles(); }
+  document.getElementById('roomMusic')?.classList.toggle('on', w === 'music'); document.getElementById('roomFiles')?.classList.toggle('on', w === 'files');
+}
+window.kzPanel = roomPanel;
 function openFiles(tab) {
-  musicApi?.hide();
+  closePanel(); musicApi?.hide();
   if (open) { freeUrls(); open = null; find = null; }
   filesOpen = true; if (tab) { fTab = tab; store.set('fTab', tab); }
   if ((!DESK && fTab === 'recv') || (!DISK && fTab === 'routes')) fTab = 'all';
@@ -2093,7 +2115,7 @@ function openFiles(tab) {
   root.classList.add('chat-open'); renderList(); renderFiles();
   APP?.files?.watch?.(() => { if (filesOpen && (fTab === 'recv' || fTab === 'all')) renderFiles(); });
 }
-function closeFiles() { filesOpen = false; showEmpty(); }
+function closeFiles() { if (panelW === 'files') { closePanel(); return; } filesOpen = false; showEmpty(); }
 // строка с карточкой сообщения (она сама обновляет прогресс) и подписью: кто, где, когда
 function msgRow(m, extra) {
   const r = el('div', 'frow msg'), meta = el('div', 'fmeta');
@@ -2106,7 +2128,7 @@ function msgRow(m, extra) {
 const lnk = (t, f, cls) => { const b = el('button', 'lnk' + (cls ? ' ' + cls : ''), t); b.onclick = e => { e.stopPropagation(); f(); }; return b; };
 async function renderFiles() {
   if (!filesOpen) return;
-  const gen = ++fGen, main = $('#mxMain');
+  const gen = ++fGen, main = fHostEl || $('#mxMain');
   const sec = el('section', 'mx-files'), head = el('header', 'mx-chead'), tabs = el('div', 'ftabs'), bar = el('div', 'fbar'), list = el('div', 'flist');
   const back = el('button', 'ib back'); back.innerHTML = IC.back; back.title = 'К чатам'; back.onclick = closeFiles;
   const n = liveCount();
@@ -3226,10 +3248,10 @@ window.kzOnRoom = (ev, info) => {
   jlog('[зал]', ev, info?.code || '');
   if (ev === 'enter') { callT0 = Date.now(); APP?.inCall?.(true); }
   if (ev === 'enter' || ev === 'show') { root.hidden = true; stopRing(); }
-  if (ev === 'hide') { root.hidden = false; renderList(); updCallUi(); }
+  if (ev === 'hide') { closePanel(); root.hidden = false; renderList(); updCallUi(); }
   if (ev === 'hostgone') { toast('Звонок завершён'); setTimeout(() => window.kzRoom?.leave(), 1500); }
   if (ev === 'exit') {
-    root.hidden = !S.me; callT0 = 0; updCallUi(); APP?.inCall?.(false);
+    closePanel(); root.hidden = !S.me; callT0 = 0; updCallUi(); APP?.inCall?.(false);
     if (myCall) { S.ended[myCall.code] = Date.now(); save(); sendChat(myCall.chat, { t: 'callend', code: myCall.code }); myCall = null; }
     refreshCallCards(); if (open) markRead(open);
   }
@@ -3724,7 +3746,7 @@ if (DESK && window.kzMusic) {
       isOn: u => isOn(u)
     }
   });
-  if (musicApi) $('#mxMusic').hidden = false;
+  if (musicApi) { $('#mxMusic').hidden = false; const rm = document.getElementById('roomMusic'); if (rm) rm.hidden = false; }
 }
 window.__mx = { get S() { return S; }, myId, myDev, myPeer, links, isOn, openChat, post, devicesDlg, vaultSync, setPassword, get open() { return open; } }; // для диагностики
 if (S.me) boot(); else helloDlg();
