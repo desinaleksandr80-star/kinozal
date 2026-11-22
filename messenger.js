@@ -3963,6 +3963,16 @@ if (DESK && window.kzMusic) {
       friends: () => Object.values(S.contacts).filter(ct => ct.state !== 'blocked' && ct.id !== myId && isOn(ct.id) && linksOf(ct.id).some(L => L.their?.caps.includes('mu'))).map(ct => ({ id: ct.id, name: nameOf(ct.id) })),
       isOn: u => isOn(u),
       canJoin: u => actAllowed(u) && actCfg().join,
+      // кто из друзей сейчас со мной в звонке или зале: участники чата, откуда звонок, и те, чей статус — этот же зал.
+      // Код зала им и так известен (приглашение в чате или их же статус), поэтому музыке «для всех» его можно назвать
+      roomMates: () => {
+        const R = window.kzRoom; if (!R?.inRoom || !R.code) return [];
+        const set = new Set(), ch = myCall?.code === R.code ? myCall.chat : S.calls?.[R.code]?.chat;
+        if (ch) for (const u of members(ch)) set.add(u);
+        for (const u of acts.keys()) { const a = actOf(u); if (a?.k === 'room' && a.code === R.code) set.add(u); }
+        set.delete(myId);
+        return [...set].filter(u => S.contacts[u]?.state !== 'blocked' && linksOf(u).some(L => L.their?.caps.includes('mu'))).map(u => ({ id: u, name: nameOf(u) }));
+      },
       friendActs, actText, actIcon, joinAct: actJoin, actChanged, openActDlg: actDlg
     }
   });
