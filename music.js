@@ -304,12 +304,18 @@ function rxChips(t) {   // эмодзи полок, на которых лежи
 // ---------- плеер ----------
 // Две «деки» (два <audio>) через Web Audio: пока играет одна, вторая заранее грузит следующий трек.
 // Так получаются переход без паузы (gapless) и плавное перетекание (кроссфейд). Дальше звук идёт через эквалайзер.
-const EQ_BANDS = [60, 230, 910, 3600, 14000];
-const EQ_PRESETS = { flat: ['Ровный', [0, 0, 0, 0, 0]], bass: ['Бас', [6, 4, 0, -1, -1]], voice: ['Голос', [-3, -1, 3, 3, 0]], bright: ['Яркий', [-2, 0, 1, 4, 6]], soft: ['Мягкий', [3, 2, 0, -2, -4]] };
+// эквалайзер из трёх привычных полос: низкие, средние, высокие
+const EQ_BANDS = [
+  { f: 200, type: 'lowshelf', q: 1, name: 'Низкие', hint: 'бас, до 200 Гц' },
+  { f: 1000, type: 'peaking', q: 0.7, name: 'Средние', hint: 'голос, около 1 кГц' },
+  { f: 4000, type: 'highshelf', q: 1, name: 'Высокие', hint: 'звон, от 4 кГц' }
+];
+const EQ_PRESETS = { flat: ['Ровный', [0, 0, 0]], bass: ['Бас', [6, -1, 0]], voice: ['Голос', [-3, 4, 1]], bright: ['Яркий', [-2, 1, 5]], soft: ['Мягкий', [3, 0, -4]] };
+const EQ_MAX = 12;
 const sleep = { until: 0, endOfTrack: false, t: 0 };
 let actx = null, master = null, eqNodes = [], decks = null, deckI = 0, nextT = 0, fadeT = 0;
 const idleEl = new Audio();   // пока ничего не играло — на нём читаем «пусто»
-const cfg = { xf: 0, rate: 1, eqOn: false, eq: [0, 0, 0, 0, 0] };   // xf — секунд перетекания, 0 = без паузы
+const cfg = { xf: 0, rate: 1, eqOn: false, eq: [0, 0, 0] };   // xf — секунд перетекания, 0 = без паузы
 const active = () => (decks ? decks[deckI].el : idleEl);
 // au — «текущий трек» для всего остального кода. Перемотка, пауза и запуск через него идут мягко (см. softSeek/softPause/softPlay),
 // а позиция и «на паузе» — с учётом того, что уже попросили, но ещё не успело случиться (затухание длится доли секунды)
@@ -376,7 +382,7 @@ function ensureAudio() {
   if (actx) { if (actx.state === 'suspended') actx.resume().catch(() => {}); return; }
   actx = new AudioContext();
   master = actx.createGain(); master.gain.value = player.vol;
-  eqNodes = EQ_BANDS.map((f, i) => { const b = actx.createBiquadFilter(); b.type = i === 0 ? 'lowshelf' : i === EQ_BANDS.length - 1 ? 'highshelf' : 'peaking'; b.frequency.value = f; b.Q.value = 1; return b; });
+  eqNodes = EQ_BANDS.map(x => { const b = actx.createBiquadFilter(); b.type = x.type; b.frequency.value = x.f; b.Q.value = x.q; return b; });
   for (let i = 0; i < eqNodes.length - 1; i++) eqNodes[i].connect(eqNodes[i + 1]);
   eqNodes.at(-1).connect(master); master.connect(outNode());   // последняя ступень — громкость фона и приглушение (см. «фон»)
   decks = [mkDeck(), mkDeck()]; deckI = 0; applyEq();
@@ -384,7 +390,15 @@ function ensureAudio() {
 }
 function applyEq() { if (!actx) return; eqNodes.forEach((n, i) => { n.gain.setTargetAtTime(cfg.eqOn ? cfg.eq[i] : 0, actx.currentTime, 0.02); }); }
 function saveCfg() { H.store.set('musicCfg', JSON.stringify(cfg)); }
-function loadCfg() { try { const j = JSON.parse(H.store.get('musicCfg', '{}')); if ([0, 3, 6, 10].includes(j.xf)) cfg.xf = j.xf; if (j.rate >= .5 && j.rate <= 2) cfg.rate = j.rate; cfg.eqOn = !!j.eqOn; if (Array.isArray(j.eq) && j.eq.length === 5) cfg.eq = j.eq.map(x => Math.max(-12, Math.min(12, +x || 0))); } catch (e) {} }
+function loadCfg() { try { const j = JSON.parse(H.store.get('musicCfg', '{}')); if ([0, 3, 6, 10].includes(j.xf)) cfg.xf = j.xf; if (j.rate >= .5 && j.rate <= 2) cfg.rate = j.rate; cfg.eqOn = !!j.eqOn; cfg.eq = eqFrom(j.eq); } catch (e) {} }
+// сохранённые настройки: три полосы как есть; старые пять (60 Гц…14 кГц) — сводим в три
+const eqClamp = x => Math.max(-EQ_MAX, Math.min(EQ_MAX, Math.round((+x || 0) * 2) / 2));
+function eqFrom(a) {
+  if (!Array.isArray(a)) return [0, 0, 0];
+  if (a.length === 3) return a.map(eqClamp);
+  if (a.length === 5) { const v = a.map(x => +x || 0); return [(v[0] + v[1]) / 2, v[1] * 0.25 + v[2] * 0.5 + v[3] * 0.25, (v[3] + v[4]) / 2].map(eqClamp); }
+  return [0, 0, 0];
+}
 function setRate(r) { cfg.rate = r; saveCfg(); if (decks) for (const d of decks) d.el.playbackRate = r; for (const b of player.bars) b.sync(); }
 
 function reshuffle(keep) {
@@ -677,20 +691,19 @@ function playerBar(mini) {
   let dragging = false;
   seek.oninput = () => { dragging = true; tcur.textContent = fmt(seek.value / 1000 * (au.duration || 0)); };
   seek.onchange = () => { if (isGuest()) { guestBlock(); dragging = false; bar.tick(); return; } seekTo(seek.value / 1000); dragging = false; };
-  let shuf, rep, que, vol, fav, lyr, snd, rxb, ticks;
+  let shuf, rep, que, vol, fav, lyr, snd, ticks;
   if (mini) { bar.append(cv, info, ctl); bar.onclick = () => H.openSelf(); }
   else {
     shuf = ibtn(IC.shuffle, 'Перемешать', () => { player.shuffle = !player.shuffle; H.store.set('musicShuffle', player.shuffle ? '1' : '0'); const c = player.queue[player.qi]; if (player.queue.length) { if (player.shuffle) reshuffle(c); else { player.queue = player.orig.slice(); player.qi = Math.max(0, player.queue.indexOf(c)); } } player.sync(); queuePaint?.(); });
     rep = ibtn(IC.repeat, 'Повтор: выкл', () => { player.repeat = { off: 'all', all: 'one', one: 'off' }[player.repeat]; H.store.set('musicRepeat', player.repeat); player.sync(); });
     que = ibtn(IC.queue, 'Очередь', () => queueDlg());
-    rxb = ibtn('🏷️', 'Положить на полку — на эту секунду', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 120, e.clientY - 300, t, au.currentTime); }, 'rx');
     lyr = ibtn(IC.lyr, 'Текст песни', () => { lyricsOpen = !lyricsOpen; if (lyricsOpen) view.detail = null; repaint(); });
     snd = ibtn(IC.sliders, 'Звук: переход между треками, эквалайзер, скорость, таймер сна', () => soundDlg());
     fav = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } } }, 'fav');
     vol = el('input', 'mu-vol'); vol.type = 'range'; vol.min = 0; vol.max = 100; vol.title = 'Громкость'; vol.oninput = () => setVol(vol.value / 100);
     const mid = el('div', 'mu-mid'), line = el('div', 'mu-line'), sk = el('div', 'mu-sk'); ticks = el('div', 'mu-ticks'); sk.append(ticks, seek); line.append(tcur, sk, tall); mid.append(ctl, line);
     const vi = el('span', 'mu-vi'); vi.innerHTML = IC.vol;
-    const right = el('div', 'mu-right'); right.append(rxb, fav, shuf, rep, que, lyr, snd, vi, vol);
+    const right = el('div', 'mu-right'); right.append(fav, shuf, rep, que, lyr, snd, vi, vol);
     bar.append(cv, info, mid, right);
   }
   bar.sync = () => {
@@ -1078,35 +1091,139 @@ function lyricsSync() {   // сменился трек — обновляем т
   box.dataset.rel = rel; box.textContent = ''; fillLyrics(box, player.cur);
 }
 
-// ---------- окно «Звук»: переход между треками, скорость, эквалайзер, таймер сна ----------
-function soundDlg() {
-  H.modal((card, close) => {
-    card.classList.add('mu-snd');
-    const sel = (opts, val, f) => { const s = el('select', 'mu-sort'); for (const [v, t] of opts) { const o = el('option', '', t); o.value = v; s.append(o); } s.value = String(val); s.onchange = () => f(s.value); return s; };
-    const lab = (t, ctl, hint) => { const d = el('div', 'mu-set'); const l = el('div'); l.append(el('b', '', t)); if (hint) l.append(el('span', '', hint)); d.append(l, ctl); return d; };
-    card.append(el('h2', '', 'Звук'));
-    card.append(lab('Переход между треками', sel([[0, 'Без паузы'], [3, 'Плавно, 3 с'], [6, 'Плавно, 6 с'], [10, 'Плавно, 10 с']], cfg.xf, v => { cfg.xf = +v; saveCfg(); armNext(); player.sync(); }), 'Следующий трек готовится заранее'));
-    card.append(lab('Скорость', sel([[0.75, '×0,75'], [0.9, '×0,9'], [1, 'Обычная'], [1.1, '×1,1'], [1.25, '×1,25'], [1.5, '×1,5'], [2, '×2']], cfg.rate, v => setRate(+v)), 'Высота голоса не меняется'));
-    // эквалайзер
-    const eq = el('div', 'mu-eq'), on = el('label', 'switch'), cb = el('input'); cb.type = 'checkbox'; cb.checked = cfg.eqOn;
-    on.append(document.createTextNode('Эквалайзер'), cb);
-    const rows = [], paint = () => { rows.forEach((r, i) => { r.input.value = cfg.eq[i]; r.val.textContent = (cfg.eq[i] > 0 ? '+' : '') + cfg.eq[i] + ' дБ'; r.input.style.setProperty('--p', ((cfg.eq[i] + 12) / 24 * 100) + '%'); }); eq.classList.toggle('off', !cfg.eqOn); };
-    cb.onchange = () => { cfg.eqOn = cb.checked; ensureAudio(); applyEq(); saveCfg(); paint(); player.sync(); };
-    const chips = el('div', 'fchips sm');
-    for (const [k, [name, g]] of Object.entries(EQ_PRESETS)) { const c = el('button', 'fchip', name); c.onclick = () => { cfg.eq = g.slice(); cfg.eqOn = true; cb.checked = true; ensureAudio(); applyEq(); saveCfg(); paint(); player.sync(); }; chips.append(c); }
-    card.append(on, chips, eq);
-    EQ_BANDS.forEach((f, i) => {
-      const r = el('div', 'mu-band'), input = el('input', 'mu-vol'), val = el('span', '', ''); input.type = 'range'; input.min = -12; input.max = 12; input.step = 1;
-      input.oninput = () => { cfg.eq[i] = +input.value; cfg.eqOn = true; cb.checked = true; ensureAudio(); applyEq(); saveCfg(); paint(); player.sync(); };
-      r.append(el('span', '', f >= 1000 ? (f / 1000) + ' кГц' : f + ' Гц'), input, val); eq.append(r); rows.push({ input, val });
-    });
-    paint();
-    // таймер сна
-    const sl = el('div', 'mu-sleep'), st = el('p', 'fhint', ''); const upd = () => { st.textContent = sleep.until ? 'Музыка затихнет через ' + Math.max(1, Math.round((sleep.until - Date.now()) / 60000)) + ' мин' : sleep.endOfTrack ? 'Остановлюсь после этого трека' : 'Таймер сна выключен'; };
-    for (const [v, t] of [[15, '15 мин'], [30, '30 мин'], [45, '45 мин'], [60, '1 час'], ['track', 'После трека'], [0, 'Выкл']]) { const b = el('button', 'fchip', t); b.onclick = () => { setSleep(v); upd(); }; sl.append(b); }
-    card.append(el('h3', 'mu-h2', 'Таймер сна'), sl, st); upd();
-    const row = el('div', 'row'); row.append(H.btnEl('Готово', 'pri', close)); card.append(row);
+// ---------- «Звук»: переход между треками, скорость, эквалайзер, таймер сна ----------
+// Содержимое одно на всех: и окно из «Музыки», и панель в шторке строятся этой функцией.
+const sndViews = new Set();   // открытые экземпляры — чтобы правка в одном сразу была видна в другом
+function sndRefresh(except) { for (const f of sndViews) if (f !== except) f(); }
+function eqSet(eq, on) {
+  if (eq) cfg.eq = eq.map(eqClamp);
+  if (on != null) cfg.eqOn = on;
+  ensureAudio(); applyEq();
+}
+const eqFmt = g => (g > 0 ? '+' : g < 0 ? '−' : '') + String(Math.abs(g)).replace('.', ',') + ' дБ';
+
+// эквалайзер-круг: три ручки на лучах, дальше от центра — громче
+function eqCircle(onChange) {
+  const NS = 'http://www.w3.org/2000/svg', W = 300, HH = 274, C = { x: 150, y: 148 }, R0 = 70, K = 3, RMIN = R0 - EQ_MAX * K, RMAX = R0 + EQ_MAX * K;
+  const mk = (tag, at, parent) => { const n = document.createElementNS(NS, tag); for (const k in at) n.setAttribute(k, at[k]); if (parent) parent.append(n); return n; };
+  const ANG = [150, -90, 30].map(a => a * Math.PI / 180);   // низкие — слева снизу, средние — сверху, высокие — справа снизу
+  const dir = ANG.map(a => ({ x: Math.cos(a), y: Math.sin(a) }));
+  const pt = (i, g) => { const r = R0 + g * K; return { x: C.x + dir[i].x * r, y: C.y + dir[i].y * r }; };
+  const wrap = el('div', 'mu-eqc');
+  const svg = mk('svg', { viewBox: '0 0 ' + W + ' ' + HH, class: 'mu-eqsvg', role: 'group', 'aria-label': 'Эквалайзер: низкие, средние и высокие частоты' });
+  const gid = 'eqg' + Math.random().toString(36).slice(2, 8), defs = mk('defs', {}, svg);
+  const rg = mk('radialGradient', { id: gid, cx: '50%', cy: '50%', r: '50%' }, defs);
+  mk('stop', { offset: '0%', 'stop-color': 'var(--acc)', 'stop-opacity': '.08' }, rg); mk('stop', { offset: '100%', 'stop-color': 'var(--acc)', 'stop-opacity': '.42' }, rg);
+  mk('circle', { cx: C.x, cy: C.y, r: RMAX + 12, class: 'disc' }, svg);
+  for (const g of [-12, -6, 6, 12]) mk('circle', { cx: C.x, cy: C.y, r: R0 + g * K, class: 'ring' + (Math.abs(g) === 12 ? ' edge' : '') }, svg);
+  mk('circle', { cx: C.x, cy: C.y, r: R0, class: 'ring zero' }, svg);
+  dir.forEach(d => mk('line', { x1: C.x + d.x * RMIN, y1: C.y + d.y * RMIN, x2: C.x + d.x * RMAX, y2: C.y + d.y * RMAX, class: 'spoke' }, svg));
+  const z = mk('text', { x: C.x + 4, y: C.y - R0 + 13, class: 'zl' }, svg); z.textContent = '0';
+  const poly = mk('polygon', { class: 'area', fill: 'url(#' + gid + ')' }, svg);
+  const mid = mk('circle', { cx: C.x, cy: C.y, r: 7, class: 'hub' }, svg);
+  mk('title', {}, mid).textContent = 'Двойной щелчок — все полосы на 0 дБ';
+  const labs = EQ_BANDS.map((b, i) => {
+    const top = i === 1, lr = top ? RMAX + 18 : RMAX + 36, lx = C.x + dir[i].x * (lr + (top ? 0 : 8)), ly = C.y + dir[i].y * lr;
+    const g = mk('g', { class: 'lab' }, svg);
+    mk('text', { x: lx, y: top ? ly - 14 : ly + 4, class: 'nm' }, g).textContent = b.name;
+    return mk('text', { x: lx, y: top ? ly + 1 : ly + 20, class: 'vl' }, g);
   });
+  const knobs = EQ_BANDS.map((b, i) => {
+    const k = mk('circle', { r: 11, class: 'knob', tabindex: '0', role: 'slider', 'aria-label': b.name + ' частоты (' + b.hint + ')', 'aria-valuemin': -EQ_MAX, 'aria-valuemax': EQ_MAX, 'aria-orientation': 'vertical' }, svg);
+    const t = mk('title', {}, k); t.textContent = b.name + ' — ' + b.hint + '. Тяни от центра или к центру; двойной щелчок — 0 дБ';
+    return k;
+  });
+  wrap.append(svg);
+  let busy = -1;
+  const paint = () => {
+    const ps = cfg.eq.map((g, i) => pt(i, g));
+    poly.setAttribute('points', ps.map(p => p.x.toFixed(1) + ',' + p.y.toFixed(1)).join(' '));
+    knobs.forEach((k, i) => { k.setAttribute('cx', ps[i].x.toFixed(1)); k.setAttribute('cy', ps[i].y.toFixed(1)); k.setAttribute('aria-valuenow', cfg.eq[i]); k.setAttribute('aria-valuetext', eqFmt(cfg.eq[i])); k.classList.toggle('busy', busy === i); });
+    labs.forEach((v, i) => { v.textContent = eqFmt(cfg.eq[i]); v.classList.toggle('pos', cfg.eq[i] > 0); v.classList.toggle('neg', cfg.eq[i] < 0); });
+    wrap.classList.toggle('off', !cfg.eqOn);
+  };
+  const setBand = (i, g, final) => {
+    g = eqClamp(g); if (g === cfg.eq[i] && cfg.eqOn && !final) return;
+    const eq = cfg.eq.slice(); eq[i] = g; eqSet(eq, true); paint(); onChange(final);
+  };
+  // перетаскивание мышью и пальцем: ловим ближайшую ручку и двигаем её вдоль её луча
+  const toSvg = e => { const m = svg.getScreenCTM(); if (!m) return null; const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()); return { x: p.x - C.x, y: p.y - C.y }; };
+  const gainAt = (i, p) => (Math.max(RMIN, Math.min(RMAX, p.x * dir[i].x + p.y * dir[i].y)) - R0) / K;
+  svg.addEventListener('pointerdown', e => {
+    if (e.button) return; const p = toSvg(e); if (!p) return;
+    if (e.target === mid) return;   // центр — для двойного щелчка «сброс»
+    let best = 0, bd = 1e9;
+    cfg.eq.forEach((g, i) => { const q = pt(i, g), d = Math.hypot(q.x - C.x - p.x, q.y - C.y - p.y); if (d < bd) { bd = d; best = i; } });
+    if (bd > 30) { const a = Math.atan2(p.y, p.x); best = 0; let ba = 9; ANG.forEach((x, i) => { const da = Math.abs(Math.atan2(Math.sin(a - x), Math.cos(a - x))); if (da < ba) { ba = da; best = i; } }); }
+    e.preventDefault(); busy = best; knobs[best].focus({ preventScroll: true });
+    try { svg.setPointerCapture(e.pointerId); } catch (er) {}
+    setBand(best, gainAt(best, p), false);
+  });
+  svg.addEventListener('pointermove', e => { if (busy < 0) return; const p = toSvg(e); if (p) setBand(busy, gainAt(busy, p), false); });
+  const end = () => { if (busy < 0) return; busy = -1; paint(); onChange(true); };
+  svg.addEventListener('pointerup', end); svg.addEventListener('pointercancel', end); svg.addEventListener('lostpointercapture', end);
+  svg.addEventListener('dblclick', e => {
+    const i = knobs.indexOf(e.target);
+    if (i >= 0) setBand(i, 0, true); else if (e.target === mid) { eqSet([0, 0, 0]); paint(); onChange(true); }
+  });
+  // клавиатура: стрелки ±1 дБ, PageUp/PageDown ±3, Home/End — край, 0 или Delete — ноль
+  knobs.forEach((k, i) => k.addEventListener('keydown', e => {
+    const g = cfg.eq[i], m = { ArrowUp: g + 1, ArrowRight: g + 1, ArrowDown: g - 1, ArrowLeft: g - 1, PageUp: g + 3, PageDown: g - 3, Home: -EQ_MAX, End: EQ_MAX, Delete: 0, Backspace: 0, 0: 0 }[e.key];
+    if (m == null) return; e.preventDefault(); e.stopPropagation(); setBand(i, m, true);
+  }));
+  wrap.paint = paint; paint();
+  return wrap;
+}
+
+function soundBody(close) {
+  const body = el('div', 'mu-sndb');
+  const sel = (opts, val, f) => { const s = el('select', 'mu-sort'); for (const [v, t] of opts) { const o = el('option', '', t); o.value = v; s.append(o); } s.value = String(val); s.onchange = () => f(s.value); return s; };
+  const lab = (t, ctl, hint) => { const d = el('div', 'mu-set'); const l = el('div'); l.append(el('b', '', t)); if (hint) l.append(el('span', '', hint)); d.append(l, ctl); return d; };
+  const xfSel = sel([[0, 'Без паузы'], [3, 'Плавно, 3 с'], [6, 'Плавно, 6 с'], [10, 'Плавно, 10 с']], cfg.xf, v => { cfg.xf = +v; saveCfg(); armNext(); player.sync(); sndRefresh(paint); });
+  const rtSel = sel([[0.75, '×0,75'], [0.9, '×0,9'], [1, 'Обычная'], [1.1, '×1,1'], [1.25, '×1,25'], [1.5, '×1,5'], [2, '×2']], cfg.rate, v => { setRate(+v); sndRefresh(paint); });
+  const sets = el('div', 'mu-sndsec');
+  sets.append(lab('Переход между треками', xfSel, 'Следующий трек готовится заранее'), lab('Скорость', rtSel, 'Высота голоса не меняется'));
+  // эквалайзер
+  const eqSec = el('div', 'mu-sndsec eq'), on = el('label', 'switch'), cb = el('input'); cb.type = 'checkbox';
+  on.append(el('b', '', 'Эквалайзер'), cb);
+  cb.onchange = () => { eqSet(null, cb.checked); saveCfg(); paint(); player.sync(); sndRefresh(paint); };
+  const circ = eqCircle(final => { cb.checked = cfg.eqOn; paintChips(); if (final) { saveCfg(); player.sync(); } sndRefresh(paint); });
+  const chips = el('div', 'fchips sm mu-eqp'), chipEls = [];
+  for (const [k, [name, g]] of Object.entries(EQ_PRESETS)) { const c = el('button', 'fchip', name); c.type = 'button'; c.onclick = () => { eqSet(g, true); saveCfg(); paint(); player.sync(); sndRefresh(paint); }; chips.append(c); chipEls.push([c, g]); }
+  const reset = el('button', 'fchip ghost', 'Сброс'); reset.type = 'button'; reset.title = 'Все полосы — на 0 дБ';
+  reset.onclick = () => { eqSet([0, 0, 0]); saveCfg(); paint(); player.sync(); sndRefresh(paint); };
+  chips.append(reset);
+  const paintChips = () => { for (const [c, g] of chipEls) c.classList.toggle('on', cfg.eqOn && g.every((x, i) => x === cfg.eq[i])); reset.disabled = cfg.eq.every(x => !x); };
+  eqSec.append(on, circ, chips);
+  // таймер сна
+  const slSec = el('div', 'mu-sndsec'), sl = el('div', 'fchips sm mu-sleep'), st = el('p', 'fhint', ''), slBtns = [];
+  for (const [v, t] of [[15, '15 мин'], [30, '30 мин'], [45, '45 мин'], [60, '1 час'], ['track', 'После трека'], [0, 'Выкл']]) { const b = el('button', 'fchip', t); b.type = 'button'; b.onclick = () => { setSleep(v); paint(); sndRefresh(paint); }; sl.append(b); slBtns.push(b); }
+  slSec.append(el('h3', 'mu-h2', 'Таймер сна'), sl, st);
+  body.append(sets, eqSec, slSec);
+  if (close) { const row = el('div', 'row'); row.append(H.btnEl('Готово', 'pri', close)); body.append(row); }
+  function paint() {
+    if (!body.isConnected && body.dataset.live) { sndViews.delete(paint); return; }
+    xfSel.value = String(cfg.xf); rtSel.value = String(cfg.rate); cb.checked = cfg.eqOn; circ.paint(); paintChips();
+    st.textContent = sleep.until ? 'Музыка затихнет через ' + Math.max(1, Math.round((sleep.until - Date.now()) / 60000)) + ' мин' : sleep.endOfTrack ? 'Остановлюсь после этого трека' : 'Таймер сна выключен';
+    slBtns.at(-1).classList.toggle('on', !sleep.until && !sleep.endOfTrack); slBtns.at(-2).classList.toggle('on', sleep.endOfTrack);
+  }
+  paint(); sndViews.add(paint);
+  requestAnimationFrame(() => { body.dataset.live = '1'; });
+  return body;
+}
+
+// окно «Звук» из «Музыки» — всегда одно: повторное нажатие закрывает его, а не открывает второе
+let sndDlgClose = null;
+function soundDlg() {
+  if (sndDlgClose) { sndDlgClose(); return; }
+  let ov = null;
+  const c = H.modal((card, close) => {
+    ov = card.parentElement; card.classList.add('mu-snd');
+    card.append(el('h2', '', 'Звук'), soundBody(close));
+  }, 'mu-sndov');
+  sndDlgClose = c;
+  // закрыли кнопкой, щелчком мимо или Esc — окно начинает гаснуть (класс out): забываем его
+  if (ov) new MutationObserver((m, o) => { if (ov.classList.contains('out')) { if (sndDlgClose === c) sndDlgClose = null; o.disconnect(); } }).observe(ov, { attributes: true, attributeFilter: ['class'] });
 }
 
 
@@ -1802,7 +1919,7 @@ function buildShade() {
   picksH.append(el('h4', '', 'Включить'));
   const srchBtn = ibtn('🔎', 'Найти трек', () => setPane('search'), 'mu-sh-sbtn'); picksH.append(srchBtn);
   const tools = el('div', 'mu-sh-tools');
-  const qBtn = ibtn(IC.queue, 'Очередь', () => setPane('queue')), shBtn = ibtn('🏷️', 'Положить трек на полку', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 12, t, null); }), sndBtn = ibtn(IC.sliders, 'Звук: переходы, эквалайзер, скорость, таймер сна', () => soundDlg());
+  const qBtn = ibtn(IC.queue, 'Очередь', () => setPane('queue')), shBtn = ibtn('🏷️', 'Положить трек на полку', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 12, t, null); }), sndBtn = ibtn(IC.sliders, 'Звук: переходы, эквалайзер, скорость, таймер сна', () => setPane(pane === 'sound' ? 'main' : 'sound'));
   const favBtn = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } } }, 'fav');
   tools.append(favBtn, shBtn, qBtn, sndBtn);
   // фон и «для всех» — для того, что играет сейчас, в любом режиме (то же, что во вкладке «Фон»)
@@ -1846,9 +1963,13 @@ function buildShade() {
     found.forEach((t, i) => { const r0 = el('div', 'mu-row sm' + (player.cur?.rel === t.rel ? ' cur' : '')), tx0 = el('div', 'mu-tx'); tx0.append(el('b', '', t.title), el('span', '', [t.artist, t.album].filter(Boolean).join(' · '))); r0.append(coverEl(t, 'sm'), tx0, el('span', 'mu-d', t.dur ? fmt(t.dur) : '')); r0.onclick = () => { if (guestBlock()) return; player.src = null; setQueue(found, i); setPane('main'); }; sres.append(r0); });
   };
   sq.oninput = paintSearch;
-  panes.append(main, qp, sp);
+  // ===== звук: переходы, скорость, эквалайзер-круг, таймер сна — прямо в шторке, без отдельного окна =====
+  const sndP = el('section', 'mu-sh-pane sound');
+  panes.append(main, qp, sp, sndP);
   function setPane(k) {
-    pane = k; main.hidden = k !== 'main'; qp.hidden = k !== 'queue'; sp.hidden = k !== 'search';
+    pane = k; main.hidden = k !== 'main'; qp.hidden = k !== 'queue'; sp.hidden = k !== 'search'; sndP.hidden = k !== 'sound';
+    if (k === 'sound') { sndP.replaceChildren(subHead('Звук', () => setPane('main')), soundBody()); sheet.scrollTop = 0; }
+    else if (sndP.firstChild) sndP.textContent = '';
     if (k === 'queue') paintQueue();
     if (k === 'search') { sq.value = ''; paintSearch(); if (!TOUCH) setTimeout(() => sq.focus(), 60); }
   }
