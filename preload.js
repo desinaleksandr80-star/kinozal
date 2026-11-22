@@ -65,6 +65,7 @@ const music = {
 };
 
 contextBridge.exposeInMainWorld('kinozalApp', {
+  game: { scan: custom => ipcRenderer.invoke('kz:gamescan', custom) },
   getSources: () => ipcRenderer.invoke('kz:sources'),
   pick: (id, audio) => ipcRenderer.invoke('kz:pick', id, audio),
   version: () => ipcRenderer.invoke('kz:version'),

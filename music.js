@@ -31,8 +31,13 @@ const IC = {
 
 // ---------- хранилище: теги и обложки кэшируются, чтобы не читать файлы каждый раз ----------
 const idb = new Promise((res, rej) => {
-  const r = indexedDB.open('kinozal-music', 1);
-  r.onupgradeneeded = () => { r.result.createObjectStore('tracks', { keyPath: 'rel' }); r.result.createObjectStore('covers'); };
+  const r = indexedDB.open('kinozal-music', 2);
+  r.onupgradeneeded = () => {
+    const db = r.result;
+    if (!db.objectStoreNames.contains('tracks')) db.createObjectStore('tracks', { keyPath: 'rel' });
+    if (!db.objectStoreNames.contains('covers')) db.createObjectStore('covers');
+    if (!db.objectStoreNames.contains('plays')) db.createObjectStore('plays', { keyPath: 'id' });   // что и сколько слушал — для «Итогов»
+  };
   r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
 });
 const tx = async (name, mode, f) => { const db = await idb; return new Promise((res, rej) => { const t = db.transaction(name, mode), r = f(t.objectStore(name)); t.oncomplete = () => res(r?.result); t.onerror = () => rej(t.error); }); };
@@ -313,15 +318,29 @@ const au = new Proxy({}, {
 const player = {
   orig: [], queue: [], qi: -1, shuffle: false, repeat: 'off', bars: new Set(), vol: 1, errs: 0, src: null,
   get cur() { return lib.get(this.queue[this.qi]) || null; },
-  sync() { for (const b of this.bars) b.sync(); mediaMeta(); markRows(); lyricsSync(); sessSync(); }
+  sync() { for (const b of this.bars) b.sync(); mediaMeta(); markRows(); lyricsSync(); sessSync(); H?.net?.actChanged?.(); }
 };
+// сколько и что я слушаю — копится на этом компьютере (никуда не уходит) и складывается в «Итоги»
+const lis = { rel: '', id: 0, sec: 0, pos: -1, last: 0 };
+function listenFlush() {
+  const t = lib.get(lis.rel); if (!t || lis.sec < 25) return; lis.last = Date.now();
+  tx('plays', 'readwrite', s => s.put({ id: lis.id, ts: lis.id, rel: t.rel, h: t.h || '', title: t.title, artist: t.artist || '', album: t.album || '', sec: Math.round(lis.sec), dur: t.dur || 0 })).catch(() => {});
+}
+function listenTick(el0) {
+  const t = player.cur; if (!t) return;
+  if (lis.rel !== t.rel) { listenFlush(); lis.rel = t.rel; lis.id = Date.now(); lis.sec = 0; lis.pos = -1; lis.last = 0; }
+  const c = el0.currentTime;
+  if (lis.pos >= 0) { const d = c - lis.pos; if (d > 0 && d < 1.6) lis.sec += d; }
+  lis.pos = c;
+  if (lis.sec >= 30 && Date.now() - lis.last > 30000) listenFlush();
+}
 function mkDeck() {
   const el = new Audio(); el.crossOrigin = 'anonymous'; el.preload = 'auto';
   const g = actx.createGain(), src = actx.createMediaElementSource(el); src.connect(g); g.connect(eqNodes[0]);
   const d = { el, g, rel: '', tok: 0 }, mine = () => decks && decks[deckI] === d;
-  el.addEventListener('ended', () => { if (!mine()) return; if (sleep.endOfTrack) { sleep.endOfTrack = false; player.sync(); return; } next(true); });
+  el.addEventListener('ended', () => { if (mine()) listenFlush(); if (!mine()) return; if (sleep.endOfTrack) { sleep.endOfTrack = false; player.sync(); return; } next(true); });
   el.addEventListener('play', () => { if (mine()) player.sync(); });
-  el.addEventListener('pause', () => { if (mine()) { clearTimeout(nextT); player.sync(); } });
+  el.addEventListener('pause', () => { if (mine()) { clearTimeout(nextT); listenFlush(); player.sync(); } });
   el.addEventListener('playing', () => { if (mine()) { player.errs = 0; armNext(); } });
   el.addEventListener('seeked', () => { if (mine()) { armNext(); sessSync(); } });
   el.addEventListener('ratechange', () => { if (mine()) { armNext(); sessSync(); } });
@@ -331,7 +350,7 @@ function mkDeck() {
     H.toast('Не получилось сыграть «' + t.title + '»');
     if (++player.errs < 5 && player.qi + 1 < player.queue.length) { player.qi++; play(); } else { player.errs = 0; player.sync(); }
   });
-  el.addEventListener('timeupdate', () => { if (mine()) { for (const b of player.bars) b.tick(); lyricsTick(); } });
+  el.addEventListener('timeupdate', () => { if (mine()) { for (const b of player.bars) b.tick(); lyricsTick(); listenTick(el); } });
   el.addEventListener('durationchange', () => { if (mine()) { for (const b of player.bars) b.tick(); armNext(); const t = player.cur; if (t && !t.dur && isFinite(el.duration)) { t.dur = Math.round(el.duration); tx('tracks', 'readwrite', s => s.put(t)).catch(() => {}); } } });
   return d;
 }
@@ -777,6 +796,8 @@ function myBody() {
     const sec = shelfSection('', '', [...c.lists.map(x => tile(x, { go: () => { view.detail = { type: 'pl', id: x.id }; limit = 200; repaint(); }, menu: e => listMenu(e.clientX, e.clientY, x.ref, () => playColl(x)) })),
       (() => { const n = el('div', 'mu-tile new'); n.tabIndex = 0; const a = el('div', 'mu-art noc dash'); a.append(el('span', 'mu-em', '＋')); n.append(a, el('b', '', 'Новая полка'), el('span', '', 'эмодзи и своё название')); n.onclick = () => listDlg(null); return n; })()]);
     wrap.append(sec);
+  } else if (view.tab === 'stats') {
+    wrap.append(statsBody());
   } else if (view.tab === 'albums') {
     wrap.append(shelfSection('', '', c.albums.map(x => tile(x, { go: () => { view.detail = { type: 'album', id: x.id }; limit = 200; repaint(); } }))));
   } else {
@@ -785,9 +806,24 @@ function myBody() {
   return wrap;
 }
 // экран «Вместе»
+function feedSection() {
+  const list = H.net.friendActs();
+  const sec = el('section', 'mu-feed'), hd = el('header');
+  hd.append(el('h3', '', 'Сейчас у друзей'), H.btnEl('🟢 Мой статус', '', () => H.net.openActDlg()));
+  sec.append(hd);
+  if (!list.length) { sec.append(el('p', 'fhint', 'Пока никто из друзей ничего не слушает и не смотрит — или не показывает. Свой статус настраивается кнопкой справа.')); return sec; }
+  const g = el('div', 'mu-fgrid');
+  for (const x of list) {
+    const c = el('div', 'mu-fr'), ic = el('div', 'mu-fi', H.net.actIcon(x.a)), tx = el('div'); tx.append(el('b', '', x.name), el('span', '', H.net.actText(x.a)));
+    c.append(ic, tx);
+    if ((x.a.k === 'music' && x.a.sid) || (x.a.k === 'room' && x.a.code)) c.append(H.btnEl('Присоединиться', 'pri', () => H.net.joinAct(x.id, x.a)));
+    g.append(c);
+  }
+  sec.append(g); return sec;
+}
 function togetherBody() {
   const wrap = el('div', 'mu-body');
-  wrap.append(sessCard());
+  wrap.append(sessCard(), feedSection());
   const note = isGuest() ? 'Включает ' + H.net.nameOf(sess.hostU) + ' — ты слушаешь вместе с ним' : '';
   const pick = pickerShelves(c => playColl(c), srcOf(), { playing: !au.paused, dim: !!note });
   const intro = el('p', 'fhint', note || 'Выбери, что включить: полка, альбом или исполнитель. Если ты в прослушивании — друзья услышат то же самое.');
@@ -828,7 +864,7 @@ function paint() {
   if (mode === 'my') {
     const bar = el('div', 'fbar mu-tool');
     const tabs = el('div', 'ftabs');
-    for (const [k, t] of [['tracks', 'Все треки'], ['lists', 'Плейлисты'], ['albums', 'Альбомы'], ['artists', 'Исполнители']]) { const b = el('button', 'ftab' + (view.tab === k && !view.detail ? ' on' : ''), t); b.onclick = () => { view = { tab: k, detail: null }; lyricsOpen = false; limit = 200; repaint(); }; tabs.append(b); }
+    for (const [k, t] of [['tracks', 'Все треки'], ['lists', 'Плейлисты'], ['albums', 'Альбомы'], ['artists', 'Исполнители'], ['stats', 'Итоги']]) { const b = el('button', 'ftab' + (view.tab === k && !view.detail ? ' on' : ''), t); b.onclick = () => { view = { tab: k, detail: null }; lyricsOpen = false; limit = 200; repaint(); }; tabs.append(b); }
     const q = el('input', 'mu-q'); q.type = 'search'; q.placeholder = 'Поиск'; q.value = query; q.autocomplete = 'off';
     q.oninput = () => { query = q.value; limit = 200; if (view.detail && view.detail.type !== 'pl') view.detail = null; repaint(); };
     statusEl = el('span', 'mu-stat', statusText());
@@ -923,6 +959,53 @@ function soundDlg() {
   });
 }
 
+
+// ---------- итоги: что слушал за неделю, месяц, год ----------
+let statsPer = 'week';
+const PERIODS = [['week', 'Неделя', 7], ['month', 'Месяц', 30], ['year', 'Год', 365], ['all', 'Всё время', 0]];
+const hm = sec => { const h = Math.floor(sec / 3600), m = Math.round(sec % 3600 / 60); return h ? h + ' ч ' + m + ' мин' : Math.max(1, m) + ' мин'; };
+function statsBody() {
+  const wrap = el('div', 'mu-stats'), chips = el('div', 'fchips');
+  for (const [k, t] of PERIODS) { const b = el('button', 'fchip' + (statsPer === k ? ' on' : ''), t); b.onclick = () => { statsPer = k; repaint(); }; chips.append(b); }
+  const box = el('div', 'mu-sbox'); wrap.append(chips, box);
+  tx('plays', 'readonly', s => s.getAll()).then(rows => paintStats(box, rows || [])).catch(() => box.append(el('p', 'fhint', 'Итоги пока не прочитались.')));
+  return wrap;
+}
+function paintStats(box, all) {
+  const days = PERIODS.find(x => x[0] === statsPer)[2], from = days ? Date.now() - days * 864e5 : 0, rows = all.filter(x => x.ts >= from);
+  box.textContent = '';
+  if (!rows.length) { const e = el('div', 'fempty'); e.append(el('div', 'big', '📊'), el('b', '', 'Пока нечего подводить'), el('span', '', 'Слушай музыку в Кинозале — здесь появятся любимые треки и исполнители, сколько часов ты слушал и когда. Считается только то, что звучало хотя бы полминуты.')); box.append(e); return; }
+  const total = rows.reduce((a, x) => a + x.sec, 0), key = x => x.h || x.rel;
+  const tracks = new Map(), artists = new Map(), wd = Array(7).fill(0), hr = Array(24).fill(0);
+  for (const x of rows) {
+    const k = key(x); let t = tracks.get(k); if (!t) tracks.set(k, t = { x, n: 0, sec: 0 }); t.n++; t.sec += x.sec;
+    const an = x.artist || 'Без исполнителя'; let a = artists.get(an); if (!a) artists.set(an, a = { name: an, n: 0, sec: 0 }); a.n++; a.sec += x.sec;
+    const d = new Date(x.ts); wd[(d.getDay() + 6) % 7] += x.sec; hr[d.getHours()] += x.sec;
+  }
+  const topT = [...tracks.values()].sort((a, b) => b.n - a.n || b.sec - a.sec).slice(0, 8), topA = [...artists.values()].sort((a, b) => b.sec - a.sec).slice(0, 6);
+  const dayNames = ['в понедельник', 'во вторник', 'в среду', 'в четверг', 'в пятницу', 'в субботу', 'в воскресенье'], bestD = wd.indexOf(Math.max(...wd)), bestH = hr.indexOf(Math.max(...hr));
+  const hero = el('div', 'mu-hero'), big = el('div', 'mu-hbig'); big.append(el('b', '', hm(total)), el('span', '', 'ты слушал(а) музыку'));
+  const kp = el('div', 'mu-hkpi');
+  for (const [n, l] of [[rows.length, plural(rows.length, 'прослушивание', 'прослушивания', 'прослушиваний')], [tracks.size, plural(tracks.size, 'разный трек', 'разных трека', 'разных треков')], [topA[0]?.name || '—', 'главный исполнитель']]) { const c = el('div'); c.append(el('b', '', String(n)), el('span', '', l)); kp.append(c); }
+  hero.append(big, kp); box.append(hero);
+  box.append(el('p', 'fhint', 'Чаще всего ты слушаешь ' + dayNames[bestD] + ', около ' + String(bestH).padStart(2, '0') + ':00.'));
+  const grid = el('div', 'mu-sgrid');
+  const rank = el('section', 'mu-srank'); rank.append(el('h3', '', 'Любимые треки'));
+  topT.forEach((t, i) => { const lt = lib.get(t.x.rel) || byHash(t.x.h); const r0 = el('div', 'mu-rk'); r0.append(el('i', '', String(i + 1)), lt ? coverEl(lt, 'sm') : el('div', 'mu-cv sm'), (() => { const d = el('div'); d.append(el('b', '', t.x.title), el('span', '', t.x.artist || '')); return d; })(), el('u', '', t.n + '×')); if (lt) r0.onclick = () => { if (!guestBlock()) { player.src = null; setQueue([lt], 0); } }; rank.append(r0); });
+  const ar = el('section', 'mu-srank'); ar.append(el('h3', '', 'Исполнители'));
+  const maxA = topA[0]?.sec || 1;
+  topA.forEach((a, i) => { const r0 = el('div', 'mu-rk bar'); const d = el('div'); d.append(el('b', '', a.name), (() => { const bar = el('em'); bar.style.setProperty('--w', Math.round(a.sec / maxA * 100) + '%'); return bar; })()); r0.append(el('i', '', String(i + 1)), d, el('u', '', hm(a.sec))); ar.append(r0); });
+  const dw = el('section', 'mu-srank'); dw.append(el('h3', '', 'По дням недели'));
+  const maxW = Math.max(...wd) || 1, bars = el('div', 'mu-wd');
+  ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].forEach((n, i) => { const c = el('div'); const b = el('i'); b.style.height = Math.max(4, Math.round(wd[i] / maxW * 100)) + '%'; b.title = hm(wd[i]); c.append(b, el('span', '', n)); bars.append(c); });
+  dw.append(bars);
+  // какие полки собрали больше всего прослушиваний
+  const sh = PL.lists.map(l => ({ l, n: rows.filter(x => l.items.some(i => (i.h && i.h === x.h) || (i.r && i.r === x.rel))).length })).filter(x => x.n).sort((a, b) => b.n - a.n).slice(0, 4);
+  const shs = el('section', 'mu-srank'); shs.append(el('h3', '', 'Любимые полки'));
+  if (sh.length) for (const x of sh) { const r0 = el('div', 'mu-rk'); r0.append(el('i', '', x.l.emoji), (() => { const d = el('div'); d.append(el('b', '', x.l.name)); return d; })(), el('u', '', x.n + '×')); shs.append(r0); } else shs.append(el('p', 'fhint', 'Положи треки на полки — и здесь увидишь, какие настроения слушаешь чаще.'));
+  grid.append(rank, ar, dw, shs); box.append(grid);
+}
+
 // ---------- слушать вместе ----------
 // Ведущий играет, остальные слышат то же самое секунда в секунду. Два способа, гость выбирает сам:
 //  • «У каждого своё» — гость докачивает трек себе (проверка SHA-256), играет его у себя и подтягивается к ведущему: звук без задержек и сжатия;
@@ -953,7 +1036,7 @@ async function bcast(only) {
 }
 function sessSync() { if (!sess?.host) return; clearTimeout(sess.syncT); sess.syncT = setTimeout(() => bcast(), 60); }
 function newSess(host, sid) {
-  sess = { sid, host, hostL: null, hostU: '', peers: new Map(), track: null, off: 0, offs: [], mode: 'wait', pref: H.store.get('musicPref', 'each') === 'stream' ? 'stream' : 'each', hold: 0, userPaused: false, aud: null, dl: null, dlq: [], dlSeen: new Set(), lastSt: null, last: Date.now(), timers: [] };
+  sess = { sid, host, hostL: null, hostU: '', peers: new Map(), track: null, off: 0, offs: [], mode: 'wait', pref: H.store.get('musicPref', 'each') === 'stream' ? 'stream' : 'each', invited: new Set(), hold: 0, userPaused: false, aud: null, dl: null, dlq: [], dlSeen: new Set(), lastSt: null, last: Date.now(), timers: [] };
   sess.timers.push(setInterval(tickSess, 4000));
   sessUi();
 }
@@ -984,33 +1067,53 @@ function tickSess() {
 // ведущий: позвать друга
 function inviteTo(uid2) {
   if (!sess) newSess(true, uid2.slice(0, 3) + Math.random().toString(36).slice(2, 8));
+  sess.invited.add(uid2);
   const t = player.cur;
   netTo(uid2, { k: 'inv', sid: sess.sid, title: t?.title || '', artist: t?.artist || '' });
   H.toast('Позвал(а) ' + H.net.nameOf(uid2));
 }
-// гость: пришло приглашение — выбираем способ
-function onInvite(L, d) {
-  if (sess) { netTo(L, { k: 'busy', sid: String(d.sid || '') }); return; }
-  const who = H.net.nameOf(L.uid), sid = String(d.sid || '').slice(0, 20); if (!sid) return;
-  let dlg = null; const ring = setTimeout(() => dlg?.close?.(), 90000);
+// гость: выбираем способ — по приглашению или нажав «Присоединиться» у статуса друга
+function joinChoice(to, uid, sid, title, artist, solo) {
+  const who = H.net.nameOf(uid); let dlg = null; const ring = setTimeout(() => dlg?.close?.(), 90000);
   H.modal((card, close) => {
     dlg = { close }; card.classList.add('mu-inv');
-    card.append(el('h2', '', '🎧 ' + who + ' зовёт слушать вместе'), el('p', '', d.title ? 'Сейчас играет: «' + String(d.title).slice(0, 80) + '»' + (d.artist ? ' — ' + String(d.artist).slice(0, 60) : '') : 'Музыка у ' + who + ' скоро начнётся.'));
-    const join = pref => { clearTimeout(ring); close(); if (sess) return; H.store.set('musicPref', pref); newSess(false, sid); sess.pref = pref; sess.hostL = L; sess.hostU = L.uid; netTo(L, { k: 'join', sid }); gotoMode('together'); H.openSelf(); H.toast('Подключаюсь к ' + who + '…'); };
-    const opt = (ic, title, sub, pref) => { const b = el('button', 'mu-opt'); b.append(el('i', '', ic), el('b', '', title), el('span', '', sub)); b.onclick = () => join(pref); return b; };
+    card.append(el('h2', '', '🎧 ' + who + (solo ? ' слушает музыку' : ' зовёт слушать вместе')), el('p', '', title ? 'Сейчас играет: «' + String(title).slice(0, 80) + '»' + (artist ? ' — ' + String(artist).slice(0, 60) : '') : 'Музыка у ' + who + ' скоро начнётся.'));
+    const join = pref => {
+      clearTimeout(ring); close(); if (sess) return; H.store.set('musicPref', pref);
+      newSess(false, sid); sess.pref = pref; sess.hostL = typeof to === 'object' ? to : null; sess.hostU = uid; netTo(to, { k: 'join', sid });
+      gotoMode('together'); H.openSelf(); H.toast('Подключаюсь к ' + who + '…');
+    };
+    const opt = (ic, t, sub, pref) => { const b = el('button', 'mu-opt'); b.append(el('i', '', ic), el('b', '', t), el('span', '', sub)); b.onclick = () => join(pref); return b; };
     card.append(opt('💾', 'У каждого своё', 'Докачаю треки себе (проверю их контрольной суммой) и буду слушать у себя, пока ' + who + ' включает. Лучший звук, без задержки.', 'each'),
       opt('📡', 'Через ' + who, 'Слушаю трансляцию: ничего не качаю, звук идёт от ' + who + ' (чуть сжатый, с небольшой задержкой).', 'stream'));
-    const row = el('div', 'row'); row.append(H.btnEl('Не сейчас', '', () => { clearTimeout(ring); netTo(L, { k: 'no', sid }); close(); })); card.append(row);
+    const row = el('div', 'row'); row.append(H.btnEl(solo ? 'Отмена' : 'Не сейчас', '', () => { clearTimeout(ring); if (!solo) netTo(to, { k: 'no', sid }); close(); })); card.append(row);
   });
+}
+function onInvite(L, d) {
+  if (sess) { netTo(L, { k: 'busy', sid: String(d.sid || '') }); return; }
+  const sid = String(d.sid || '').slice(0, 20); if (!sid) return;
+  joinChoice(L, L.uid, sid, d.title, d.artist, false);
+}
+// статус друга «слушает» → «Присоединиться»
+function joinFrom(uid, sid, a) {
+  if (sess) { H.toast('Ты уже слушаешь вместе — сначала выйди'); return; }
+  if (!sid) return;
+  joinChoice(uid, uid, sid === 'solo' ? 'j' + Math.random().toString(36).slice(2, 10) : sid, a?.title, a?.artist, true);
 }
 function onMusicMsg(L, d) {
   const k = d.k, sid = String(d.sid || '');
   if (k === 'inv') return onInvite(L, d);
   if (k === 'no' || k === 'busy') { if (sess?.host && sess.sid === sid) H.toast(H.net.nameOf(L.uid) + (k === 'no' ? ' пока не может' : ' сейчас слушает другое')); return; }
   if (k === 'rx') { onFriendRx(L, d); relayRx(L, d); return; }
+  if (k === 'join' && !sess && /^j[a-z0-9]{6,12}$/.test(sid)) {   // присоединяются к тому, кто просто слушает: сеанс заводим на лету
+    if (!H.net.canJoin(L.uid) || !player.cur || au.paused) { netTo(L, { k: 'no', sid }); return; }
+    newSess(true, sid); sess.invited.add(L.uid);
+  }
   if (!sess || sess.sid !== sid) return;
   if (sess.host) {
-    if (k === 'join') { sess.peers.set(L.uid, { L, name: H.net.nameOf(L.uid), mode: 'wait', pct: 0, last: Date.now(), call: null, tx: null }); H.toast(H.net.nameOf(L.uid) + ' слушает вместе с тобой'); sessUi(); bcast(L); }
+    if (k === 'join') {
+      if (!sess.invited.has(L.uid) && !H.net.canJoin(L.uid)) { netTo(L, { k: 'no', sid }); return; }   // без приглашения и без разрешения по статусу — нельзя
+      sess.peers.set(L.uid, { L, name: H.net.nameOf(L.uid), mode: 'wait', pct: 0, last: Date.now(), call: null, tx: null }); H.toast(H.net.nameOf(L.uid) + ' слушает вместе с тобой'); sessUi(); bcast(L); }
     else if (k === 'leave') { const p = sess.peers.get(L.uid); try { p?.call?.close(); } catch (e) {} sess.peers.delete(L.uid); H.toast(H.net.nameOf(L.uid) + ' вышел(-ла)'); sessUi(); }
     else if (k === 'ping') { const p = sess.peers.get(L.uid); if (p) { p.last = Date.now(); p.L = L; } netTo(L, { k: 'pong', sid, c: d.c, s: Date.now() }); }
     else if (k === 'mode') { const p = sess.peers.get(L.uid); if (p) { p.mode = String(d.m || ''); p.pct = +d.p || 0; sessUi(); } }
@@ -1160,6 +1263,12 @@ function inviteDlg() {
 }
 let sessUiT = 0;
 function sessUi() { clearTimeout(sessUiT); sessUiT = setTimeout(() => { if (shown) repaint(); for (const b of player.bars) b.sync(); }, 80); }
+// что показывать друзьям в статусе «слушает»
+function activity(allowJoin) {
+  if (sess && !sess.host && sess.track) return { title: sess.track.title || '', artist: sess.track.artist || '', together: true, sid: '' };   // слушаю чужое: присоединиться к нему из моего статуса нельзя
+  const t = player.cur; if (!t || !decks || !decks[deckI].rel || au.paused) return null;
+  return { title: t.title, artist: t.artist || '', together: !!sess, sid: sess?.host ? sess.sid : (allowJoin ? 'solo' : '') };
+}
 // карточка состояния на экране «Вместе»
 function sessCard() {
   const c = el('div', 'mu-sc');
@@ -1270,6 +1379,9 @@ window.kzMusic = {
   // громкость принимаемой трансляции — для проверки, что звук действительно идёт
   level: async () => { if (!sess?.aud?.srcObject) return -1; const c = new AudioContext(), src = c.createMediaStreamSource(sess.aud.srcObject), an = c.createAnalyser(); src.connect(an); const b = new Float32Array(an.fftSize); let m = 0; for (let i = 0; i < 10; i++) { await new Promise(r => setTimeout(r, 100)); an.getFloatTimeDomainData(b); m = Math.max(m, Math.sqrt(b.reduce((a, x) => a + x * x, 0) / b.length)); } c.close(); return +m.toFixed(4); },
   onMsg: (L, d) => { if (H) onMusicMsg(L, d); },
+  activity: allowJoin => (H ? activity(allowJoin) : null),
+  joinFrom: (u, sid, a) => { if (H) joinFrom(u, sid, a); },
+  actsChanged: () => { if (shown && mode === 'together') repaint(); },
   onCall: c => { if (H) onMusicCall(c); else { try { c.close(); } catch (e) {} } },
   tracks: () => [...lib.values()].map(t => ({ p: t.p, rel: t.rel, h: !!t.h, dur: t.dur, tagged: t.tagged, busy: t.busy })),
   durAll,

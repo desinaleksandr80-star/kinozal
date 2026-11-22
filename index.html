@@ -2458,7 +2458,7 @@ function sendFx(e){
 })();
 // мост для мессенджера: звонок и кинозал из чата — это обычный зал по коду
 window.kzRoom={
-  get inRoom(){return inRoom;},get code(){return code;},get busy(){return inRoom||!!peer;},
+  get inRoom(){return inRoom;},get code(){return code;},get kind(){return roomKind;},get movie(){return movie?.title||'';},get busy(){return inRoom||!!peer;},
   async create(kind,name){
     if(inRoom||peer)return code||null;
     $('#name').value=name||'';await createRoom(kind);

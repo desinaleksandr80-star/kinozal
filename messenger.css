@@ -674,3 +674,13 @@ html.dnd .mx-modal.dnd-hot{outline:none;border-radius:0;background-image:none;an
 html.dnd .mx-modal.dnd-hot::after{content:"Задержись здесь — окно закроется";position:fixed;left:50%;bottom:28px;transform:translateX(-50%);padding:8px 16px;border-radius:12px;background:var(--acc);color:#fff;font:700 14px var(--font),sans-serif;pointer-events:none}
 html.dnd .mx-files .frow.file,html.dnd .mx-files .ftile{cursor:grabbing}
 .mx-files .frow.file[draggable=true],.mx-files .ftile[draggable=true]{cursor:grab}
+
+/* статусы активности */
+.ci .actb{margin-left:6px;font-size:13px;line-height:1;flex:none}
+.mx-chead .who span.act{max-width:48vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mx-act{width:min(520px,100%)}
+.mx-act .switch.big{padding:12px 14px;border-radius:16px;background:rgba(127,127,127,.12);font-weight:700}
+.act-body{display:grid;gap:12px}
+.act-body .sec3{margin:6px 0 0;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
+.act-body textarea{width:100%;min-height:72px;border-radius:12px;background:var(--field);border:1px solid var(--line2);color:var(--ink);padding:10px 12px;font:500 13px var(--font),sans-serif;resize:vertical}
+.act-list{display:grid;gap:4px;max-height:200px;overflow-y:auto;padding:4px;border-radius:14px;background:rgba(127,127,127,.08)}

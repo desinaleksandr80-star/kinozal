@@ -400,7 +400,8 @@ async function onData(L, d) {
     case 'xno': return xNo(L, d);
     case 'xmanq': return xManServe(L, d);
     case 'xman': return xManGot(L, d);
-    case 'mu': return window.kzMusic?.onMsg?.(L, d);   // совместное прослушивание (music.js)
+    case 'mu': return window.kzMusic?.onMsg?.(L, d);
+    case 'act': return onAct(L, d);   // статус активности друга   // совместное прослушивание (music.js)
   }
 }
 function linkUp(L) {
@@ -416,6 +417,7 @@ function linkUp(L) {
   if (!lm) links.set(u, lm = new Map());
   lm.set(L.dev, L); dialing.delete(L.peer); jlog('[связь] есть с', L.peer, L.their?.ver || '');
   if (L.self) return selfUp(L);
+  setTimeout(() => actHello(L), 700);   // новому соединению — мой статус
   const t = L.their; let ct = S.contacts[u];
   // имя и аватарка — самые свежие из всех устройств собеседника (старый Кинозал времени правки не присылает — верим ему)
   const fresh = !t.caps.includes('dev') || t.pts >= (ct?.pts || 0);
@@ -963,6 +965,7 @@ function renderList() {
     if (isDm(ch.id) && isOn(dmPeer(ch.id))) w.classList.add('on');
     const tx = el('div', 'tx'), r1 = el('div', 'r1'), r2 = el('div', 'r2');
     r1.append(el('span', 'nm', chatTitle(ch.id)));
+    const ac = isDm(ch.id) ? actOf(dmPeer(ch.id)) : null; if (ac) { const bd = el('span', 'actb', actIcon(ac)); bd.title = actText(ac); r1.append(bd); }
     const l = ch.last;
     if (l?.from === myId && l.kind !== 'sys') r1.append(el('span', 'tick', readBy(ch.id, l.ts) || l.ack ? '✓✓' : '✓'));
     r1.append(el('span', 'tm', listTime(l?.ts || ch.created)));
@@ -1106,6 +1109,7 @@ function renderHead() {
   if (isDm(c)) {
     const u = dmPeer(c), on = isOn(u); w.classList.toggle('on', on);
     if (ty) { st.textContent = 'печатает'; st.className = 'live typing'; }
+    else if (on && actOf(u)) { const a = actOf(u); st.textContent = actIcon(a) + ' ' + actText(a); st.className = 'live act'; }
     else if (on) { st.textContent = 'в сети'; st.className = 'live'; }
     else st.textContent = S.contacts[u]?.state === 'pending' && !S.contacts[u]?.name ? 'пока не в сети' : seenText(S.contacts[u]?.seen);
   } else {
@@ -1116,6 +1120,7 @@ function renderHead() {
   // плашка над перепиской
   const bn = $('.mx-banner'); bn.textContent = ''; bn.hidden = true;
   const btn = (t, f, pri) => { const b = el('button', 'btn' + (pri ? ' pri' : ''), t); b.onclick = f; return b; };
+  if (isDm(c) && actJoinable(actOf(dmPeer(c)))) { const a = actOf(dmPeer(c)); bn.hidden = false; bn.append(el('span', '', actIcon(a) + ' ' + actText(a)), btn('Присоединиться', () => actJoin(dmPeer(c), a), true)); }
   if (isDm(c)) {
     const u = dmPeer(c), ct = S.contacts[u];
     if (ct?.state === 'req' || ct?.state === 'member') { bn.hidden = false; bn.append(el('span', '', ct.state === 'req' ? 'Этого человека нет в твоих контактах.' : 'Вы вместе в группе, но не в контактах.'), btn('Добавить в контакты', () => { ct.state = 'ok'; ctChanged(ct); renderHead(); }, 1)); if (ct.state === 'req') bn.append(btn('Заблокировать', () => block(u))); }
@@ -3350,7 +3355,7 @@ function ring(m) {
 window.kzRing = { answer() { if (ringing) joinCall(ringing); }, decline() { if (ringing) { send(ringing.from, { t: 'decline', code: ringing.code, chat: ringing.chat }); send(myId, { t: 'ringoff', code: ringing.code }); stopRing(); } } };
 function stopRing() { if (ringing) APP?.stopRing?.(); clearInterval(ringT); ringT = 0; try { ringAc?.close(); } catch (e) {} ringAc = null; if (ringing) clearTimeout(ringing.to); ringing = null; document.querySelector('.mx-modal.ring')?.remove(); APP?.flash?.(false); }
 window.kzOnRoom = (ev, info) => {
-  jlog('[зал]', ev, info?.code || '');
+  jlog('[зал]', ev, info?.code || ''); setTimeout(actChanged, 400);
   if (ev === 'enter') { callT0 = Date.now(); APP?.inCall?.(true); }
   if (ev === 'enter' || ev === 'show') { root.hidden = true; stopRing(); }
   if (ev === 'hide') { closePanel(true); root.hidden = false; renderList(); updCallUi(); }
@@ -3361,6 +3366,114 @@ window.kzOnRoom = (ev, info) => {
     refreshCallCards(); if (open) markRead(open);
   }
 };
+
+// ---------- статусы активности ----------
+// Друзья видят, чем ты занят: «🎧 слушает», «🎬 смотрит кино», «📞 в звонке», «🎮 играет». Свой статус целиком под контролем:
+// можно не показывать вообще, показывать только выбранным, выбрать, что именно показывать. Игры определяются по запущенной программе — и только если включишь.
+// На статус «слушает» или «в зале» можно нажать «Присоединиться». Статус живёт, пока человек в сети, и гаснет сам.
+const ACT_TTL = 110e3;
+const acts = new Map();   // id друга → {a, at}
+const actCfg = () => (S.actCfg ||= { on: true, who: 'all', allow: [], music: true, room: true, game: false, join: true, games: '' });
+const actAllowed = u => { const c = actCfg(), ct = S.contacts[u]; return !!(c.on && ct?.state === 'ok' && (c.who === 'all' || c.allow.includes(u))); };
+let gameNow = '', actSent = 'null', actTo = new Set(), actT = 0;
+function collectAct() {
+  const c = actCfg(); if (!c.on) return null;
+  if (c.room && window.kzRoom?.inRoom) return { k: 'room', kind: window.kzRoom.kind, code: c.join ? window.kzRoom.code : '', movie: window.kzRoom.movie || '' };
+  if (c.music) { const m = window.kzMusic?.activity?.(c.join); if (m) return { k: 'music', ...m }; }
+  if (c.game && gameNow) return { k: 'game', name: gameNow };
+  return null;
+}
+function pushAct(force) {
+  const a = collectAct(), key = JSON.stringify(a);
+  if (!force && key === actSent) return; actSent = key;
+  const now = new Set();
+  for (const u of links.keys()) {
+    if (u === myId) continue;
+    if (a && actAllowed(u)) { send(u, { t: 'act', a }); now.add(u); }
+    else if (actTo.has(u)) send(u, { t: 'act', a: null });   // перестал показывать — друг сразу убирает статус
+  }
+  actTo = now;
+}
+const actChanged = () => { clearTimeout(actT); actT = setTimeout(() => pushAct(), 600); };
+function actHello(L) { if (L.self || actSent === 'null' || !actAllowed(L.uid)) return; try { send(L, { t: 'act', a: JSON.parse(actSent) }); actTo.add(L.uid); } catch (e) {} }
+const cleanAct = a => {
+  if (!a || typeof a !== 'object') return null;
+  if (a.k === 'music') return { k: 'music', title: clean(a.title, 80), artist: clean(a.artist, 60), sid: /^[\w-]{4,20}$/.test(a.sid || '') ? a.sid : '', together: !!a.together };
+  if (a.k === 'room') return { k: 'room', kind: a.kind === 'cinema' ? 'cinema' : 'call', code: /^[A-Z0-9]{5}$/.test(a.code || '') ? a.code : '', movie: clean(a.movie, 80) };
+  if (a.k === 'game') return { k: 'game', name: clean(a.name, 60) };
+  return null;
+};
+function onAct(L, d) {
+  if (L.self) return; const u = L.uid; if (!S.contacts[u] || S.contacts[u].state === 'blocked') return;
+  const a = cleanAct(d.a), was = acts.get(u);
+  if (!a) { if (was) { acts.delete(u); presence(u); window.kzMusic?.actsChanged?.(); } return; }
+  const same = was && JSON.stringify(was.a) === JSON.stringify(a);
+  acts.set(u, { a, at: Date.now() });
+  if (!same) { presence(u); window.kzMusic?.actsChanged?.(); }
+}
+const actOf = u => { const x = acts.get(u); return x && Date.now() - x.at < ACT_TTL && isOn(u) ? x.a : null; };
+const actIcon = a => a.k === 'music' ? '🎧' : a.k === 'game' ? '🎮' : a.kind === 'cinema' ? '🎬' : '📞';
+const actText = a => a.k === 'music' ? (a.together ? 'Слушает вместе: ' : 'Слушает: ') + (a.title || 'музыку') + (a.artist ? ' — ' + a.artist : '')
+  : a.k === 'game' ? 'Играет в ' + a.name : a.kind === 'cinema' ? 'Смотрит' + (a.movie ? ': ' + a.movie : ' кино') + ' в зале' : 'В звонке';
+const actJoinable = a => !!(a && ((a.k === 'music' && a.sid) || (a.k === 'room' && a.code)));
+function actJoin(u, a) {
+  if (a.k === 'music' && a.sid) { if (!window.kzMusic?.joinFrom) { toast('Музыка есть только в программе для Windows'); return; } window.kzMusic.joinFrom(u, a.sid, a); return; }
+  if (a.k === 'room' && a.code) {
+    if (window.kzRoom?.busy) { toast('Сначала выйди из текущего зала'); return; }
+    modal((card, close) => {
+      card.append(el('h2', '', actIcon(a) + ' ' + nameOf(u)), el('p', '', actText(a) + '. Войти в зал?'));
+      const row = el('div', 'row'); row.append(btnEl('Не сейчас', '', close), btnEl('Войти', 'pri', async () => { close(); toast('Подключаюсь к залу…'); const ok = await window.kzRoom.join(a.code, S.me?.name || ''); if (!ok) toast('Зал уже закрыт'); }));
+      card.append(row);
+    });
+  }
+}
+// что делают друзья прямо сейчас (для ленты)
+const friendActs = () => Object.values(S.contacts).filter(ct => ct.state === 'ok' && ct.id !== myId).map(ct => ({ id: ct.id, name: nameOf(ct.id), a: actOf(ct.id) })).filter(x => x.a);
+setInterval(() => { pushAct(); for (const [u, x] of acts) if (Date.now() - x.at > ACT_TTL) { acts.delete(u); presence(u); window.kzMusic?.actsChanged?.(); } }, 8000);
+setInterval(() => pushAct(true), 45000);   // «я всё ещё тут» — чтобы у друзей статус не гас
+// игры: раз в полминуты смотрим запущенные программы (только если включено и только известные игры или добавленные тобой)
+async function gameScan() {
+  const c = actCfg();
+  if (!c.on || !c.game || !APP?.game?.scan) { if (gameNow) { gameNow = ''; actChanged(); } return; }
+  try { const g = await APP.game.scan(c.games || ''); if (g !== gameNow) { gameNow = g; jlog('[статус] игра:', g || '—'); actChanged(); } } catch (e) {}
+}
+setInterval(gameScan, 30000); setTimeout(gameScan, 6000);
+
+function actDlg() {
+  modal((card, close) => {
+    const c = actCfg(); card.classList.add('mx-act');
+    const sw = (label, key, hint) => { const l = el('label', 'switch'), i = el('input'); i.type = 'checkbox'; i.checked = !!c[key]; i.onchange = () => { c[key] = i.checked; save(); pushAct(); gameScan(); paint(); }; l.append(document.createTextNode(label), i); if (hint) l.title = hint; return l; };
+    const prev = el('p', 'fhint'), body = el('div', 'act-body');
+    const paint = () => {
+      body.textContent = '';
+      const a = collectAct();
+      prev.textContent = !c.on ? 'Сейчас никто не видит, чем ты занят.' : a ? 'Сейчас друзья видят: ' + actIcon(a) + ' ' + actText(a) : 'Сейчас друзья ничего не видят — ты ничем «видимым» не занят.';
+      if (!c.on) return;
+      body.append(el('h3', 'sec3', 'Что показывать'), sw('🎧 Музыку, которую слушаю', 'music'), sw('🎬 📞 Зал: кино и звонки', 'room'), sw('🎮 Игры (по запущенной программе)', 'game', 'Читается только список запущенных программ на этом компьютере. Друзьям уходит название игры, и только если она в списке известных или ты добавил её ниже.'));
+      if (c.game) {
+        const ta = el('textarea'); ta.rows = 3; ta.placeholder = 'Свои игры, по одной в строке:\nмояигра.exe = Моя игра'; ta.value = c.games || ''; ta.spellcheck = false; ta.onchange = () => { c.games = ta.value.slice(0, 2000); save(); gameScan(); };
+        body.append(el('p', 'fhint', 'Известные игры (CS2, Dota 2, Minecraft, Valorant, Fortnite, GTA V и другие) находятся сами.'), ta);
+      }
+      body.append(el('h3', 'sec3', 'Кому показывать'));
+      const seg = el('div', 'mu-pref');
+      for (const [k, t] of [['all', 'Всем моим контактам'], ['some', 'Только выбранным']]) { const b = el('button', c.who === k ? 'on' : '', t); b.onclick = () => { c.who = k; save(); pushAct(true); paint(); }; seg.append(b); }
+      body.append(seg);
+      if (c.who === 'some') {
+        const list = el('div', 'act-list'), cts = Object.values(S.contacts).filter(x => x.state === 'ok' && x.id !== myId).sort((a, b) => nameOf(a.id).localeCompare(nameOf(b.id), 'ru'));
+        for (const x of cts) { const l = el('label', 'switch'), i = el('input'); i.type = 'checkbox'; i.checked = c.allow.includes(x.id); i.onchange = () => { c.allow = i.checked ? [...new Set([...c.allow, x.id])] : c.allow.filter(y => y !== x.id); save(); pushAct(true); paint2(); }; l.append(document.createTextNode(nameOf(x.id)), i); list.append(l); }
+        if (!cts.length) list.append(el('p', 'fhint', 'Пока нет контактов.'));
+        body.append(list);
+      }
+      body.append(sw('➕ Друзья могут присоединиться (к музыке и залу)', 'join', 'На твой статус «слушает» или «в зале» друг нажмёт «Присоединиться»'));
+    };
+    const paint2 = () => { const a = collectAct(); prev.textContent = a ? 'Сейчас друзья видят: ' + actIcon(a) + ' ' + actText(a) : prev.textContent; };
+    const master = sw('🟢 Показывать друзьям, чем я занят', 'on');
+    master.classList.add('big');
+    const row = el('div', 'row'); row.append(btnEl('Готово', 'pri', close));
+    card.append(el('h2', '', 'Статус активности'), el('p', '', 'Друзья увидят в списке чатов и в шапке чата, что ты слушаешь, смотришь или во что играешь, и смогут присоединиться. Всё под твоим контролем.'), master, prev, body, row);
+    paint();
+  });
+}
 
 // ---------- уведомления ----------
 async function notify(m, override) {
@@ -3589,7 +3702,7 @@ function settingsDlg() {
     profs.append(el('p', '', 'Как аккаунты в Телеграме: в сети — только открытый профиль, остальные догрузят своё, когда в них перейдёшь.'), plist,
       btnEl('🔑 Войти в свой профиль — по ID и паролю или коду', 'pri', () => { close(); addProfile('join'); }),
       btnEl('＋ Создать ещё один профиль', '', () => { close(); addProfile('new'); }));
-    card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), btnEl(myDev ? '📱 Мои устройства и выход из профиля' : '📱 Мои устройства — войти в профиль с телефона или другого компьютера', '', () => { close(); devicesDlg(); }), el('div', 'sep'), snd);
+    card.append(el('h2', '', 'Профиль'), ap, inp, el('label', '', 'Имя'), name, idCard(), btnEl('🎨 Оформление: темы, обои, неон, рамка аватарки', 'pri', () => { close(); openTheme(); }), btnEl('🟢 Статус активности: кто видит, что я слушаю и смотрю', '', () => { close(); actDlg(); }), btnEl(myDev ? '📱 Мои устройства и выход из профиля' : '📱 Мои устройства — войти в профиль с телефона или другого компьютера', '', () => { close(); devicesDlg(); }), el('div', 'sep'), snd);
     let auto = null;
     if (APP?.autostart) { auto = el('input'); auto.type = 'checkbox'; const l = el('label', 'switch'); l.append(document.createTextNode(ANDROID ? 'Работать в фоне — сообщения и звонки приходят, даже когда Кинозал свёрнут' : 'Запускать вместе с Windows — чтобы сообщения доходили'), auto); card.append(l); APP.autostart().then(v => { auto.checked = !!v; }).catch(() => {}); }
     if (ANDROID) APP.info().then(i => {
@@ -3848,7 +3961,9 @@ if (DESK && window.kzMusic) {
       send, peer: () => peer, nameOf: u => nameOf(u), myName: () => S.me?.name || '',
       canMu: u => linksOf(u).some(L => L.their?.caps.includes('mu')),
       friends: () => Object.values(S.contacts).filter(ct => ct.state !== 'blocked' && ct.id !== myId && isOn(ct.id) && linksOf(ct.id).some(L => L.their?.caps.includes('mu'))).map(ct => ({ id: ct.id, name: nameOf(ct.id) })),
-      isOn: u => isOn(u)
+      isOn: u => isOn(u),
+      canJoin: u => actAllowed(u) && actCfg().join,
+      friendActs, actText, actIcon, joinAct: actJoin, actChanged, openActDlg: actDlg
     }
   });
   if (musicApi) { $('#mxMusic').hidden = false; const rm = document.getElementById('roomMusic'); if (rm) rm.hidden = false; }

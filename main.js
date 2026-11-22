@@ -506,6 +506,24 @@ function setupFiles() {
     p = String(p || ''); if (!path.isAbsolute(p) || !(allowed(p) || dragTmp.has(p))) return;
     try { e.sender.startDrag({ file: p, icon: dragIcon() }); } catch (er) { log('[файлы] перетаскивание не началось:', er?.message || er); }
   });
+  // игры: раз в полминуты страница просит посмотреть запущенные программы (только если человек включил «Игры» в статусе)
+  const GAMES = { 'cs2.exe': 'Counter-Strike 2', 'csgo.exe': 'Counter-Strike: GO', 'dota2.exe': 'Dota 2', 'valorant-win64-shipping.exe': 'VALORANT', 'fortniteclient-win64-shipping.exe': 'Fortnite', 'gta5.exe': 'GTA V', 'gta_sa.exe': 'GTA San Andreas',
+    'robloxplayerbeta.exe': 'Roblox', 'r5apex.exe': 'Apex Legends', 'overwatch.exe': 'Overwatch 2', 'wow.exe': 'World of Warcraft', 'leagueoflegends.exe': 'League of Legends', 'league of legends.exe': 'League of Legends', 'eldenring.exe': 'Elden Ring', 'cyberpunk2077.exe': 'Cyberpunk 2077',
+    'witcher3.exe': 'The Witcher 3', 'rdr2.exe': 'Red Dead Redemption 2', 'rocketleague.exe': 'Rocket League', 'pubg-win64-shipping.exe': 'PUBG', 'tslgame.exe': 'PUBG', 'destiny2.exe': 'Destiny 2', 'terraria.exe': 'Terraria', 'stardewvalley.exe': 'Stardew Valley',
+    'rainbowsix.exe': 'Rainbow Six Siege', 'bf2042.exe': 'Battlefield 2042', 'hl2.exe': 'Half-Life 2', 'left4dead2.exe': 'Left 4 Dead 2', 'tf_win64.exe': 'Team Fortress 2', 'amongus.exe': 'Among Us', 'fallguys_client_game.exe': 'Fall Guys', 'genshinimpact.exe': 'Genshin Impact',
+    'hogwartslegacy.exe': 'Hogwarts Legacy', 'baldursgate3.exe': "Baldur's Gate 3", 'bg3.exe': "Baldur's Gate 3", 'helldivers2.exe': 'Helldivers 2', 'palworld-win64-shipping.exe': 'Palworld', 'minecraft.windows.exe': 'Minecraft', 'factorio.exe': 'Factorio', 'rustclient.exe': 'Rust', 'ready or not.exe': 'Ready or Not', 'eurotrucksimulator2.exe': 'Euro Truck Simulator 2' };
+  const { execFile } = require('child_process');
+  const run = (cmd, args) => new Promise(res => execFile(cmd, args, { windowsHide: true, timeout: 6000, maxBuffer: 8e6, encoding: 'utf8' }, (er, out) => res(er ? '' : String(out))));
+  ipcMain.handle('kz:gamescan', async (e, custom) => {
+    if (process.platform !== 'win32') return '';
+    const map = { ...GAMES };
+    for (const ln of String(custom || '').split(/\r?\n/).slice(0, 60)) { const m = ln.match(/^\s*([^=]+?\.exe)\s*=\s*(.+?)\s*$/i); if (m) map[m[1].toLowerCase()] = m[2].slice(0, 60); }
+    const out = await run('tasklist', ['/fo', 'csv', '/nh']); if (!out) return '';
+    const names = new Set(out.split(/\r?\n/).map(l => (l.match(/^"([^"]+)"/) || [])[1]?.toLowerCase()).filter(Boolean));
+    for (const [exe, title] of Object.entries(map)) if (names.has(exe)) return title;
+    if (names.has('javaw.exe')) { const v = await run('tasklist', ['/v', '/fo', 'csv', '/nh', '/fi', 'IMAGENAME eq javaw.exe']); if (/minecraft/i.test(v)) return 'Minecraft'; }   // Minecraft работает на Java: узнаём по заголовку окна
+    return '';
+  });
   ipcMain.handle('kz:fshow', (e, p) => {
     p = String(p || '');
     if (!sends.has(p) && !inRoots(p)) return false;
