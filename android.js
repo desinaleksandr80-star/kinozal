@@ -54,6 +54,34 @@
       openPath: uri => K.fView({ uri }).then(() => '').catch(e => e?.message || 'нечем открыть'),
       show: uri => K.fView({ uri }).catch(() => {})
     },
+    // музыка телефона: тот же набор вызовов, что у программы для Windows (см. music-main.js / preload.js), но из MediaStore и своей папки приложения
+    music: {
+      android: true,
+      root: () => K.mInfo().then(i => ({ path: i.dir, def: true, perm: !!i.perm })),
+      askPerm: () => K.mPerm().then(i => !!i.perm).catch(() => false),
+      pick: async () => '', reset: async () => '', openDir: async () => '', show: async () => false,   // папку выбирать негде: вся музыка телефона + своя папка
+      scan: () => K.mScan().then(r => ({ root: r.root, files: r.files || [], perm: !!r.perm, cut: false })),
+      read: async (p, off, len) => {   // кусками: из Java за раз не больше 8 МБ
+        const parts = []; let got = 0;
+        while (got < len) { const want = Math.min(8 << 20, len - got); const r = await K.mRead({ p, off: off + got, len: want }); const b = unb64(r.data || ''); if (!b.length) break; parts.push(b); got += b.length; if (b.length < want) break; }
+        if (!parts.length) return new Uint8Array(0);
+        if (parts.length === 1) return parts[0];
+        const out = new Uint8Array(got); let o = 0; for (const b of parts) { out.set(b, o); o += b.length; } return out;
+      },
+      hash: p => K.mHash({ p }).then(r => r.h || ''),
+      add: async () => 0, addDropped: async () => 0,
+      pickFiles: () => K.mPickFiles().then(r => r.n || 0),
+      lyrics: p => K.mLyrics({ p }).then(r => r.text || ''),
+      saveOpen: (id, name) => K.mSaveOpen({ id, name }).then(r => !!r.ok),
+      saveWrite: async (id, off, u8) => { const r = await K.mSaveWrite({ id, off, data: await b64(u8) }); return !!r.ok; },
+      saveDone: (id, want) => K.mSaveDone({ id, want: want || '' }).then(r => ({ ok: !!r.ok, hash: r.hash || '', p: r.p || '' })),
+      saveDrop: id => K.mSaveDrop({ id }).then(() => true).catch(() => false),
+      canTrash: p => /\/Android\/data\//.test(String(p || '')),   // удалять можно только то, что лежит у самого Кинозала; чужие файлы телефона не трогаем
+      trash: p => K.mTrash({ p }).then(r => !!r.ok).catch(() => false),
+      url: p => location.origin + '/_kzmusic/' + encodeURIComponent(p),
+      // список обновляется, когда возвращаешься в приложение (скачал музыку, пока Кинозал был свёрнут)
+      watch: cb => { let at = 0; document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - at > 20e3) { at = Date.now(); cb(); } }); return Promise.resolve(true); }
+    },
     backup: {
       put: (slot, data) => K.backupPut({ slot, data }).catch(e => log('[копия] не записалась:', e?.message || e)),
       get: slot => K.backupGet({ slot }).then(r => r.data || '').catch(() => ''),

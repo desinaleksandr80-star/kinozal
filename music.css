@@ -260,6 +260,7 @@
   .mu-q{flex-basis:100%}.mu-stat{display:none}.mu-tools{margin-left:0}
   .mu-mode span{display:none}.mu-mode{padding:8px 12px}
   .mu-tool{gap:8px}.mu-tool .ftabs{width:100%;overflow-x:auto}
+  .mu-tool .ftabs{scrollbar-width:none}.mu-tool .ftabs::-webkit-scrollbar{display:none}.mu-tool .ftab{flex:0 0 auto}   /* вкладки не сжимаются в кашу — листаются пальцем */
   .mu-chead{flex-direction:column;align-items:flex-start}
   .mu-how{grid-template-columns:1fr}
   .mu-row{grid-template-columns:44px minmax(0,1fr) auto auto auto}
@@ -490,3 +491,7 @@ body:has(.mx-hello) .mu-shade{display:none}
 .mu-dropbox span{font-size:12px;opacity:.7}
 .mu-dropbox button{margin-top:8px}
 @keyframes muDropBob{50%{transform:translateY(-4px) scale(1.08)}}
+
+/* телефон: разрешение на музыку */
+.mu-perm{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;padding:10px 14px;border-radius:14px;background:rgba(127,127,127,.12);color:var(--ink);font-size:13.5px}
+.mu-perm .btn{margin-left:auto;min-height:34px!important;padding:5px 14px}

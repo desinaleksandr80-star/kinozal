@@ -56,7 +56,10 @@ import java.util.Map;
 
 // Мост между веб-частью Кинозала (та же, что на компьютере) и Android:
 // фоновая служба, уведомления, звонки поверх блокировки, громкая связь, сохранение файлов, журнал, обновления.
-@CapacitorPlugin(name = "Kinozal")
+@CapacitorPlugin(name = "Kinozal", permissions = {
+    @com.getcapacitor.annotation.Permission(alias = "audio33", strings = { "android.permission.READ_MEDIA_AUDIO" }),
+    @com.getcapacitor.annotation.Permission(alias = "audioOld", strings = { "android.permission.READ_EXTERNAL_STORAGE" })
+})
 public class KinozalPlugin extends Plugin {
     static final String CH_ONLINE = "online", CH_MSG = "messages", CH_CALL = "calls2";
     static final String EXTRA_CHAT = "kz_chat", EXTRA_CALL = "kz_call", EXTRA_ANSWER = "kz_answer";
@@ -549,6 +552,116 @@ public class KinozalPlugin extends Plugin {
             getActivity().startActivity(Intent.createChooser(i, "Открыть").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
             call.resolve();
         } catch (Exception e) { call.reject("Нечем открыть такой файл"); }
+    }
+
+    // ---------- музыка на телефоне (то же, что music-main.js на компьютере) ----------
+    private final java.util.concurrent.ExecutorService mio = java.util.concurrent.Executors.newFixedThreadPool(2);
+    private String audioAlias() { return Build.VERSION.SDK_INT >= 33 ? "audio33" : "audioOld"; }
+    private boolean audioGranted() { return getPermissionState(audioAlias()) == com.getcapacitor.PermissionState.GRANTED; }
+
+    @PluginMethod
+    public void mInfo(PluginCall call) {
+        JSObject r = new JSObject(); r.put("perm", audioGranted()); r.put("dir", MusicHub.appDir(getContext()).getPath()); call.resolve(r);
+    }
+
+    @PluginMethod
+    public void mPerm(PluginCall call) {
+        if (audioGranted()) { mInfo(call); return; }
+        requestPermissionForAlias(audioAlias(), call, "mPermDone");
+    }
+
+    @com.getcapacitor.annotation.PermissionCallback
+    private void mPermDone(PluginCall call) { mInfo(call); }
+
+    @PluginMethod
+    public void mScan(PluginCall call) {
+        boolean perm = audioGranted();
+        mio.execute(() -> {
+            try {
+                JSObject r = new JSObject(); org.json.JSONArray arr = new org.json.JSONArray();
+                for (Map<String, Object> m : MusicHub.scan(getContext(), perm)) arr.put(new org.json.JSONObject(m));
+                r.put("files", arr); r.put("perm", perm); r.put("root", MusicHub.appDir(getContext()).getPath()); call.resolve(r);
+            } catch (Exception e) { call.reject("не прочитался список музыки: " + e.getMessage()); }
+        });
+    }
+
+    @PluginMethod
+    public void mRead(PluginCall call) {
+        String p = call.getString("p", ""); long off = call.getData().optLong("off", 0); int len = (int) Math.min(8 << 20, Math.max(0, call.getData().optLong("len", 0)));
+        mio.execute(() -> {
+            try { JSObject r = new JSObject(); r.put("data", Base64.encodeToString(MusicHub.read(getContext(), p, off, len), Base64.NO_WRAP)); call.resolve(r); }
+            catch (Exception e) { call.reject(e.getMessage() == null ? "не прочиталось" : e.getMessage()); }
+        });
+    }
+
+    @PluginMethod
+    public void mHash(PluginCall call) {
+        String p = call.getString("p", "");
+        mio.execute(() -> {
+            try { JSObject r = new JSObject(); r.put("h", MusicHub.hash(getContext(), p)); call.resolve(r); }
+            catch (Exception e) { call.reject("не прочитался"); }
+        });
+    }
+
+    @PluginMethod
+    public void mLyrics(PluginCall call) {
+        String p = call.getString("p", "");
+        mio.execute(() -> { JSObject r = new JSObject(); r.put("text", MusicHub.lyrics(getContext(), p)); call.resolve(r); });
+    }
+
+    @PluginMethod
+    public void mPickFiles(PluginCall call) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+            .putExtra(Intent.EXTRA_MIME_TYPES, new String[] { "audio/*", "application/ogg" }).putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        startActivityForResult(call, i, "mPicked");
+    }
+
+    @com.getcapacitor.annotation.ActivityCallback
+    private void mPicked(PluginCall call, androidx.activity.result.ActivityResult res) {
+        Intent d = res.getData();
+        List<Uri> uris = new ArrayList<>();
+        if (res.getResultCode() == Activity.RESULT_OK && d != null) {
+            if (d.getClipData() != null) for (int k = 0; k < d.getClipData().getItemCount() && k < 5000; k++) uris.add(d.getClipData().getItemAt(k).getUri());
+            else if (d.getData() != null) uris.add(d.getData());
+        }
+        mio.execute(() -> {
+            int n = 0;
+            for (Uri u : uris) if (MusicHub.addUri(getContext(), u)) n++;
+            JSObject r = new JSObject(); r.put("n", n); call.resolve(r);
+        });
+    }
+
+    @PluginMethod
+    public void mSaveOpen(PluginCall call) {
+        String id = call.getString("id", ""), name = call.getString("name", "");
+        mio.execute(() -> { try { JSObject r = new JSObject(); r.put("ok", MusicHub.saveOpen(getContext(), id, name)); call.resolve(r); } catch (Exception e) { call.reject(e.getMessage()); } });
+    }
+
+    @PluginMethod
+    public void mSaveWrite(PluginCall call) {
+        String id = call.getString("id", ""), data = call.getString("data", ""); long off = call.getData().optLong("off", 0);
+        mio.execute(() -> { try { JSObject r = new JSObject(); r.put("ok", MusicHub.saveWrite(id, off, Base64.decode(data, Base64.DEFAULT))); call.resolve(r); } catch (Exception e) { call.reject(e.getMessage()); } });
+    }
+
+    @PluginMethod
+    public void mSaveDone(PluginCall call) {
+        String id = call.getString("id", ""), want = call.getString("want", "");
+        mio.execute(() -> {
+            try {
+                String[] x = MusicHub.saveDone(id, want); JSObject r = new JSObject();
+                if (x == null) r.put("ok", false); else { r.put("ok", !x[0].isEmpty()); r.put("p", x[0]); r.put("hash", x[1]); }
+                call.resolve(r);
+            } catch (Exception e) { JSObject r = new JSObject(); r.put("ok", false); call.resolve(r); }
+        });
+    }
+
+    @PluginMethod
+    public void mSaveDrop(PluginCall call) { String id = call.getString("id", ""); mio.execute(() -> { MusicHub.saveDrop(id); call.resolve(); }); }
+
+    @PluginMethod
+    public void mTrash(PluginCall call) {
+        String p = call.getString("p", "");
+        mio.execute(() -> { JSObject r = new JSObject(); r.put("ok", MusicHub.delete(getContext(), p)); call.resolve(r); });
     }
 
     // ---------- запасная копия профиля: ключ, контакты, группы — в закрытой папке приложения ----------

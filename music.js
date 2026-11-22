@@ -3,9 +3,10 @@
 // Подключается из messenger.js: window.kzMusic.mount({...}) — после того как построен каркас приложения.
 (() => {
 'use strict';
-const APP = window.kinozalApp;
-if (!APP?.music) return;   // только программа для Windows
+const APP = window.kinozalApp || window.kzAndroid;   // программа для Windows или приложение для Android; на сайте музыки нет
+if (!APP?.music) return;
 const MU = APP.music;
+const PHONE = !!MU.android;   // на телефоне: вся музыка телефона + своя папка приложения, без выбора папки и проводника
 
 const col = new Intl.Collator('ru', { numeric: true, sensitivity: 'base' });
 const fmt = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(s % 60).padStart(2, '0'); };
@@ -44,7 +45,7 @@ const tx = async (name, mode, f) => { const db = await idb; return new Promise((
 
 // ---------- библиотека ----------
 const lib = new Map();     // rel → трек {rel, p, size, mtime, title, artist, album, year, track, cv, h, tagged}
-let libRoot = '', scanning = false, again = false, hashIdx = null;
+let libRoot = '', scanning = false, again = false, hashIdx = null, needPerm = false;   // needPerm — телефон ещё не разрешил читать свою музыку
 const cleanName = n => n.replace(/\.[^.]+$/, '').replace(/_/g, ' ').trim();
 function fromName(rel) {
   let n = cleanName(rel.split(/[\\/]/).pop()), artist = '', title = n;
@@ -137,7 +138,7 @@ async function refresh() {
   if (scanning) { again = true; return; }
   scanning = true; paintStatus();
   try {
-    const r = await MU.scan(); libRoot = r.root;
+    const r = await MU.scan(); libRoot = r.root; needPerm = PHONE && r.perm === false;
     const seen = new Set(), todo = [];
     for (const f of r.files) {
       seen.add(f.rel);
@@ -853,10 +854,10 @@ function trackMenu(t, x, y, list) {
     ['🏷️', 'На полку…', () => shelfPalette(x, y, t, null)],
     [isFav(t) ? '💔' : '❤️', isFav(t) ? 'Убрать из любимого' : 'В любимое', () => toggleFav(t)],
     ['🌙', 'Фоном', () => bgStart({ kind: 'track', id: t.rel, emoji: '🎵', name: t.title, tracks: [t] })],
-    ['📂', 'Показать в папке', () => MU.show(t.p)]
+    ...(PHONE ? [] : [['📂', 'Показать в папке', () => MU.show(t.p)]])
   ];
   if (view.detail?.type === 'pl') { const l = plById(view.detail.id); if (l) items.push(['➖', 'Убрать с этой полки', () => { if (inList(l, t)) toggleIn(l, t); }]); }
-  items.push(['🗑', 'В корзину', async () => { if (confirm('Переместить «' + t.title + '» в корзину? Файл удалится с компьютера.')) { if (await MU.trash(t.p)) { lib.delete(t.rel); cleanQueue(); repaint(); player.sync(); refresh(); } } }, 'danger']);
+  if (!PHONE || MU.canTrash?.(t.p)) items.push(['🗑', PHONE ? 'Удалить файл' : 'В корзину', async () => { if (confirm(PHONE ? 'Удалить «' + t.title + '» с телефона? Вернуть будет нельзя.' : 'Переместить «' + t.title + '» в корзину? Файл удалится с компьютера.')) { if (await MU.trash(t.p)) { lib.delete(t.rel); cleanQueue(); repaint(); player.sync(); refresh(); } } }, 'danger']);
   menuAt(x, y, items);
 }
 function queueDlg() {
@@ -883,6 +884,7 @@ function queueDlg() {
   });
 }
 function settingsDlg() {
+  if (PHONE) return phoneSettingsDlg();
   H.modal(async (card, close) => {
     const r = await MU.root();
     const row = el('div', 'row');
@@ -897,17 +899,37 @@ function settingsDlg() {
   });
 }
 
+// на телефоне папку выбирать негде: Кинозал сам берёт музыку телефона (если разрешить) и свою папку
+function phoneSettingsDlg() {
+  H.modal(async (card, close) => {
+    const r = await MU.root();
+    const row = el('div', 'row');
+    if (!r.perm) row.append(H.btnEl('Разрешить доступ к музыке', 'pri', async () => { await MU.askPerm(); close(); refresh(); }));
+    row.append(H.btnEl('Добавить файлы…', '', async () => { close(); const n = await MU.pickFiles(); if (n) { H.toast('Добавлено: ' + n); refresh(); } }));
+    row.append(H.btnEl('Обновить список', '', () => { close(); refresh(); }), H.btnEl('Готово', r.perm ? 'pri' : '', close));
+    card.append(el('h2', '', 'Музыка на телефоне'),
+      el('p', '', r.perm ? 'Кинозал показывает всю музыку телефона: папки «Музыка» и «Загрузки» и всё, что телефон считает музыкой. Голосовые из мессенджеров и звонки сюда не попадают.' : 'Чтобы показать музыку, которая уже есть на телефоне, Кинозалу нужен доступ к ней. Звук никуда не уходит — только при прослушивании вместе с друзьями.'),
+      el('p', '', 'Файлы, которые добавишь здесь или докачаешь у друзей, лежат у самого Кинозала: Android/data/…/files/Музыка. Теги и обложки читаются из файлов один раз и запоминаются.'), row);
+  });
+}
+function permBanner() {
+  const b = el('div', 'mu-perm'); b.append(el('span', '', '🔒 Кинозал пока не видит музыку телефона'), H.btnEl('Разрешить', 'pri', async () => { await MU.askPerm(); refresh(); }));
+  return b;
+}
+
 // ---------- шапка, состояние, пустой экран ----------
 function statusText() {
   const n = lib.size; const pend = allTracks().filter(t => !t.tagged).length;
-  return scanning ? 'Читаю папку…' + (pend ? ' (' + pend + ')' : '') : countText(n);
+  return scanning ? (PHONE ? 'Читаю музыку…' : 'Читаю папку…') + (pend ? ' (' + pend + ')' : '') : countText(n);
 }
 let statusEl = null;
 function paintStatus() { if (statusEl) statusEl.textContent = statusText(); }
 function emptyView() {
-  const e = el('div', 'fempty mu-empty'); e.append(el('div', 'big', '🎵'), el('b', '', 'Здесь пока нет музыки'), el('span', '', 'Положи файлы в папку Кинозала или перетащи их в это окно. Подойдут MP3, FLAC, M4A, OGG, WAV и другие.'));
+  const e = el('div', 'fempty mu-empty'); e.append(el('div', 'big', '🎵'), el('b', '', 'Здесь пока нет музыки'), el('span', '', PHONE ? (needPerm ? 'Разреши Кинозалу доступ к музыке телефона — она появится здесь. Или добавь файлы сам: подойдут MP3, FLAC, M4A, OGG, WAV и другие.' : 'На телефоне не нашлось музыки. Добавь файлы — подойдут MP3, FLAC, M4A, OGG, WAV и другие.') : 'Положи файлы в папку Кинозала или перетащи их в это окно. Подойдут MP3, FLAC, M4A, OGG, WAV и другие.'));
   const row = el('div', 'row'); row.style.justifyContent = 'center';
-  row.append(H.btnEl('Добавить файлы…', 'pri', async () => { const n = await MU.pickFiles(); if (n) { H.toast('Добавлено: ' + n); refresh(); } }), H.btnEl('Открыть папку', '', () => MU.openDir()));
+  if (PHONE && needPerm) row.append(H.btnEl('Разрешить доступ к музыке', 'pri', async () => { await MU.askPerm(); refresh(); }));
+  row.append(H.btnEl('Добавить файлы…', PHONE && needPerm ? '' : 'pri', async () => { const n = await MU.pickFiles(); if (n) { H.toast('Добавлено: ' + n); refresh(); } }));
+  if (!PHONE) row.append(H.btnEl('Открыть папку', '', () => MU.openDir()));
   e.append(row); return e;
 }
 function listView(tracks, opts = {}) {
@@ -938,6 +960,7 @@ function collHead(c) {
 // экран «Моя музыка»
 function myBody() {
   const wrap = el('div', 'mu-body'), d = view.detail, all = allTracks();
+  if (PHONE && needPerm && all.length) wrap.append(permBanner());
   if (!all.length && !scanning && !d) { wrap.append(emptyView()); return wrap; }
   if (d) {
     const kind = d.type === 'pl' ? 'pl' : d.type; const c = findColl(kind, d.id ?? d.key);
@@ -2168,7 +2191,10 @@ window.kzMusic = {
     mini.sync();
     return {
       // el — куда рисовать: по умолчанию главная область мессенджера, в зале — правая панель
-      show(target) { shown = true; inPanel = !!target; host = target || H.host(); init(); paint(); upd(); refresh(); },
+      show(target) {
+        shown = true; inPanel = !!target; host = target || H.host(); init(); paint(); upd();
+        if (PHONE && !H.store.get('musicPermAsked', '')) { H.store.set('musicPermAsked', '1'); MU.askPerm().then(() => refresh()); } else refresh();
+      },
       hide() { shown = false; inPanel = false; host = null; statusEl = null; queuePaint = null; upd(); },
       get shown() { return shown; },
       get inPanel() { return inPanel; }

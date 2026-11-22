@@ -3417,7 +3417,7 @@ const actText = a => a.k === 'music' ? (a.together ? 'Слушает вмест�
   : a.k === 'game' ? 'Играет в ' + a.name : a.kind === 'cinema' ? 'Смотрит' + (a.movie ? ': ' + a.movie : ' кино') + ' в зале' : 'В звонке';
 const actJoinable = a => !!(a && ((a.k === 'music' && a.sid) || (a.k === 'room' && a.code)));
 function actJoin(u, a) {
-  if (a.k === 'music' && a.sid) { if (!window.kzMusic?.joinFrom) { toast('Музыка есть только в программе для Windows'); return; } window.kzMusic.joinFrom(u, a.sid, a); return; }
+  if (a.k === 'music' && a.sid) { if (!window.kzMusic?.joinFrom) { toast('Музыка есть только в программе для Windows и в приложении для Android'); return; } window.kzMusic.joinFrom(u, a.sid, a); return; }
   if (a.k === 'room' && a.code) {
     if (window.kzRoom?.busy) { toast('Сначала выйди из текущего зала'); return; }
     modal((card, close) => {
@@ -3953,7 +3953,7 @@ function boot() {
     if (S.me && root.hidden && room?.hidden && !document.querySelector('.mx-hello')) { console.warn('[мессенджер] экран был пустым — показываю чаты'); root.hidden = false; renderList(); }
   }, 2000);
 }
-if (DESK && window.kzMusic) {
+if ((DESK || ANDROID) && window.kzMusic) {
   musicApi = window.kzMusic.mount({
     store, toast, modal, btnEl: (...a) => btnEl(...a), host: () => $('#mxMain'), side: root.querySelector('.mx-side'), openSelf: openMusic, close: closeMusic,
     // связь с собеседниками для совместного прослушивания
