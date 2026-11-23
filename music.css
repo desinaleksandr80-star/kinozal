@@ -495,3 +495,9 @@ body:has(.mx-hello) .mu-shade{display:none}
 /* телефон: разрешение на музыку */
 .mu-perm{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 12px;padding:10px 14px;border-radius:14px;background:rgba(127,127,127,.12);color:var(--ink);font-size:13.5px}
 .mu-perm .btn{margin-left:auto;min-height:34px!important;padding:5px 14px}
+.mu-peer .mu-now{color:var(--acc)}
+.mu-dls{display:grid;gap:6px;font-size:13px;color:var(--mute)}
+.mu-set{padding:10px 14px;border-radius:16px;background:rgba(127,127,127,.1)}
+.mu-set summary{cursor:pointer;font-weight:700;font-size:13.5px;color:var(--mute)}
+.mu-set[open] summary{margin-bottom:12px}
+.mu-set>*+*{margin-top:12px}

@@ -1102,7 +1102,8 @@ async function showMore1(n) {
 function updDown() { const d = $('.mx-down'); if (!d) return; const b = d.querySelector('b'); b.hidden = !downCount; b.textContent = downCount; if (!downCount && nearBottom($('.mx-msgs'))) d.hidden = true; }
 function renderHead() {
   const c = open, h = $('.mx-chead'); if (!c || !h) return;
-  const w = $('.avwrap', h); w.textContent = ''; w.append(avEl(c, 42), el('i', 'dot'));
+  const w = $('.avwrap', h); if (!w || !$('.who b', h) || !$('.who span', h)) return;   // шапка чата может быть не нарисована (открыта музыка/файлы)
+  w.textContent = ''; w.append(avEl(c, 42), el('i', 'dot'));
   $('.who b', h).textContent = chatTitle(c);
   const st = $('.who span', h); st.className = '';
   const ty = typingIn(c);
