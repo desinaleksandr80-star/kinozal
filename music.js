@@ -1347,7 +1347,9 @@ async function hostState() {
   if (!t || !decks || !decks[deckI].rel) return { ...base, idle: 1 };
   await ensureHash(t);
   const pn = planNext(), nt = pn && lib.get(pn.rel); if (nt) ensureHash(nt);
-  return { ...base, h: t.h || '', title: t.title, artist: t.artist, album: t.album, dur: t.dur || 0, name: baseName(t.rel), size: t.size, playing: !au.paused, pos: au.currentTime, ts: Date.now(), rate: au.playbackRate || 1, nx: nt && nt.h ? { h: nt.h, name: baseName(nt.rel), size: nt.size, title: nt.title } : null };
+  const ah = [];   // ближайшие треки очереди: гость докачивает их заранее, а не по одному
+  for (let i = player.qi + 1; i <= player.qi + 10 && i < player.queue.length; i++) { const x = lib.get(player.queue[i]); if (!x) continue; if (x.h) ah.push({ h: x.h, name: baseName(x.rel), size: x.size, title: x.title }); else ensureHash(x); }
+  return { ...base, h: t.h || '', title: t.title, artist: t.artist, album: t.album, dur: t.dur || 0, name: baseName(t.rel), size: t.size, playing: !au.paused, pos: au.currentTime, ts: Date.now(), rate: au.playbackRate || 1, nx: nt && nt.h ? { h: nt.h, name: baseName(nt.rel), size: nt.size, title: nt.title } : null, ah };
 }
 async function bcast(only) {
   if (!sess?.host) return;
@@ -1357,7 +1359,7 @@ async function bcast(only) {
 function sessSync() { if (!sess?.host) return; clearTimeout(sess.syncT); sess.syncT = setTimeout(() => bcast(), 60); }
 function newSess(host, sid) {
   sess = { sid, host, hostL: null, hostU: '', peers: new Map(), track: null, off: 0, offs: [], mode: 'wait', pref: H.store.get('musicPref', 'each') === 'stream' ? 'stream' : 'each', invited: new Set(), hold: 0, userPaused: false, aud: null, dl: null, dlq: [], dlSeen: new Set(), lastSt: null, last: Date.now(), timers: [],
-    tl: new Map(), dlRate: 0, all: false, asked: new Map(), nope: new Set(), bgOv: false, bgWas: bg.on };   // «Для всех»: кого уже звали из звонка, кто отказался; гость: свой выбор «фоном» и как было до сеанса
+    win: [], dlRate: 0, rtt0: 0, pingAt: 0, all: false, asked: new Map(), nope: new Set(), bgOv: false, bgWas: bg.on };   // «Для всех»: кого уже звали из звонка, кто отказался; гость: свой выбор «фоном» и как было до сеанса
   sess.timers.push(setInterval(tickSess, 4000));
   sessUi();
 }
@@ -1514,20 +1516,20 @@ function setSessMode(m) {
   if (sess.mode === m) return; sess.mode = m; if (sess.aud) sess.aud.muted = m !== 'stream' || !!sess.userPaused;
   reportMode(); sessUi();
 }
-const dlStat = () => { let n = 0; for (const h of sess.tl.keys()) if (byHash(h)) n++; return { n, of: sess.tl.size }; };   // у гостя: сколько треков сеанса уже на устройстве
+const dlStat = () => ({ n: sess.win.filter(i => byHash(i.h)).length, of: sess.win.length });   // у гостя: сколько из текущего и ближайших треков уже на устройстве
 const dlPct = () => sess.dl && sess.dl.size ? Math.round(sess.dl.got / sess.dl.size * 100) : 0;
 const reportMode = () => { if (sess?.hostL) { const t = dlStat(); netTo(sess.hostL, { k: 'mode', sid: sess.sid, m: sess.mode, p: dlPct(), n: t.n, of: t.of, dl: sess.dl ? 1 : 0, pf: sess.pref }); } };
 
 // ---- докачка трека у ведущего ----
 // Докачка делит канал со звонком и чатом, поэтому она тише всего остального: маленькие куски, в полёте не больше 64 КБ
 // (иначе «пинг» и сообщения стоят в очереди за файлом) и потолок скорости — в звонке ещё ниже. Связь замедлилась — притормаживаем сами.
-const DL_CH = 16 * 1024, DL_WIN = 4, DL_MAX = 400e6;
-const dlCap = () => window.kzRoom?.inRoom ? 100e3 : 400e3;   // байт/с
+const DL_CH = 16 * 1024, DL_WIN = 8, DL_MAX = 400e6;
+const dlCap = () => window.kzRoom?.inRoom ? 300e3 : 1.5e6;   // байт/с
 function dlTune(rtt) {   // гость: по задержке до ведущего подстраиваем скорость докачки
   if (!sess || sess.host) return;
-  const base = sess.offs.reduce((a, o) => Math.min(a, o.rtt), 1e9), cap = dlCap();
-  if (rtt > Math.max(450, base * 3)) sess.dlRate = Math.max(20e3, (sess.dlRate || cap) / 2);
-  else if (sess.dlRate) sess.dlRate = Math.min(cap, sess.dlRate * 1.15 + 4e3);
+  sess.rtt0 = sess.rtt0 ? Math.min(sess.rtt0, rtt) : rtt; const cap = dlCap();
+  if (rtt > sess.rtt0 + 400) sess.dlRate = Math.max(60e3, (sess.dlRate || cap) / 2);   // очередь выросла больше чем на 0,4 с — сбавляем
+  else if (sess.dlRate) sess.dlRate = Math.min(cap, sess.dlRate * 1.25 + 10e3);
 }
 function serveGet(L, d) {   // ведущий: гость просит файл (с позиции o)
   const p = sess.peers.get(L.uid); const t = byHash(String(d.h || ''));
@@ -1568,6 +1570,7 @@ async function dlChunk(d) {
   if (x.got >= x.size) { dlDone(x); return; }
   const rate = Math.min(dlCap(), sess.dlRate || 1e9), now = performance.now();   // следующий кусок просим не раньше, чем «положено» по скорости
   x.next = Math.max(x.next || 0, now) + u.length / rate * 1000;
+  if (now - sess.pingAt > 1500 && sess.hostL) { sess.pingAt = now; netTo(sess.hostL, { k: 'ping', sid: sess.sid, c: Date.now() }); }   // пока качаем — часто меряем задержку
   const o = x.got, go = () => { if (sess?.dl === x) netTo(sess.hostL, { k: 'ack', sid: sess.sid, h: x.h, o: x.got }); };
   if (x.next - now > 5) setTimeout(go, x.next - now); else go();
   if (o % (DL_CH * 16) < DL_CH) { reportMode(); sessUi(); }
@@ -1595,8 +1598,9 @@ function applySt(st) {
   if (st.idle) { if (decks) { silence(decks[0]); silence(decks[1]); } setSessMode('wait'); player.sync(); sessUi(); return; }
   const local = byHash(st.h), hostNow = Date.now() + sess.off;
   const target = st.pos + (st.playing ? Math.max(0, hostNow - st.ts) / 1000 * (st.rate || 1) : 0);
-  for (const i of [st, st.nx]) if (i?.h && sess.tl.size < 500) sess.tl.set(i.h, 1);
-  if (sess.pref === 'each') { dlWant(st); if (st.nx) dlWant(st.nx); }
+  sess.win = [st, ...(st.ah || (st.nx ? [st.nx] : []))].filter(i => i?.h);   // что ведущий играет и что сыграет дальше
+  sess.dlq = sess.dlq.filter(x => sess.win.some(i => i.h === x.h));   // перемотали вперёд — старое в очереди не нужно
+  if (sess.pref === 'each') for (const i of sess.win) dlWant(i);
   if (local && sess.pref === 'each') {
     if (sess.aud) sess.aud.muted = true;
     const changed = player.cur?.rel !== local.rel || !decks || !decks[deckI].rel;
@@ -1666,9 +1670,9 @@ function sessCard() {
     c.append(swEl('💾 Скачивать треки себе', sess.pref === 'each', v => setPref(v ? 'each' : 'stream'), 'Включено — докачаю треки (проверю контрольной суммой) и буду играть у себя: лучший звук, без задержки. Выключено — слушаю трансляцию, ничего не качаю'));
     const t = dlStat(), box = el('div', 'mu-dls');
     if (sess.pref === 'each') {
-      box.append(el('span', '', '💾 На устройстве: ' + t.n + ' из ' + t.of + ' ' + trk(t.of)));
+      box.append(el('span', '', '💾 Скачано ' + t.n + ' из ' + t.of + ' ближайших'));
       if (sess.dl) { const pct = dlPct(), pr = el('div', 'mu-dl'); pr.append(el('span', '', '⬇ Качаю «' + clip(sess.dl.title || sess.dl.name, 40) + '» · ' + pct + '%' + (sess.dlq.length ? ' · ещё ' + sess.dlq.length : '')), el('i')); pr.lastChild.style.setProperty('--p', pct + '%'); box.append(pr); }
-      else box.append(el('span', '', t.n < t.of ? '⏸ Сейчас не качаю — жду следующий трек' : '✓ Всё, что играли, уже у тебя'));
+      else box.append(el('span', '', t.n < t.of ? '⏸ Сейчас не качаю' : '✓ Ближайшее уже у тебя'));
     } else box.append(el('span', '', '📡 Ничего не качаю — звук идёт от ' + who));
     c.append(box);
     const act = el('div', 'mu-act'); act.append(H.btnEl('Выйти', '', () => endSess(true))); c.append(act);
@@ -1683,7 +1687,7 @@ function sessCard() {
   if (on && sess.peers.size) {
     const peers = el('div', 'mu-peers');
     for (const p of sess.peers.values()) {
-      const x = el('div', 'mu-peer'), got = p.pf === 'stream' ? 'не скачивает — слушает трансляцию' : p.of ? '💾 скачано ' + p.have + ' из ' + p.of + ' ' + trk(p.of) : '💾 скачано пока ничего';
+      const x = el('div', 'mu-peer'), got = p.pf === 'stream' ? 'не скачивает — слушает трансляцию' : p.of ? '💾 скачано ' + p.have + ' из ' + p.of + ' ближайших' : '💾 скачано пока ничего';
       const now = p.pf === 'stream' ? '' : p.dl ? '⬇ качает сейчас' + (p.pct ? ' · ' + p.pct + '%' : '') : p.of && p.have < p.of ? '⏸ не качает сейчас' : '';
       x.append(el('b', '', p.name + ' · ' + (p.mode === 'stream' ? '📡 по трансляции' : p.mode === 'local' ? '💾 играет у себя' : '… подключается')), el('span', '', got));
       if (now) x.append(el('span', 'mu-now', now));
