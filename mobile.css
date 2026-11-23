@@ -29,6 +29,7 @@ html.touch .mx-chead{padding-top:calc(10px + env(safe-area-inset-top))}
 html.touch .mx-input{padding-bottom:calc(12px + env(safe-area-inset-bottom))}
 html.touch .mx-list{padding-bottom:calc(90px + env(safe-area-inset-bottom))}
 html.touch .mx-fab{bottom:calc(20px + env(safe-area-inset-bottom))}
+html.touch #mx:not(.rail) .mx-side:has(.mu-mini:not([hidden])) .mx-fab{bottom:calc(96px + env(safe-area-inset-bottom))}
 html.touch .mx-card{max-height:calc(var(--kzh,100dvh) - 24px)}
 html.touch .mx-modal,html.touch .mx-hello{height:var(--kzh,100dvh);bottom:auto}
 html.touch .float .rz{opacity:1}
@@ -115,7 +116,9 @@ html.touch #room .keys{display:none}
 /* узкий телефон: без значков в переключателе — так шапка влезает целиком */
 @media(max-width:430px){
   #room .viewsw i{display:none}
-  #room .viewsw button{padding:5px 8px}
+  #room .viewsw{gap:0;padding:3px;flex:1 1 0}
+  #room .viewsw button{padding:5px 4px;font-size:12px;flex:1 1 auto;text-overflow:clip}
+  #room .viewsw::before{top:3px;bottom:3px}
 }
 @media(max-width:760px) and (orientation:portrait){
   #room.hallview #tiles.solo .tile.port:not(.float) video{object-fit:cover}

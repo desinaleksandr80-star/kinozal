@@ -105,12 +105,19 @@ function setup({ app, ipcMain, dialog, shell, protocol, getWin, log, tag }) {
     while (fs.existsSync(to)) to = path.join(dir, base + ' (' + (++i) + ')' + ext);
     return to;
   };
+  let lastAdd = { files: [], dups: 0 };   // куда легли файлы последнего добавления (и уже имевшиеся копии) — чтобы сразу положить их в плейлист
   async function addFiles(list) {
-    await mkroot(); let n = 0;
+    await mkroot(); let n = 0; lastAdd = { files: [], dups: 0 };
     const one = async p => {
-      if (inside(p, root())) return;   // и так уже в библиотеке
+      if (inside(p, root())) { lastAdd.files.push(p); return; }   // и так уже в библиотеке
       const st = await fsp.stat(p).catch(() => null); if (!st || !st.isFile()) return;
-      await fsp.copyFile(p, freeName(root(), path.basename(p))); n++;
+      const nm = path.basename(p), ext = path.extname(nm), base = path.basename(nm, ext);
+      for (let i = 1; i < 60; i++) {   // такой же файл (имя и размер) уже лежит в папке — второй раз не копируем
+        const c = path.join(root(), i === 1 ? nm : base + ' (' + i + ')' + ext), cs = await fsp.stat(c).catch(() => null);
+        if (!cs) break;
+        if (cs.isFile() && cs.size === st.size) { lastAdd.dups++; lastAdd.files.push(c); return; }
+      }
+      const to = freeName(root(), nm); await fsp.copyFile(p, to); n++; lastAdd.files.push(to);
     };
     const dir = async (d, depth) => {   // перетащили папку — берём музыку из неё
       if (depth > 6 || inside(d, root()) || n >= 5000) return;
@@ -128,6 +135,8 @@ function setup({ app, ipcMain, dialog, shell, protocol, getWin, log, tag }) {
     log('[музыка] добавлено файлов', n); return n;
   }
   ipcMain.handle('kz:madd', async (e, list) => addFiles([].concat(list || []).slice(0, 5000)));
+  // то же, но с подробностями: сколько новых, сколько уже были, и пути всех подходящих файлов в папке музыки
+  ipcMain.handle('kz:maddx', async (e, list) => { const n = await addFiles([].concat(list || []).slice(0, 5000)); return { n, dups: lastAdd.dups, files: lastAdd.files }; });
   ipcMain.handle('kz:mpickfiles', async () => {
     const r = await dialog.showOpenDialog(getWin(), { title: 'Какую музыку добавить?', properties: ['openFile', 'multiSelections'], filters: [{ name: 'Музыка', extensions: ['mp3', 'flac', 'ogg', 'oga', 'opus', 'wav', 'm4a', 'aac', 'wma', 'aif', 'aiff', 'ape', 'wv', 'mka'] }] });
     if (r.canceled) return 0;

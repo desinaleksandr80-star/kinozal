@@ -190,6 +190,14 @@ app.whenReady().then(() => {
   if (!gotLock) return;
   log('==== запуск Кинозал', app.getVersion(), '| Windows', os.release(), process.arch, '| Electron', process.versions.electron,
     '| без видеокарты:', noGpu, '| скрыто:', startHidden, '| GPU:', app.getGPUFeatureStatus?.());
+  // память по процессам раз в 2 минуты (МБ): видно, кто съедает — страница, видеокарта или служба звука
+  setInterval(() => {
+    try {
+      const by = {}; let sum = 0;
+      for (const m of app.getAppMetrics()) { const mb = Math.round((m.memory.workingSetSize || 0) / 1024); by[m.type] = (by[m.type] || 0) + mb; sum += mb; }
+      log('[память] всего', sum, 'МБ:', Object.entries(by).map(([k, v]) => k + ' ' + v).join(', '));
+    } catch (e) {}
+  }, 120000).unref();
   // видеокарта: процесс GPU падает раз за разом — включаем режим совместимости сами
   let gpuCrashes = 0;
   app.on('child-process-gone', (e, d) => {

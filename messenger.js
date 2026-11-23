@@ -1282,7 +1282,7 @@ function circleEl(m) {
 // документ: имя, размер, по клику — сохранить
 const fmtSize = n => n < 1024 ? n + ' Б' : n < 1048576 ? Math.round(n / 1024) + ' КБ' : n < 1073741824 ? (n / 1048576).toFixed(1).replace('.', ',') + ' МБ' : (n / 1073741824).toFixed(2).replace('.', ',') + ' ГБ';
 const RISKY = /\.(exe|msi|bat|cmd|com|scr|pif|ps1|vbs|vbe|js|jse|wsf|hta|jar|lnk|reg|cpl)$/i;
-const riskOk = m => !RISKY.test(m.name || '') || confirm('«' + m.name + '» — это программа или скрипт. Запускай её, только если доверяешь ' + (m.from === myId ? 'источнику' : nameOf(m.from)) + '. Скачать?');
+const riskOk = async m => !RISKY.test(m.name || '') || await kzConfirm('«' + m.name + '» — это программа или скрипт. Запускай её, только если доверяешь ' + (m.from === myId ? 'источнику' : nameOf(m.from)) + '. Скачать?', { ok: 'Скачать', danger: true });
 // файл с картинкой: превью (или сам оригинал, если он в переписке) над карточкой, по клику — просмотр в полный размер
 function fileEl(m) {
   const card = fileCard(m);
@@ -1311,6 +1311,10 @@ function fileCard(m) {
   const ic = el('span', 'ic' + (m.dir ? ' dir' : ''), m.dir ? '📁' : ext || '📄'), t = el('div', 't');
   t.append(el('b', '', m.name), el('span', '', fmtSize(m.size || 0) + (!m.big && canView(m) ? ' · открыть' : ' · сохранить'))); hilite(t.firstChild, findQ());
   w.append(ic, t);
+  // кнопка «Скачать» прямо в сообщении: сохраняет сразу, без просмотрщика; у больших файлов показывает ход закачки
+  const dl = el('span', 'fdl'); dl.setAttribute('role', 'button'); dl.tabIndex = 0; w.append(dl); dlFill(dl, m);
+  dl.onclick = e => { e.preventDefault(); e.stopPropagation(); dlClick(dl, m); };
+  dl.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); dlClick(dl, m); } };
   if (m.big) {
     w.dataset.x = m.id; w.classList.add('big'); const bar = el('i', 'xbar'); bar.append(el('i')); t.append(bar);
     // режим скорости — переключается прямо во время передачи
@@ -1322,18 +1326,34 @@ function fileCard(m) {
   w.onclick = e => { e.preventDefault(); canView(m) ? openAny(m) : saveSmall(m); };
   return w;
 }
+// состояние кнопки «Скачать» в карточке файла (малый файл — сохранён или нет; большой — по ходу закачки)
+function dlFill(dl, m) {
+  const d = S.dl[m.id]; dl.classList.remove('go', 'done'); dl.style.removeProperty('--p'); dl.hidden = false;
+  if (m.big && isMineSrc(m)) { dl.hidden = true; return; }
+  if (d?.st === 'done') { dl.classList.add('done'); dl.textContent = '✓ ' + (DISK ? 'В папке' : 'Сохранён'); dl.title = DISK ? SHOWT[0].toUpperCase() + SHOWT.slice(1) : 'Сохранить ещё раз'; return; }
+  if (m.big && d?.st === 'go') { const p = Math.min(100, Math.floor((d.got || 0) / (m.size || 1) * 100)); dl.classList.add('go'); dl.style.setProperty('--p', p + '%'); dl.textContent = '⏸ ' + p + '%'; dl.title = 'Поставить на паузу'; return; }
+  if (m.big && d?.st === 'pause') { dl.textContent = '▶ Продолжить'; dl.title = 'Продолжить скачивание'; return; }
+  if (m.big && d?.st === 'wait') { dl.textContent = '⏳ Ждём'; dl.title = 'Ждём, когда отправитель будет в сети'; return; }
+  dl.textContent = '⬇ Скачать'; dl.title = 'Скачать в папку загрузок';
+}
+async function dlClick(dl, m) {
+  if (m.big) return xClick(m);
+  if (dl.classList.contains('busy')) return;
+  dl.classList.add('busy'); dl.textContent = '… Сохраняю';
+  try { await saveSmall(m); } finally { dl.classList.remove('busy'); dlFill(dl, m); }
+}
 // небольшой файл из переписки: в программе для Windows — в «Полученные» (его видно в разделе «Файлы»), в браузере — скачать
 async function saveSmall(m) {
   if (DISK) {
     const d = S.dl[m.id];
     if (d?.path && await APP.files.exists(d.path)) { APP.files.show(d.path); return; }
-    if (!riskOk(m)) return;
-    const b = await blobGet(m.id); if (!b) return;
+    if (!await riskOk(m)) return;
+    const b = await blobGet(m.id); if (!b) { toast('Файл ещё не пришёл целиком — подожди немного'); return; }
     try { const p = await saveToRoute(m); if (DESK) APP.files.show(p); toast('«' + m.name + '» сохранён — ' + routeLabel(m)); }
     catch (er) { toast('Не получилось сохранить: ' + errText(er)); }
     return;
   }
-  if (!riskOk(m)) return; const u = await mediaUrl(m); if (!u) return; const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove();
+  if (!await riskOk(m)) return; const u = await mediaUrl(m); if (!u) { toast('Файл ещё не пришёл целиком — подожди немного'); return; } const a = el('a'); a.href = u; a.download = m.name; document.body.append(a); a.click(); a.remove();
 }
 
 // ---------- оригиналы, RAW и превью ----------
@@ -1446,7 +1466,7 @@ async function fileSource(m) {
 async function srcBlob(src, type) { return src.blob ? (type ? new Blob([src.blob], { type }) : src.blob) : new Blob([await src.read(0, src.size)], type ? { type } : {}); }
 async function openDoc(m) {
   const src = await fileSource(m);
-  if (!src) { if (m.big && !isMineSrc(m) && confirm('«' + m.name + '» ещё не скачан. Скачать?')) xClick(m); else if (!m.big) toast('Файла нет на этом устройстве'); return; }
+  if (!src) { if (m.big && !isMineSrc(m) && await kzConfirm('«' + m.name + '» ещё не скачан. Скачать?', { ok: 'Скачать' })) xClick(m); else if (!m.big) toast('Файла нет на этом устройстве'); return; }
   docView({ name: m.name, size: m.size || src.size, m, path: fileState(m).path, src });
 }
 async function openDocPath(it) { const src = await diskSource(it.path); if (src) docView({ name: it.name, size: src.size, path: it.path, src }); }
@@ -1948,7 +1968,7 @@ async function xResume(L) {
     if (srcLink(m) === L) xStart(m);
   }
 }
-function xClick(m) {
+async function xClick(m) {
   if (isMineSrc(m)) { if (DISK && S.src[m.id]) APP.files.show(S.src[m.id]); return; }
   const d = S.dl[m.id];
   if (d?.st === 'done') {
@@ -1958,7 +1978,7 @@ function xClick(m) {
   }
   if (d?.st === 'go') { const x = dls.get(m.id); if (x) xDrop(x, 'pause'); else { d.st = 'pause'; save(); xPaint(m.id); } return; }
   if (d?.st === 'wait') { d.st = 'pause'; save(); xPaint(m.id); return; }
-  if (!d && !riskOk(m)) return;
+  if (!d && !await riskOk(m)) return;
   xStart(m);
 }
 
@@ -2051,6 +2071,7 @@ function xFill(w, m) {
   sp.textContent = s.txt; w.title = s.go ? 'Пауза' : '';
   bar.hidden = s.p == null; if (s.p != null) bar.firstChild.style.width = Math.min(100, s.p * 100).toFixed(1) + '%';
   w.classList.toggle('go', !!s.go);
+  const fdl = $('.fdl', w); if (fdl) dlFill(fdl, m);
   const md = $('.xmode', w), live = !!s.go || (isMineSrc(m) && [...ups.values()].some(o => o.m.id === m.id));
   md.hidden = !live;
   if (live) { md.textContent = (xSoft() ? '🐢 щадящий' : '⚡ максимум') + (xMode() === 'auto' ? ' · авто' : ''); md.title = xSoft() ? 'Переключить на максимальную скорость' : 'Переключить на щадящий режим — чтобы не мешать звонку или фильму'; }
@@ -2136,7 +2157,7 @@ function roomPanel(w) {
     const was = panelW; panelW = w; mark();
     if (was === 'music') musicApi?.hide(); else { filesOpen = false; fHostEl = null; }
     body.classList.add('swap');
-    setTimeout(() => { if (panelW !== w) return; body.textContent = ''; fill(); body.classList.remove('swap'); }, 150);
+    setTimeout(() => { if (panelW !== w) return; body.textContent = ''; fill(); body.classList.remove('swap'); }, 170);
     return;
   }
   panelW = w; mark(); clearTimeout(panelTimer);
@@ -2275,11 +2296,11 @@ function fActions(m) {
   const st = fileState(m), a = [['Открыть', () => openAny(m)]];
   if (st.path) a.push([SHOWB, () => APP.files.show(st.path)]);
   if (st.k === 'chat') a.push([DISK ? 'Сохранить — ' + rootName(routeTarget(m).root) : 'Сохранить', async () => { if (!DISK) return saveSmall(m); try { const p = await saveToRoute(m); toast('Сохранено — ' + routeLabel(m)); if (DESK) APP.files.show(p); renderFiles(); } catch (e) { toast('Не получилось: ' + errText(e)); } }]);
-  if (m.big && !isMineSrc(m) && st.k !== 'disk' && st.k !== 'here') a.push([S.dl[m.id]?.st === 'go' ? 'Пауза' : 'Скачать', () => { xClick(m); setTimeout(renderFiles, 300); }]);
+  if (m.big && !isMineSrc(m) && st.k !== 'disk' && st.k !== 'here') a.push([S.dl[m.id]?.st === 'go' ? 'Пауза' : 'Скачать', async () => { await xClick(m); setTimeout(renderFiles, 300); }]);
   a.push(['Переслать', () => pickChat('Кому переслать «' + fileNameOf(m) + '»?', c => fwdMsg(c, m))]);
   a.push(['К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); }]);
-  if (isMineSrc(m) && (S.src[m.id] || srcMem.has(m.id))) a.push(['Больше не раздавать', () => {
-    if (!confirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.')) return;
+  if (isMineSrc(m) && (S.src[m.id] || srcMem.has(m.id))) a.push(['Больше не раздавать', async () => {
+    if (!await kzConfirm('Больше не раздавать «' + m.name + '»? Кто не успел скачать — уже не скачает.', { ok: 'Не раздавать', danger: true })) return;
     for (const [k, o] of ups) if (o.m.id === m.id) { try { o.c.close(); } catch (e) {} ups.delete(k); }
     delete S.src[m.id]; srcMem.delete(m.id); save(); xPaint(m.id); renderFiles();
   }]);
@@ -2494,7 +2515,7 @@ function fillRoutes(bar, list) {
   again.onclick = async () => {
     const ms = (await allFileMsgs()).filter(m => m.from !== myId && m.blob && !S.dl[m.id] && !RISKY.test(m.name || ''));
     if (!ms.length) { toast('Всё, что пришло в переписке, уже на диске'); return; }
-    if (!confirm('Сохранить на диск ' + ms.length + ' ' + plural(ms.length, 'файл', 'файла', 'файлов') + ' из переписки, по маршрутам? Большие файлы, которые ещё не скачаны, останутся как есть.')) return;
+    if (!await kzConfirm('Сохранить на диск ' + ms.length + ' ' + plural(ms.length, 'файл', 'файла', 'файлов') + ' из переписки, по маршрутам? Большие файлы, которые ещё не скачаны, останутся как есть.', { ok: 'Сохранить' })) return;
     let n = 0; for (const m of ms) if (await autoRoute(m, true)) n++;
     toast('Сохранено: ' + n); renderFiles();
   };
@@ -2588,13 +2609,13 @@ function recvRow(it, m) {
     lnk('В проводнике', () => APP.files.show(it.path)),
     lnk('Переслать', () => pickChat('Кому переслать «' + it.name + '»?', c => fwdPath(c, it, m))),
     ...(m ? [lnk('К сообщению', async () => { filesOpen = false; await openChat(m.chat); jumpTo(m.id); })] : []),
-    ...(it.root ? [] : [lnk('🗑', async () => { if (!confirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.')) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del')]));
+    ...(it.root ? [] : [lnk('🗑', async () => { if (!await kzConfirm('Убрать «' + it.name + '» в корзину?' + (it.dir ? ' Вместе со всем, что внутри.' : '') + ' Достать можно будет из корзины Windows.', { ok: 'В корзину', danger: true })) return; if (await APP.files.trash(it.path).catch(() => false)) toast('«' + it.name + '» в корзине'); else toast('Не получилось удалить'); renderFiles(); }, 'del')]));
   r.append(ic, t, acts); r.onclick = e => { if (!e.target.closest('button')) open1(); };
   r.title = it.dir ? 'Открыть папку' : ['img', 'video', 'audio'].includes(k) ? 'Посмотреть' : 'Открыть';
   return dragify(r, () => it.path);
 }
 async function openOnDisk(it) {
-  if (RISKY.test(it.name) && !confirm('«' + it.name + '» — программа или скрипт. Запускай, только если доверяешь тому, кто прислал. Запустить?')) return;
+  if (RISKY.test(it.name) && !await kzConfirm('«' + it.name + '» — программа или скрипт. Запускай, только если доверяешь тому, кто прислал. Запустить?', { ok: 'Запустить', danger: true })) return;
   const e = await APP.files.openPath(it.path); if (e) toast('Не открылось: ' + e);
 }
 function preview(it, k) {
@@ -2950,7 +2971,7 @@ async function dropMsg(m) {
   if (open === m.chat && shown.some(x => x.id === m.id)) { shown = shown.filter(x => x.id !== m.id); const box = $('.mx-msgs'), top = box?.scrollTop; await renderChat(); const b2 = $('.mx-msgs'); if (b2 && top != null) requestAnimationFrame(() => { b2.scrollTop = top; }); }
 }
 async function dropForAll(m) {
-  if (!confirm('Удалить сообщение у всех?')) return;
+  if (!await kzConfirm('Удалить сообщение у всех?', { ok: 'Удалить', danger: true })) return;
   const mem = members(m.chat); await dropMsg(m);
   for (const u of mem) if (u !== myId || hasDevs()) sendOrQueue(u, { t: 'del', id: m.id, chat: m.chat });
 }
@@ -3585,7 +3606,7 @@ function devicesDlg() {
       const rv = revSet(myId);
       for (const x of Object.values(S.devs || {}).filter(x => !rv.has(x.dev)).sort((a, b) => (a.added || 0) - (b.added || 0))) {
         const me = x.dev === myDev;
-        const b = !myDev ? btnEl('Отвязать', '', () => { if (confirm('Отвязать «' + (x.name || 'устройство') + '» от профиля? Переписка на нём удалится, войти с него снова можно будет только с новым кодом.')) revokeDev(x.dev); }) : null;
+        const b = !myDev ? btnEl('Отвязать', '', async () => { if (await kzConfirm('Отвязать «' + (x.name || 'устройство') + '» от профиля? Переписка на нём удалится, войти с него снова можно будет только с новым кодом.', { ok: 'Отвязать', danger: true })) revokeDev(x.dev); }) : null;
         if (b) b.style.minHeight = '34px';
         item(x.name || 'Устройство', me ? 'это устройство' : st(x.dev), me || isDevOn(myId, x.dev), b);
       }
@@ -3599,11 +3620,11 @@ function devicesDlg() {
       const pw = el('div', 'pwbox'), info = el('div');
       info.append(el('b', '', S.pwd ? '🔑 Пароль для входа задан' : '🔑 Пароль для входа не задан'), el('span', '', S.pwd ? 'С другого устройства: «Войти в свой профиль» → ID ' + fmtId(myId) + ' и пароль. Это устройство при этом может быть выключено. ' + (S.vaultOn ? '✅ Данные для входа лежат на сервере.' : '⏳ Данные для входа ещё загружаются на сервер — не закрывай Кинозал.') : 'Задай пароль — и с телефона или другого компьютера можно будет войти по ID ' + fmtId(myId) + ' и паролю, даже когда это устройство выключено.'));
       pw.append(info, btnEl(S.pwd ? 'Сменить' : 'Задать пароль', S.pwd ? '' : 'pri', () => { close(); passwordDlg(); }));
-      if (S.pwd) pw.append(btnEl('Убрать', '', async () => { if (!confirm('Убрать пароль? Войти в профиль с нового устройства будет нельзя, пока не зададишь новый пароль.')) return; await setPassword(''); close(); devicesDlg(); }));
+      if (S.pwd) pw.append(btnEl('Убрать', '', async () => { if (!await kzConfirm('Убрать пароль? Войти в профиль с нового устройства будет нельзя, пока не зададишь новый пароль.', { ok: 'Убрать', danger: true })) return; await setPassword(''); close(); devicesDlg(); }));
       card.append(pw);
     }
-    else card.append(btnEl('🚪 Выйти из профиля на этом устройстве', '', () => {
-      if (!confirm('Выйти из профиля на этом устройстве? Переписка, контакты и настройки профиля здесь удалятся. На других твоих устройствах всё останется, а войти сюда снова можно будет по ID и паролю.')) return;
+    else card.append(btnEl('🚪 Выйти из профиля на этом устройстве', '', async () => {
+      if (!await kzConfirm('Выйти из профиля на этом устройстве? Переписка, контакты и настройки профиля здесь удалятся. На других твоих устройствах всё останется, а войти сюда снова можно будет по ID и паролю.', { ok: 'Выйти', danger: true })) return;
       close(); jlog('[устройства] выход из профиля на этом устройстве');
       send(myId, { t: 'bye' });   // основное устройство уберёт меня из списка (если оно сейчас в сети)
       setTimeout(() => wipeDevice('Ты вышел(-ла) из профиля на этом устройстве. Можно создать новый профиль или войти снова.'), 600);
@@ -3694,7 +3715,7 @@ function settingsDlg() {
       if (x.slot !== SLOT) {
         pr.append(btnEl('Открыть', 'pri', () => { close(); switchProfile(x.slot); }));
         pr.append(btnEl('Убрать', '', async () => {
-          if (!confirm('Убрать профиль «' + (x.name || '') + '» с этого устройства? Его переписка здесь удалится.' + (x.dev ? '' : ' ВНИМАНИЕ: здесь хранится ключ этого профиля — без него в профиль больше не войти ни с одного устройства.'))) return;
+          if (!await kzConfirm('Убрать профиль «' + (x.name || '') + '» с этого устройства? Его переписка здесь удалится.' + (x.dev ? '' : ' ВНИМАНИЕ: здесь хранится ключ этого профиля — без него в профиль больше не войти ни с одного устройства.'), { ok: 'Убрать', danger: true })) return;
           await removeProfile(x); close(); settingsDlg();
         }));
       }
@@ -3858,7 +3879,7 @@ function addMembersDlg(c) {
   });
 }
 async function leaveGroup(c) {
-  const g = S.groups[c]; if (!g || !confirm('Выйти из группы «' + g.name + '»? Переписка у тебя удалится.')) return;
+  const g = S.groups[c]; if (!g || !await kzConfirm('Выйти из группы «' + g.name + '»? Переписка у тебя удалится.', { ok: 'Выйти', danger: true })) return;
   await post(c, { kind: 'sys', text: S.me.name + ' выходит из группы' });
   await sleep(400);
   const old = [...g.members]; g.members = g.members.filter(u => u !== myId); g.ver = Date.now();
@@ -3874,7 +3895,7 @@ async function markCleared(c) {
   if (ts) { (S.cleared ||= {})[c] = ts; save(); }
 }
 async function deleteChat(c) {
-  if (!confirm('Удалить переписку у себя? У собеседника она останется.')) return;
+  if (!await kzConfirm('Удалить переписку у себя? У собеседника она останется.', { ok: 'Удалить', danger: true })) return;
   await markCleared(c); await wipeChat(c); const ch = S.chats[c]; if (ch) { ch.last = null; ch.unread = 0; }
   if (!isDm(c) && S.groups[c]?.gone) { delete S.groups[c]; delete S.chats[c]; }
   else if (isDm(c) && S.contacts[dmPeer(c)]?.state === 'req') delete S.chats[c];

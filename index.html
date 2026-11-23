@@ -189,8 +189,8 @@ button.mini{min-height:32px;padding:4px 10px;font-size:13px;font-weight:600;bord
 .rdrawer[hidden]{display:none}
 .rdrawer.open{transform:none;opacity:1}
 .rdrawer.full{width:calc(100vw - 20px)}
-.rdbody{min-height:0;display:grid;grid-template-rows:minmax(0,1fr);overflow:hidden;transition:opacity .15s ease,transform .15s ease}
-.rdbody.swap{opacity:0;transform:translateY(10px)}
+.rdbody{min-height:0;display:grid;grid-template-rows:minmax(0,1fr);overflow:hidden;transition:opacity .17s ease,transform .17s ease}
+.rdbody.swap{opacity:0;transform:translateY(12px)}
 .rdbody>.mx-files{min-height:0;height:100%;animation:rdswap .28s cubic-bezier(.22,.9,.3,1)}
 @keyframes rdswap{from{opacity:0;transform:translateY(12px)}}
 .rdgrip{position:absolute;left:0;top:0;bottom:0;width:10px;z-index:4;cursor:ew-resize}
@@ -333,8 +333,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
   <aside class="rdrawer" id="rDrawer" hidden aria-label="Музыка и файлы"><div class="rdgrip" id="rdGrip" title="Потяни — изменить ширину"></div><div class="rdtools"><button class="rdx" id="rdFull" title="Во весь экран" aria-label="Во весь экран">⤢</button><button class="rdx" id="rdClose" title="Закрыть" aria-label="Закрыть">✕</button></div><div class="rdbody" id="rdBody"></div></aside>
   <header class="bar">
     <div class="barl"><button class="back" id="backBtn" title="К чатам — звонок продолжится">← Чаты</button><h1>Кинозал</h1></div>
-    <div class="viewsw" role="group" aria-label="Что на экране"><button id="viewCine" class="on"><i>🎬 </i>Кинозал</button><button id="viewHall"><i>👥 </i>Только зал</button></div>
-    <div class="viewsw toolsw" role="group" aria-label="Музыка и файлы без выхода из зала"><button id="roomMusic" hidden title="Музыка: своя, фоном и вместе с друзьями — не выходя из зала"><i>🎵 </i>Музыка</button><button id="roomFiles" title="Файлы: передачи и полученное — не выходя из зала"><i>📁 </i>Файлы</button></div>
+    <div class="viewsw toolsw" id="roomSw" role="group" aria-label="Кинозал, только зал, музыка и файлы"><button id="viewCine" class="on"><i>🎬 </i>Кинозал</button><button id="viewHall"><i>👥 </i>Только зал</button><button id="roomMusic" class="pnl" hidden title="Музыка: своя, фоном и вместе с друзьями — не выходя из зала"><i>🎵 </i>Музыка</button><button id="roomFiles" class="pnl" title="Файлы: передачи и полученное — не выходя из зала"><i>📁 </i>Файлы</button></div>
     <div class="codebox">Код зала <strong id="codeOut">—</strong><button id="copyBtn">Скопировать приглашение</button></div>
   </header>
   <div class="hall">
@@ -850,7 +849,7 @@ $('#camBtn').onclick=()=>{
 };
 
 // ---------- голоса: у каждого своя громкость ----------
-// Голос играет само видео на плитке — это путь, который эхоподавление микрофона видит на любой Windows
+// Голос играет отдельный <audio> на звуковой дорожке плитки (само видео заглушено) — это путь, который эхоподавление микрофона видит на любой Windows
 // (на Windows 10 режим «весь звук компьютера» не работает, и голос через WebAudio мог возвращаться собеседнику эхом).
 // Громкость = общий «Голоса» × регулятор на плитке (0–100 %). Параллельно голоса собираются в «немую» шину
 // WebAudio — она ничего не играет, это образец для эхо-защиты показа экрана.
@@ -863,10 +862,22 @@ function bus(){
 }
 const volKey=id=>'pv-'+(names.get(id)||id);
 function peerVol(id){const v=+store.get(volKey(id),1);return isFinite(v)?Math.max(0,Math.min(1,v)):1;}
+// Голос играет отдельным <audio> (только звуковая дорожка), а не самим <video>: у <video> с удалённым потоком звук не
+// стартует, пока не пришёл первый видеокадр, а собеседник без камеры шлёт чёрную заглушку, которая кадров почти не даёт —
+// поэтому звук «просыпался» только после включения камеры.
+function voiceSet(v,x){x=Math.max(0,Math.min(1,x));v.volume=x;if(v._aud)v._aud.volume=x;}
+function voiceStop(v){const a=v?._aud;if(!a)return;v._aud=null;try{a.pause();a.srcObject=null;}catch(e){}}
 function attachVoice(id,stream,v){
   const t=stream?.getAudioTracks()[0];
-  v.muted=false;v.volume=Math.min(1,callVol*peerVol(id));
-  if(!t){stream?.addEventListener('addtrack',()=>attachVoice(id,stream,v),{once:true});return;}
+  if(!v.isConnected)return;   // плитку уже убрали (вышли из зала) — звук поздно запускать, иначе <audio> повиснет
+  voiceSet(v,callVol*peerVol(id));
+  if(!t){voiceStop(v);dropVoice(id);v.muted=false;stream?.addEventListener('addtrack',()=>attachVoice(id,stream,v),{once:true});return;}
+  if(!v._aud||v._audTrack!==t){
+    voiceStop(v);
+    const a=new Audio();a.autoplay=true;a.srcObject=new MediaStream([t]);a.volume=v.volume;
+    v._aud=a;v._audTrack=t;v.muted=true;
+    a.play().catch(()=>{});
+  }
   const cur=voices.get(id);if(cur&&cur.track===t)return;
   dropVoice(id);
   const b=bus();if(!b)return;
@@ -880,7 +891,7 @@ function setPeerVol(id,val){
   val=Math.max(0,Math.min(1,+val||0));store.set(volKey(id),val);
   const o=voices.get(id);if(o)o.gain.gain.setTargetAtTime(val,o.gain.context.currentTime,.03);
   const t=document.getElementById('tile-'+id);
-  if(t){const v=t.querySelector('video');if(v)v.volume=Math.min(1,callVol*val);syncVolUi(t,val);}
+  if(t){const v=t.querySelector('video');if(v)voiceSet(v,callVol*val);syncVolUi(t,val);}
 }
 function syncVolUi(t,val){
   const r=t.querySelector('.tvol input'),sp=t.querySelector('.tvol span');
@@ -920,7 +931,7 @@ function tileActs(t,id,mine){
   box.append(pb);
   if(!mine&&!id.startsWith('scr-')){
     const kb=document.createElement('button');kb.type='button';kb.className='kick';kb.textContent='✕';kb.title='Удалить из зала';kb.setAttribute('aria-label','Удалить из зала');kb.hidden=!isHost;
-    kb.onclick=e=>{e.stopPropagation();const n=names.get(id)||'этого участника';if(confirm('Удалить «'+n+'» из зала? Вернуться в этот зал он уже не сможет.'))kickGuest(id);};
+    kb.onclick=async e=>{e.stopPropagation();const n=names.get(id)||'этого участника';if(await kzConfirm('Удалить «'+n+'» из зала? Вернуться в этот зал он уже не сможет.',{ok:'Удалить',danger:true}))kickGuest(id);};
     box.append(kb);
   }
   t.append(box);
@@ -937,7 +948,7 @@ function setName(t,name){
 function rename(id){const t=document.getElementById('tile-'+id);if(t&&names.get(id)){setName(t,names.get(id));if(!t.classList.contains('mine')){setPeerVol(id,peerVol(id));}}}
 function dropTile(id){
   const old=document.getElementById('tile-'+id);if(old)tileGhost(old);
-  old?.remove();dropVoice(id);meters.get(id)?.src?.disconnect();meters.delete(id);avState.delete(id);
+  voiceStop(old?.querySelector('video'));old?.remove();dropVoice(id);meters.get(id)?.src?.disconnect();meters.delete(id);avState.delete(id);
   if(pinned===id){pinned=null;applyPin();}
   count();refreshPip();
 }
@@ -966,7 +977,7 @@ function count(){
 $('#callVol').oninput=e=>{
   callVol=+e.target.value;store.set('callVol',callVol);
   if(voiceBus)voiceBus.gain.setTargetAtTime(callVol,voiceBus.context.currentTime,.03);
-  document.querySelectorAll('.tile:not(.mine)').forEach(t=>{const id=t.id.slice(5);t.querySelector('video').volume=Math.min(1,callVol*peerVol(id));});
+  document.querySelectorAll('.tile:not(.mine)').forEach(t=>{const id=t.id.slice(5);voiceSet(t.querySelector('video'),callVol*peerVol(id));});
 };
 
 // ---------- служба звука упала ----------
@@ -986,7 +997,11 @@ async function heardSamples(c){
   let n=null;try{(await pc.getStats()).forEach(r=>{if(r.type==='inbound-rtp'&&r.kind==='audio')n=(n||0)+(r.totalSamplesReceived||0);});}catch(e){return null;}
   return n;
 }
-function replay(v){const s=v?.srcObject;if(!s)return false;v.srcObject=null;v.srcObject=s;v.play().catch(()=>{});return true;}
+function replay(v){
+  const s=v?.srcObject;if(!s)return false;v.srcObject=null;v.srcObject=s;v.play().catch(()=>{});
+  const a=v._aud;if(a){const t=v._audTrack;a.srcObject=null;a.srcObject=new MediaStream(t?[t]:s.getAudioTracks());a.play().catch(()=>{});}
+  return true;
+}
 function reviveFile(){
   if(!fileMode()||!screen.getAttribute('src'))return false;
   const t=screen.currentTime||0,go=mode==='host'&&performance.now()-(screen._tick||0)<4000;
@@ -1151,6 +1166,10 @@ function setView(v){
   document.querySelectorAll('#tiles video').forEach(x=>x.play().catch(()=>{}));
   syncMineFloat();refreshPip();updCallNote();
 }
+// окно свёрнуто или спрятано в трей — плитки с камерами не рисуем (звук идёт отдельным <audio>, показ экрана не трогаем)
+document.addEventListener('visibilitychange',()=>{
+  document.querySelectorAll('#tiles video,#spot video').forEach(x=>{if(document.hidden)x.pause();else x.play().catch(()=>{});});
+});
 // ---------- приоритет: кого смотреть крупно ----------
 // Как в Discord: закреплённый — на всю сцену, остальные полосой снизу. Закрепить можно и чужой показ экрана.
 let pinned=null;
@@ -1186,8 +1205,27 @@ function flipTiles(fn){
     e.animate([{transformOrigin:'0 0',transform:'translate('+dx+'px,'+dy+'px) scale('+sx+','+sy+')'},{transformOrigin:'0 0',transform:'none'}],{duration:380,easing:'cubic-bezier(.2,.9,.25,1)'});
   });
 }
-$('#viewCine').onclick=()=>setView('cinema');
-$('#viewHall').onclick=()=>setView('hall');
+// единый переключатель: выбор вида зала закрывает открытую панель «Музыка»/«Файлы»
+const closeRoomPanel=()=>{const w=document.querySelector('#roomMusic.on')?'music':document.querySelector('#roomFiles.on')?'files':'';if(w)window.kzPanel?.(w);};
+$('#viewCine').onclick=()=>{closeRoomPanel();setView('cinema');};
+$('#viewHall').onclick=()=>{closeRoomPanel();setView('hall');};
+// бегунок единого переключателя скользит под активную кнопку (панель, если открыта, иначе вид зала)
+(()=>{
+  const sw=$('#roomSw');if(!sw)return;
+  let first=true;
+  const place=()=>{
+    const b=sw.querySelector('.pnl.on')||sw.querySelector('#viewHall.on')||sw.querySelector('#viewCine');
+    if(!b||!b.offsetWidth){sw.style.setProperty('--io','0');return;}
+    if(first){sw.classList.add('nomove');}
+    sw.style.setProperty('--ix',b.offsetLeft+'px');sw.style.setProperty('--iw',b.offsetWidth+'px');sw.style.setProperty('--io','1');
+    if(first){first=false;void sw.offsetWidth;sw.classList.remove('nomove');}
+  };
+  new MutationObserver(place).observe(sw,{subtree:true,attributes:true,attributeFilter:['class','hidden']});
+  addEventListener('resize',place);
+  if(window.ResizeObserver)new ResizeObserver(place).observe(sw);
+  place();
+  window.kzSwPlace=place;
+})();
 $('#roomMusic').onclick=()=>window.kzPanel?.('music');
 $('#roomFiles').onclick=()=>window.kzPanel?.('files');
 $('#rdClose').onclick=()=>{const w=document.querySelector('#roomMusic.on')?'music':'files';window.kzPanel?.(w);};
@@ -2340,6 +2378,9 @@ function reset(){
   guests.clear();camCalls.clear();movieCalls.clear();
   if(fileUrl){URL.revokeObjectURL(fileUrl);fileUrl='';}
   subs={cues:[],name:'',shift:0};updSubUi();
+  // отпускаем потоки у всех видео, чтобы декодеры и звук освободились сразу, а не когда сборщик мусора до них дойдёт
+  document.querySelectorAll('#tiles video,#spot video').forEach(v=>{voiceStop(v);try{v.pause();}catch(e){}v.srcObject=null;});
+  try{shareVid.pause();shareVid.srcObject=null;}catch(e){}
   $('#tiles').innerHTML='';$('#msgs').innerHTML='';$('#movieName').textContent='';$('#fileBtn').textContent='Выбрать фильм';
   hideHelp();hideOffer();$('#ownBtn').hidden=true;
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});

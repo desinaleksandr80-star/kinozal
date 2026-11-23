@@ -321,3 +321,116 @@ window.kzTheme = { open, apply: () => apply(T), get: () => clone(T), frameAv, cl
   const all = () => document.querySelectorAll('input[type=range]').forEach(fill);
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', all); else all();
 })();
+
+// ---------- единые подсказки при наведении и собственные окна подтверждения ----------
+(() => {
+  const ready = f => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', f) : f();
+  // --- подсказки: заменяют нативный title ---
+  let tip = null, timer = 0, cur = null, saved = '', shownAt = 0, mo = null;
+  const textOf = el => {
+    if (el.hasAttribute('title')) return el.getAttribute('title') || '';
+    if (el.dataset && el.dataset.kzt) return el.dataset.kzt;
+    const al = el.getAttribute('aria-label');
+    if (al && !(el.textContent || '').trim() && /^(BUTTON|A|SUMMARY)$/.test(el.tagName)) return al;
+    return '';
+  };
+  const hideTip = () => {
+    clearTimeout(timer);
+    if (mo) mo.disconnect();
+    if (cur && saved) { try { if (!cur.hasAttribute('title')) cur.setAttribute('title', saved); } catch (e) {} }
+    cur = null; saved = '';
+    if (tip) tip.classList.remove('on');
+  };
+  const place = el => {
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight, vw = innerWidth, vh = innerHeight, g = 9;
+    let x = r.left + r.width / 2 - w / 2; x = Math.max(8, Math.min(vw - w - 8, x));
+    let y = r.bottom + g, up = false;
+    if (y + h > vh - 8) { y = r.top - h - g; up = true; }
+    if (y < 8) y = Math.max(8, Math.min(vh - h - 8, r.bottom + g));
+    tip.style.left = Math.round(x) + 'px'; tip.style.top = Math.round(y) + 'px';
+    tip.style.setProperty('--ox', Math.round(r.left + r.width / 2 - x) + 'px');
+    tip.classList.toggle('up', up);
+  };
+  const show = (el, t) => {
+    if (!tip) { tip = document.createElement('div'); tip.className = 'kz-tip'; tip.setAttribute('role', 'tooltip'); document.body.append(tip); }
+    tip.textContent = t; place(el); tip.classList.add('on'); shownAt = Date.now();
+  };
+  const canHover = () => { try { return matchMedia('(hover:hover)').matches; } catch (e) { return true; } };
+  ready(() => {
+    if (!canHover()) return;
+    document.addEventListener('mouseover', e => {
+      const SEL = '[title],[data-kzt],[aria-label]';
+      let el = e.target.closest && e.target.closest(SEL);
+      // ближайший элемент без своего текста (значок с aria-label внутри кнопки с title) — берём подсказку у родителя
+      while (el && !el.hasAttribute('title') && !textOf(el)) el = el.parentElement && el.parentElement.closest(SEL);
+      if (el === cur) return;
+      hideTip();
+      if (!el) return;
+      if (el.closest('.kz-dlg') && !el.hasAttribute('title') && !el.dataset.kzt) return;
+      const t = textOf(el);
+      if (!t) return;
+      cur = el;
+      if (el.hasAttribute('title')) {
+        saved = el.getAttribute('title'); el.removeAttribute('title');
+        // код страницы может вернуть title, пока элемент под мышью (ход закачки и т.п.) — перехватываем, чтобы не вылезла системная подсказка
+        try {
+          mo = mo || new MutationObserver(() => {
+            if (!cur || !cur.hasAttribute('title')) return;
+            saved = cur.getAttribute('title'); cur.removeAttribute('title');
+            if (tip && tip.classList.contains('on')) { if (saved) { tip.textContent = saved; place(cur); } else tip.classList.remove('on'); }
+          });
+          mo.observe(el, { attributes: true, attributeFilter: ['title'] });
+        } catch (er) {}
+      }
+      const quick = tip && Date.now() - shownAt < 700;
+      timer = setTimeout(() => { if (cur === el && el.isConnected && (saved || t)) show(el, saved || t); }, quick ? 60 : 400);
+    }, true);
+    document.addEventListener('mouseout', e => { if (cur && !cur.contains(e.relatedTarget)) hideTip(); }, true);
+    addEventListener('scroll', hideTip, true);
+    addEventListener('blur', hideTip);
+    document.addEventListener('mousedown', hideTip, true);
+    document.addEventListener('keydown', hideTip, true);
+    document.addEventListener('contextmenu', hideTip, true);
+  });
+
+  // --- окно подтверждения: window.kzConfirm(текст, {ok, cancel, danger, title}) -> Promise<boolean> ---
+  const dlg = (text, o, single) => new Promise(res => {
+    const prev = document.activeElement;
+    const ov = document.createElement('div'); ov.className = 'kz-dlg';
+    const box = document.createElement('div'); box.className = 'kz-dlg-box' + (o.danger ? ' danger' : ''); box.setAttribute('role', 'alertdialog'); box.setAttribute('aria-modal', 'true');
+    if (o.title) { const h = document.createElement('div'); h.className = 'kz-dlg-t'; h.textContent = o.title; box.append(h); }
+    const p = document.createElement('div'); p.className = 'kz-dlg-m'; p.textContent = String(text == null ? '' : text); box.append(p);
+    const row = document.createElement('div'); row.className = 'kz-dlg-b';
+    let no = null;
+    if (!single) { no = document.createElement('button'); no.type = 'button'; no.className = 'kz-dlg-no'; no.textContent = o.cancel || 'Отмена'; row.append(no); }
+    const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'kz-dlg-ok'; ok.textContent = o.ok || 'ОК'; row.append(ok);
+    box.append(row); ov.append(box); document.body.append(ov);
+    let done = false;
+    const fin = v => {
+      if (done) return; done = true;
+      document.removeEventListener('keydown', key, true);
+      ov.classList.remove('on'); ov.classList.add('out');
+      setTimeout(() => ov.remove(), 220);
+      try { prev && prev.focus && prev.focus({ preventScroll: true }); } catch (e) {}
+      res(v);
+    };
+    const key = e => {
+      if (ov !== [...document.querySelectorAll('.kz-dlg:not(.out)')].pop()) return;   // отвечает только верхнее окно
+      if (e.repeat && (e.key === 'Enter' || e.key === 'Escape')) { e.preventDefault(); e.stopPropagation(); return; }   // зажатый Enter не должен подтверждать сам
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); fin(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); fin(document.activeElement === no ? false : true); }
+      else if (e.key === 'Tab') {
+        const bs = no ? [no, ok] : [ok], i = bs.indexOf(document.activeElement);
+        e.preventDefault(); bs[(i + (e.shiftKey ? bs.length - 1 : 1)) % bs.length].focus();
+      }
+    };
+    document.addEventListener('keydown', key, true);
+    ok.onclick = () => fin(true); if (no) no.onclick = () => fin(false);
+    const t0 = Date.now();
+    ov.addEventListener('mousedown', e => { if (e.target === ov && Date.now() - t0 > 250) fin(false); });   // двойной щелчок по кнопке не должен сразу отменять
+    requestAnimationFrame(() => { ov.classList.add('on'); ok.focus(); });
+  });
+  window.kzConfirm = (text, o = {}) => dlg(text, o, false);
+  window.kzAlert = (text, o = {}) => dlg(text, o, true).then(() => {});
+  window.alert = text => { window.kzAlert(text); };
+})();

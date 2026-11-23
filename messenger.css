@@ -61,7 +61,8 @@
 .ci .ls .ty{color:var(--acc2)}
 .ci .badge{flex:none;min-width:22px;height:22px;padding:0 7px;border-radius:11px;background:var(--acc);color:var(--mineInk);font-size:12px;font-weight:800;display:grid;place-items:center}
 .ci .tick{color:var(--acc2);font-size:12px;flex:none}
-.mx-fab{position:absolute;right:18px;bottom:20px;z-index:2}
+.mx-fab{position:absolute;right:18px;bottom:20px;z-index:2;transition:bottom .3s cubic-bezier(.2,.8,.2,1)}
+#mx:not(.rail) .mx-side:has(.mu-mini:not([hidden])) .mx-fab{bottom:96px}
 .fab{width:56px;height:56px;border-radius:50%;border:0;background:linear-gradient(135deg,var(--mine1),var(--mine2));color:var(--mineInk);font-size:26px;box-shadow:0 10px 26px color-mix(in srgb,var(--mine2) 40%,transparent);display:grid;place-items:center;cursor:pointer;transition:transform .15s}
 .fab:hover{transform:scale(1.06);filter:brightness(1.1)}
 .fabmenu{position:absolute;bottom:68px;right:0;width:230px;background:var(--card);border:1px solid var(--line2);border-radius:16px;padding:6px;box-shadow:0 18px 40px rgba(0,0,0,.5)}
@@ -123,7 +124,7 @@
 .mx-msgs{overflow-y:auto;padding:16px max(16px,calc((100% - 820px)/2)) 10px;display:flex;flex-direction:column;gap:3px;min-height:0;overscroll-behavior:contain}
 .day{align-self:center;margin:14px 0 8px;padding:4px 12px;border-radius:12px;background:var(--chip);color:var(--mute);font-size:12.5px;font-weight:700}
 .sysm{align-self:center;margin:6px 0;padding:5px 14px;border-radius:12px;background:var(--chip);color:var(--mute);font-size:13px;text-align:center;max-width:80%}
-.m{display:flex;align-items:flex-end;gap:8px;max-width:min(560px,82%);align-self:flex-start;animation:mxin .18s ease-out}
+.m{display:flex;align-items:flex-end;gap:8px;max-width:min(560px,82%);align-self:flex-start;animation:mxin .28s cubic-bezier(.2,.8,.2,1)}
 .m.mine{align-self:flex-end;flex-direction:row-reverse}
 .m+.m.gap{margin-top:8px}
 @keyframes mxin{from{opacity:0;transform:translateY(6px)}}
@@ -183,7 +184,7 @@
 .filecard .t{min-width:0}
 .filecard .t b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .filecard .t span{font-size:13px;opacity:.75}
-.filecard:hover .t span{text-decoration:underline}
+.filecard:hover .t span{text-decoration:none;color:var(--acc2)}
 .filecard.big .t{flex:1}
 .filecard .xbar{display:block;height:4px;margin-top:7px;border-radius:3px;background:rgba(127,127,127,.25);overflow:hidden}
 .filecard .xbar[hidden]{display:none}
@@ -191,6 +192,17 @@
 .m.mine .filecard .xbar>i{background:currentColor}
 .filecard .xmode{display:inline-block;margin-top:6px;padding:2px 9px;border-radius:999px;font-size:12px!important;font-weight:700;opacity:1!important;background:rgba(127,127,127,.18);cursor:pointer;user-select:none}
 .filecard .xmode[hidden]{display:none}
+.filecard .fdl{flex:none;margin-left:auto;padding:7px 13px;border-radius:999px;font:700 13px Manrope,sans-serif;white-space:nowrap;cursor:pointer;user-select:none;color:#fff;background:var(--acc);box-shadow:0 2px 8px rgba(0,0,0,.18);transition:filter .15s,transform .15s}
+.filecard .fdl[hidden]{display:none}
+.filecard .fdl:hover{filter:brightness(1.12);transform:translateY(-1px)}
+.filecard .fdl:active{transform:none}
+.filecard .fdl:focus-visible{outline:2px solid var(--acc2);outline-offset:2px}
+.filecard .fdl.go{background:linear-gradient(90deg,var(--acc) var(--p,0%),rgba(127,127,127,.35) var(--p,0%));min-width:74px;text-align:center}
+.filecard .fdl.done{background:rgba(127,127,127,.22);color:inherit;box-shadow:none}
+.filecard .fdl.busy{opacity:.7;pointer-events:none}
+.m.mine .filecard .fdl{background:var(--mineInk);color:var(--mine1)}
+.m.mine .filecard .fdl.go{background:linear-gradient(90deg,var(--mineInk) var(--p,0%),rgba(127,127,127,.35) var(--p,0%));color:var(--mine1)}
+.m.mine .filecard .fdl.done{background:rgba(127,127,127,.22);color:inherit}
 .filecard .xmode:hover{background:rgba(127,127,127,.3);text-decoration:none!important}
 .xspeed{display:grid;gap:8px}
 .xspeed .seg{display:flex;gap:6px;flex-wrap:wrap}
@@ -240,7 +252,7 @@
 .circrec .row{display:flex;align-items:center;gap:14px;color:var(--ink);font-weight:700}
 
 /* модальные окна */
-.mx-modal{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:16px;background:rgba(4,7,8,.7);backdrop-filter:blur(4px);animation:mxfade .15s}
+.mx-modal{position:fixed;inset:0;z-index:30;display:grid;place-items:center;padding:16px;background:rgba(4,7,8,.7);backdrop-filter:blur(4px);animation:mxfade .28s}
 @keyframes mxfade{from{opacity:0}}
 .mx-card{width:min(440px,100%);max-height:calc(100vh - 32px);overflow:auto;background:var(--card);border:1px solid var(--line2);border-radius:24px;padding:24px;display:grid;gap:16px;box-shadow:0 30px 80px rgba(0,0,0,.55);animation:mxpop .18s ease-out}
 @keyframes mxpop{from{transform:scale(.96);opacity:0}}
@@ -354,7 +366,7 @@ html.kz-shake body{animation:kzshake .6s}
 /* ---------- анимации: только transform и opacity — плавно и на слабом телефоне ---------- */
 :root{--ease-out:cubic-bezier(.2,.8,.2,1);--ease-spring:cubic-bezier(.2,1.25,.4,1)}
 /* нажатие: кнопка чуть проседает */
-button,.ci{transition:background .15s,border-color .15s,color .15s,transform .14s var(--ease-out),filter .15s}
+button,.ci{transition:background .15s,border-color .26s,color .15s,transform .14s var(--ease-out),filter .15s}
 :is(.btn,.ib,.fab,.cz,.mini,.kzt-tab,.kzt-wall,.kzt-pv,.menu button,.ring .rb,#room .ctrls>button,.viewsw button,.mx-chead .back):active:not(:disabled){transform:scale(.95)}
 .ci:active{transform:scale(.985)}
 /* новое сообщение влетает: своё — справа, чужое — слева, с лёгкой пружиной */
@@ -517,7 +529,8 @@ html.wall-all #mx>.mx-side{z-index:2}
 .fsort{min-height:38px;border-radius:12px;border:1px solid var(--line2);background:var(--field);color:var(--ink);padding:0 10px;font:600 13px var(--font),sans-serif}
 .fcrumbs{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:13px;color:var(--mute)}
 .lnk{border:0;background:none;padding:2px 0;color:var(--acc);font:700 13px var(--font),sans-serif;cursor:pointer}
-.lnk:hover{text-decoration:underline}.lnk.del{color:#ff6b6b}
+.lnk{text-decoration:none;transition:filter .25s cubic-bezier(.2,.8,.2,1),opacity .25s,transform .25s cubic-bezier(.2,.8,.2,1)}
+.lnk:hover{text-decoration:none;filter:brightness(1.18)}.lnk:active{transform:scale(.96)}.lnk.del{color:#ff6b6b}
 .flist{overflow-y:auto;padding:10px 16px 24px;display:grid;align-content:start;gap:8px}
 .flist h3{margin:10px 2px 2px;font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--mute)}
 .frow{border-radius:16px;background:var(--card);border:1px solid var(--line2);padding:10px 14px}

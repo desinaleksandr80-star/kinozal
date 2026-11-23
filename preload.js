@@ -41,6 +41,12 @@ const files = {
   watch: cb => { ipcRenderer.removeAllListeners('kz:fchanged'); ipcRenderer.on('kz:fchanged', () => cb()); return ipcRenderer.invoke('kz:fwatch'); }
 };
 
+// File и FileList через contextBridge не доезжают (список «не итерируется»), поэтому пути берём здесь, в мире preload:
+// на каждый бросок файлов запоминаем пути — страница спрашивает их через music.droppedPaths()
+const pathsOfFiles = fl => { const out = []; try { for (const f of Array.from(fl || [])) { try { const p = webUtils.getPathForFile(f); if (p) out.push(p); } catch (e) {} } } catch (e) {} return out; };
+let lastDropped = [];
+window.addEventListener('drop', e => { try { lastDropped = pathsOfFiles(e.dataTransfer && e.dataTransfer.files); } catch (er) { lastDropped = []; } }, true);
+
 // музыка: своя папка, список, звук по kzmusic://, слежение
 const music = {
   root: () => ipcRenderer.invoke('kz:mroot'),
@@ -50,7 +56,9 @@ const music = {
   read: (p, off, len) => ipcRenderer.invoke('kz:mread', p, off, len),
   hash: p => ipcRenderer.invoke('kz:mhash', p),
   add: list => ipcRenderer.invoke('kz:madd', list),
-  addDropped: fl => ipcRenderer.invoke('kz:madd', [...fl].map(f => { try { return webUtils.getPathForFile(f); } catch (e) { return ''; } })),
+  addDropped: fl => ipcRenderer.invoke('kz:madd', pathsOfFiles(fl)),
+  addPaths: list => ipcRenderer.invoke('kz:maddx', list),
+  droppedPaths: () => lastDropped,
   pickFiles: () => ipcRenderer.invoke('kz:mpickfiles'),
   lyrics: p => ipcRenderer.invoke('kz:mlyrics', p),
   saveOpen: (id, name) => ipcRenderer.invoke('kz:msaveopen', id, name),
