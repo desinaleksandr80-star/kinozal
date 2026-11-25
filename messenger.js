@@ -1207,8 +1207,9 @@ function msgMenu(m, e) {
   if (!locked) add('↩', 'Ответить', () => setReply(m));
   if (m.text && m.kind === 'text' && !locked) add('📋', 'Копировать текст', () => navigator.clipboard.writeText(m.text).then(() => toast('Скопировано')).catch(() => {}));
   if (m.kind === 'img' && !locked) add('🖼', 'Открыть фото', () => photo(m));
-  add('🗑', 'Удалить у себя', () => dropMsg(m), 'danger');
+  // своё убирается сразу у всех; чужое — только у себя: удалить его у всех может лишь автор
   if (m.from === myId) add('🧨', 'Удалить у всех', () => dropForAll(m), 'danger');
+  else add('🗑', 'Удалить у себя', () => dropMsg(m), 'danger');
   document.body.append(mn); mn.addEventListener('click', ev => ev.stopPropagation());
 }
 // фото из чата — в то же окно просмотра, с приближением и перемещением
