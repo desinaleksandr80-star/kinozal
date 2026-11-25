@@ -32,6 +32,33 @@ const PRESETS = [
   { id: 'graphite', name: 'Графит', bg: '#121212', side: '#161616', main: '#101010', card: '#1c1c1c', field: '#0d0d0d', line: '#2a2a2a', ink: '#f2f2f2', mute: '#9a9a9a', acc: '#e6e6e6', acc2: '#bdbdbd',
     mine1: '#3d3d3d', mine2: '#2f2f2f', mineInk: '#ffffff', bub: '#1f1f1f', bubInk: '#f2f2f2', wall: W('none', { glow: false }), neon: N(false), font: 'Montserrat', hfont: 'Montserrat', fs: 15, rad: 14, avR: 50 }
 ];
+// ---------- цвет галочек «прочитано» ----------
+// Поле темы tickRead необязательное: пустое — берётся цвет, подобранный под пузырь своей темы.
+const TICKS = { kinozal: '#0a2fc4', noir: '#8ffcff', cyber: '#0038d1', matrix: '#ffe94d', midnight: '#8dffd2', sunset: '#0a2fb8', aurora: '#ffffff', sakura: '#0a2fc4', vhs: '#0a2fb8', fire: '#ffe45c', graphite: '#53bdeb' };
+const rgb = c => [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16));
+const lum = c => rgb(c).map(v => { v /= 255; return v <= .03928 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4; }).reduce((s, v, i) => s + v * [.2126, .7152, .0722][i], 0);
+const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+// метка времени стоит у правого края пузыря, то есть на втором цвете градиента
+function tickColor(t) {
+  if (t.tickRead) return t.tickRead;
+  const own = TICKS[t.id];
+  if (own && contrast(own, t.mine2) >= 2.6) return own;
+  const far = c => Math.min(contrast(c, t.mine2), 4) + Math.min(contrast(c, t.mineInk), 3);
+  return ['#0a2fc4', '#ffffff', '#8ffcff', '#ffe94d'].sort((a, b) => far(b) - far(a))[0];
+}
+// тот же тон для тёмных и светлых подложек (фото, список чатов): меняем только светлоту, чтобы цвет не блёк
+function tickOn(c, bg) {
+  const v = rgb(c), max = Math.max(...v), min = Math.min(...v), d = max - min;
+  const grey = d < 40;   // белый и серый не отличить от обычных галочек — берём голубой
+  const [r, g, bl] = grey ? rgb('#53bdeb') : v, hi = Math.max(r, g, bl), span = hi - Math.min(r, g, bl);
+  const hue = (hi === r ? (g - bl) / span + 6 : hi === g ? (bl - r) / span + 2 : (r - g) / span + 4) % 6 * 60;
+  const sat = grey ? .85 : Math.max(.7, d / (255 - Math.abs(max + min - 255) || 1));
+  const make = l => { const a = sat * Math.min(l, 1 - l); return '#' + [0, 8, 4].map(n => { const k = (n + hue / 30) % 12; return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1)))).toString(16).padStart(2, '0'); }).join(''); };
+  const dark = lum(bg) < .35;
+  let l = dark ? .55 : .45, out = make(l);
+  while (contrast(out, bg) < 4 && l > .05 && l < .95) out = make(l += dark ? .03 : -.03);
+  return out;
+}
 const FONTS = { 'Manrope': 'Manrope:wght@400;500;600;700;800', 'Unbounded': 'Unbounded:wght@500;700', 'Comfortaa': 'Comfortaa:wght@400;600;700', 'Rubik': 'Rubik:wght@400;500;600;700', 'Nunito': 'Nunito:wght@400;600;700;800',
   'Montserrat': 'Montserrat:wght@400;500;600;700', 'JetBrains Mono': 'JetBrains+Mono:wght@400;600;700', 'Russo One': 'Russo+One', 'Oswald': 'Oswald:wght@400;600', 'Caveat': 'Caveat:wght@500;700',
   'Lobster': 'Lobster', 'PT Serif': 'PT+Serif:wght@400;700', 'Press Start 2P': 'Press+Start+2P', 'Системный': '' };
@@ -45,6 +72,7 @@ function normalize(x) {
   for (const k of ['bg', 'side', 'main', 'card', 'field', 'line', 'ink', 'mute', 'acc', 'acc2', 'mine1', 'mine2', 'mineInk', 'bub', 'bubInk']) t[k] = hex(t[k]) || b[k];
   for (const k of ['c1', 'c2', 'c3']) t.wall[k] = hex(t.wall[k]) || b.wall[k];
   for (const k of ['c1', 'c2']) t.neon[k] = hex(t.neon[k]) || b.neon[k];
+  t.tickRead = hex(x?.tickRead) || '';
   if (!(t.font in FONTS)) t.font = b.font; if (!(t.hfont in FONTS)) t.hfont = b.hfont;
   const num = (v, lo, hi, d) => { v = +v; return isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
   t.fs = num(t.fs, 12, 20, 15); t.rad = num(t.rad, 0, 28, 18); t.avR = num(t.avR, 0, 50, 50);
@@ -97,6 +125,8 @@ let applyN = 0;
 async function apply(t = T) {
   const n = ++applyN, r = document.documentElement, st = r.style, set = (k, v) => st.setProperty(k, v);
   for (const k of ['bg', 'side', 'main', 'card', 'field', 'ink', 'mute', 'acc', 'acc2', 'mine1', 'mine2', 'mineInk', 'bub', 'bubInk']) set('--' + k, t[k]);
+  const tr = tickColor(t);
+  set('--tickRead', tr); set('--tickReadMedia', tickOn(tr, '#333333')); set('--tickReadList', tickOn(tr, t.side)); set('--tickReadMain', tickOn(tr, t.main));
   set('--line', t.line); set('--line2', t.line); set('--panel', t.card); set('--panel2', `color-mix(in srgb,${t.card},${t.ink} 7%)`);
   set('--fs', t.fs + 'px'); set('--rad', t.rad + 'px'); set('--avR', t.avR + '%'); set('--font', ff(t.font)); set('--hfont', ff(t.hfont));
   loadFont(t.font); loadFont(t.hfont);
@@ -147,7 +177,7 @@ function open(opts = {}) {
   // живой образец переписки: рисуется теми же переменными, что и настоящий чат, — сразу видно, что ставишь
   const lv = h('div', 'kzt-live'); lv.setAttribute('aria-hidden', 'true');
   lv.innerHTML = '<div class="kzt-lw"></div><div class="kzt-lg"></div><div class="kzt-lc"><div class="kzt-lh"><span class="kzt-la">А</span><b>Собеседник</b><small>в сети</small></div>' +
-    '<div class="kzt-lm them">Привет! Что смотрим?</div><div class="kzt-lm me">Давай кино 🍿</div><div class="kzt-li">Сообщение…</div></div>';
+    '<div class="kzt-lm them">Привет! Что смотрим?</div><div class="kzt-lm me">Давай кино 🍿 <span class="kzt-lk">✓✓</span></div><div class="kzt-li">Сообщение…</div></div>';
   card.append(head, lv, body, foot); ov.append(card); document.body.append(ov);
   const TABS = [['themes', '✨ Темы'], ['colors', '🎨 Цвета'], ['wall', '🖼 Обои'], ['neon', '💡 Неон'], ['shape', '🔤 Шрифт и форма'], ...(opts.onFrame ? [['frame', '👤 Моя рамка']] : [])];
   // смена вкладки — содержимое мягко проявляется (перезапуск анимации через reflow)
@@ -157,6 +187,8 @@ function open(opts = {}) {
   const put = (p, v) => { const ks = p.split('.'), last = ks.pop(); ks.reduce((o, k) => o[k], D)[last] = v; live(); };
   // элементы управления
   const color = (label, p) => { const l = h('label', 'kzt-color'), i = h('input'); i.type = 'color'; i.value = get(p); i.oninput = () => put(p, i.value); l.append(i, h('span', '', label)); return l; };
+  // пока цвет не выбран, показываем тот, что подобран автоматически
+  const tickPick = () => { const l = color('Галочки «прочитано»', 'tickRead'); l.firstChild.value = tickColor(D); return l; };
   const range = (label, p, min, max, step, fmt) => {
     const l = h('label', 'kzt-range'), t = h('span'), i = h('input'), v = h('b');
     i.type = 'range'; i.min = min; i.max = max; i.step = step; i.value = get(p);
@@ -211,7 +243,7 @@ function open(opts = {}) {
     if (tab === 'colors') {
       body.append(sec('Главные', grid(color('Акцент', 'acc'), color('Второй акцент', 'acc2'), color('Текст', 'ink'), color('Приглушённый текст', 'mute'))),
         sec('Фон', grid(color('Фон программы', 'bg'), color('Список чатов', 'side'), color('Фон переписки', 'main'), color('Окна и меню', 'card'), color('Поля ввода', 'field'), color('Линии и рамки', 'line'))),
-        sec('Сообщения', grid(color('Мои — цвет 1', 'mine1'), color('Мои — цвет 2', 'mine2'), color('Текст моих', 'mineInk'), color('Чужие', 'bub'), color('Текст чужих', 'bubInk'))));
+        sec('Сообщения', grid(color('Мои — цвет 1', 'mine1'), color('Мои — цвет 2', 'mine2'), color('Текст моих', 'mineInk'), color('Чужие', 'bub'), color('Текст чужих', 'bubInk'), tickPick())));
     }
     if (tab === 'wall') {
       const more = h('div');

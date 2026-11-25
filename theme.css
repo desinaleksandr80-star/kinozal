@@ -69,6 +69,7 @@ html.neon-text :is(.mx-top h1,.mx-chead .who b,.mx-empty h2,.bar h1){text-shadow
 .kzt-lm{max-width:72%;padding:6px 11px;border-radius:var(--rad,18px);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .kzt-lm.them{align-self:flex-start;background:var(--bub);color:var(--bubInk)}
 .kzt-lm.me{align-self:flex-end;background:linear-gradient(135deg,var(--mine1),var(--mine2));color:var(--mineInk)}
+.kzt-lk{color:var(--tickRead);font-weight:800;font-size:12px;letter-spacing:-.12em;padding-right:.12em}
 .kzt-li{margin-top:auto;padding:6px 12px;border-radius:14px;background:var(--field);border:1px solid var(--line);color:var(--mute);font-size:12.5px}
 html.neon-av .kzt-la{box-shadow:0 0 0 var(--nw) var(--neon),0 0 var(--ng) var(--neon)}
 html.neon-bub .kzt-lm.them{box-shadow:0 0 0 1px var(--neon),0 0 var(--ng) color-mix(in srgb,var(--neon) 55%,transparent)}

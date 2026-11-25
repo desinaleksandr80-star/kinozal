@@ -967,7 +967,7 @@ function renderList() {
     r1.append(el('span', 'nm', chatTitle(ch.id)));
     const ac = isDm(ch.id) ? actOf(dmPeer(ch.id)) : null; if (ac) { const bd = el('span', 'actb', actIcon(ac)); bd.title = actText(ac); r1.append(bd); }
     const l = ch.last;
-    if (l?.from === myId && l.kind !== 'sys') r1.append(el('span', 'tick', readBy(ch.id, l.ts) || l.ack ? '✓✓' : '✓'));
+    if (l?.from === myId && l.kind !== 'sys') { const [t, c, ti] = tickOf({ chat: ch.id, ts: l.ts, ack: l.ack }); const k = el('span', 'tick ' + c, t); k.dataset.kzt = ti; r1.append(k); }
     r1.append(el('span', 'tm', listTime(l?.ts || ch.created)));
     const ls = el('span', 'ls'), ty = typingIn(ch.id);
     if (ty) ls.append(el('span', 'ty', (isDm(ch.id) ? '' : nameOf(ty) + ' ') + 'печатает'));
@@ -1135,13 +1135,13 @@ function renderHead() {
 const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
 
 // ---------- пузыри сообщений ----------
-function tickOf(m) { if (readBy(m.chat, m.ts)) return ['✓✓', 'read', 'Прочитано']; if (m.ack) return ['✓✓', '', 'Доставлено']; return ['✓', '', 'Ждёт, когда собеседник будет в сети']; }
+function tickOf(m) { if (readBy(m.chat, m.ts)) return ['✓✓', 'read', 'Прочитано']; if (m.ack) return ['✓✓', 'ack', 'Дошло']; return ['✓', 'sent', 'Отправлено']; }
 function metaEl(m) {
   const s = el('span', 'meta'); s.append(document.createTextNode(hm(m.ts)));
-  if (m.from === myId) { const [t, c, ti] = tickOf(m); const k = el('span', 'tk ' + c, t); k.title = ti; s.append(k); }
+  if (m.from === myId) { const [t, c, ti] = tickOf(m); const k = el('span', 'tk ' + c, t); k.dataset.kzt = ti; s.append(k); }
   return s;
 }
-function tick(m) { const e = document.querySelector(`.m[data-id="${CSS.escape(m.id)}"] .tk`); if (e) { const [t, c, ti] = tickOf(m); e.textContent = t; e.className = 'tk ' + c; e.title = ti; } const i = shown.findIndex(x => x.id === m.id); if (i >= 0) shown[i] = m; renderList(); }
+function tick(m) { const e = document.querySelector(`.m[data-id="${CSS.escape(m.id)}"] .tk`); if (e) { const [t, c, ti] = tickOf(m); e.textContent = t; e.className = 'tk ' + c; e.dataset.kzt = ti; } const i = shown.findIndex(x => x.id === m.id); if (i >= 0) shown[i] = m; renderList(); }
 function ticksAll(c) { if (open !== c) return; for (const m of shown) if (m.from === myId) tick(m); }
 const sameRun = (a, b) => a && b && a.from === b.from && a.kind !== 'sys' && b.kind !== 'sys' && Math.abs(b.ts - a.ts) < 5 * 6e4 && dayKey(a.ts) === dayKey(b.ts);
 function mEls(m, prev, next) {
