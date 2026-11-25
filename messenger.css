@@ -178,6 +178,8 @@
 @keyframes trdot{0%,60%,100%{opacity:.35;transform:none}30%{opacity:1;transform:translateY(-3px)}}
 .vtr{width:0;min-width:100%;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.94em;line-height:1.4;user-select:text;cursor:text}
 .vtr[hidden]{display:none}
+/* узкий телефон: с кнопкой расшифровки волна из 48 полосок должна сжиматься, а не вылезать на время */
+@media (max-width:480px){.voice{gap:6px}.voice .wv{min-width:0;gap:1px;overflow:hidden}.voice .wv i{min-width:1px}}
 
 /* кружочки */
 .m.circ .b{background:none!important;box-shadow:none;padding:0}

@@ -60,5 +60,5 @@ function transcribe(blob) {
   return job;
 }
 
-window.kzStt = { sizeMB: phone ? 44 : 80, maxSec: MAX_SEC, ready: () => call('check'), download, transcribe };
+window.kzStt = { sizeMB: phone ? 44 : 80, maxSec: MAX_SEC, ready: () => call('check'), downloading: () => !!dl, download, transcribe };
 })();

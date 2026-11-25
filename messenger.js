@@ -1266,7 +1266,7 @@ async function transcribe(m) {
   try {
     const blob = await blobGet(id); if (!blob) throw new Error('нет файла');
     if (!await stt.ready()) {
-      if (!await askModel()) return;
+      if (!stt.downloading() && !await askModel()) return;   // уже качается для другого голосового — не спрашиваем снова
       await stt.download(p => { trJobs.set(id, p); repaintTr(id); });
       trJobs.set(id, -1); repaintTr(id);
     }
