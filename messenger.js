@@ -45,6 +45,7 @@ const IC = {
   mic: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4"/></svg>',
   circ: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3.5" fill="currentColor"/></svg>',
   send: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>',
+  transcribe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v13M6.5 12.5 12 18l5.5-5.5"/></svg>',
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l12.5-7.5z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4.5" width="4.2" height="15" rx="1.2"/><rect x="13.8" y="4.5" width="4.2" height="15" rx="1.2"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
@@ -1168,7 +1169,7 @@ function mEls(m, prev, next) {
   if (hasRx(m)) b.append(rxEl(m));
   if (m.kind !== 'circle' || locked) row.append(b);
   row.addEventListener('contextmenu', e => { e.preventDefault(); msgMenu(m, e); });
-  row.addEventListener('dblclick', e => { if (!locked && !e.target.closest('button,a,img,video,input,.voice,.callcard,.plancard,.filecard')) { getSelection()?.removeAllRanges(); setReact(m, '❤️'); } });
+  row.addEventListener('dblclick', e => { if (!locked && !e.target.closest('button,a,img,video,input,.voice,.vtr,.callcard,.plancard,.filecard')) { getSelection()?.removeAllRanges(); setReact(m, '❤️'); } });
   touchRow(row, m);
   out.push(row); return out;
 }
@@ -1224,11 +1225,59 @@ function voiceEl(m) {
   for (const x of wave) { const i = el('i'); i.style.height = Math.max(12, x) + '%'; wv.append(i); }
   const vd = el('div', 'vd'), sp = el('button', 'sp', player.speed + '×'); sp.title = 'Скорость';
   vd.append(el('span', 'tt', fmtDur(m.dur))); vd.append(sp);
-  v.append(pl, wv, vd);
+  const tb = el('button', 'trb'); tb.type = 'button';
+  v.append(pl, wv, vd, tb);
+  const box = el('div', 'vbox'); box.dataset.tid = m.id; box._m = m; box.append(v, el('div', 'vtr'));
+  tb.onclick = e => { e.stopPropagation(); transcribe(box._m); };
+  paintTr(box);
   pl.onclick = () => playVoice(m);
   wv.onclick = e => { const r = wv.getBoundingClientRect(); playVoice(m, (e.clientX - r.left) / r.width); };
   sp.onclick = () => { player.speed = player.speed === 1 ? 1.5 : player.speed === 1.5 ? 2 : 1; store.set('mxSpeed', player.speed); document.querySelectorAll('.voice .sp').forEach(b => b.textContent = player.speed + '×'); player.a.playbackRate = player.speed; };
-  return v;
+  return box;
+}
+// расшифровка голосового (stt.js): текст живёт только на этом устройстве в поле tr и по сети не уходит
+const trOpen = new Set(), trJobs = new Map();   // id → -1, пока распознаётся, или процент скачивания модели
+const TR_ERR = { long: 'Слишком длинное сообщение — расшифровать не получится', slow: 'Слишком длинное сообщение: устройство не успевает расшифровать', net: 'Не получилось скачать модель распознавания — проверь интернет и попробуй ещё раз', space: 'Не хватает места для модели распознавания', mem: 'Не хватает памяти, чтобы расшифровать это голосовое', fail: 'Не получилось расшифровать это голосовое' };
+function paintTr(box) {
+  const m = box._m, b = box.querySelector('.trb'), t = box.querySelector('.vtr'), job = trJobs.get(m.id), isOpen = trOpen.has(m.id) && !!m.tr;
+  const state = job == null ? 'idle' : job < 0 ? 'busy' : 'load';
+  if (b.dataset.st !== state) { b.dataset.st = state; b.innerHTML = state === 'idle' ? IC.transcribe : state === 'busy' ? '<span class="dots"><i></i><i></i><i></i></span>' : '<span class="pct"></span>'; }
+  if (state === 'load') { b.style.setProperty('--p', job + '%'); b.firstChild.textContent = job; }
+  b.classList.toggle('open', isOpen);
+  const label = state === 'busy' ? 'Распознаю речь…' : state === 'load' ? 'Скачиваю модель: ' + job + '%' : isOpen ? 'Свернуть текст' : 'Расшифровать';
+  b.dataset.kzt = label; b.setAttribute('aria-label', label); b.setAttribute('aria-expanded', String(isOpen));
+  t.textContent = isOpen ? m.tr : ''; t.hidden = !isOpen;
+}
+function repaintTr(id, text) {
+  const list = $('.mx-msgs'), stick = list && nearBottom(list);
+  document.querySelectorAll(`.vbox[data-tid="${CSS.escape(id)}"]`).forEach(x => { if (text) x._m.tr = text; paintTr(x); });
+  if (stick) list.scrollTop = list.scrollHeight;   // текст раскрылся у нижнего края — не прячем его
+}
+let trAsk = null;
+const askModel = () => trAsk ||= kzConfirm('Чтобы расшифровывать голосовые, нужно один раз скачать модель распознавания речи — около ' + window.kzStt.sizeMB + ' МБ. Дальше всё работает без интернета, а сами голосовые никуда не отправляются.', { ok: 'Скачать' }).finally(() => { trAsk = null; });
+async function transcribe(m) {
+  const id = m.id;
+  if (trJobs.has(id)) return;
+  if (m.tr) { if (!trOpen.delete(id)) trOpen.add(id); repaintTr(id); return; }
+  const stt = window.kzStt;
+  if (!stt) { toast(TR_ERR.fail); return; }
+  if ((m.dur || 0) > stt.maxSec) { toast('Слишком длинное сообщение: расшифровываю не длиннее ' + stt.maxSec / 60 + ' мин'); return; }
+  trJobs.set(id, -1); repaintTr(id);
+  try {
+    const blob = await blobGet(id); if (!blob) throw new Error('нет файла');
+    if (!await stt.ready()) {
+      if (!await askModel()) return;
+      await stt.download(p => { trJobs.set(id, p); repaintTr(id); });
+      trJobs.set(id, -1); repaintTr(id);
+    }
+    const text = (await stt.transcribe(blob)).slice(0, 8000);
+    if (!text) { toast('Речь не распознана'); return; }
+    // дописываем в запись одной транзакцией: если сообщение успели удалить, оно не воскреснет
+    await tx('msgs', 'readwrite', s => { const q = s.get(id); q.onsuccess = () => { if (q.result) s.put({ ...q.result, tr: text }); }; });
+    m.tr = text; trOpen.add(id); trJobs.delete(id); repaintTr(id, text);
+  } catch (e) {
+    console.warn('[stt]', e?.code || e?.message || e); toast(TR_ERR[e?.code] || TR_ERR.fail);
+  } finally { if (trJobs.delete(id)) repaintTr(id); }
 }
 async function playVoice(m, at) {
   const a = player.a;

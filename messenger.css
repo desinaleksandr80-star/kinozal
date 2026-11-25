@@ -163,6 +163,21 @@
 .voice .vd{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font-size:12px;opacity:.8}
 .voice .sp{font:800 11px Manrope;padding:2px 6px;border-radius:8px;border:0;background:rgba(0,0,0,.15);color:inherit;cursor:pointer}
 .m:not(.mine) .voice .wv{color:var(--acc2)}
+/* расшифровка: кнопка в строке голосового и текст под волной */
+.voice .trb{width:28px;height:28px;flex:none;display:grid;place-items:center;padding:0;border:0;border-radius:50%;background:rgba(0,0,0,.15);color:inherit;cursor:pointer;transition:filter .2s,transform .15s}
+.m:not(.mine) .voice .trb{color:var(--acc2);background:color-mix(in srgb,var(--acc2) 16%,transparent)}
+.voice .trb:hover{filter:brightness(1.15);transform:scale(1.08)}
+.voice .trb svg{display:block;width:15px;height:15px;transition:transform .25s}
+.voice .trb.open svg{transform:rotate(180deg)}
+.voice .trb[data-st=load]{background:conic-gradient(currentColor var(--p,0%),rgba(0,0,0,.15) 0)}
+.voice .trb .pct{width:22px;height:22px;display:grid;place-items:center;border-radius:50%;font:800 10px Manrope,sans-serif;background:var(--bub);color:var(--bubInk)}
+.voice .trb .dots{display:flex;gap:2px}
+.voice .trb .dots i{width:4px;height:4px;border-radius:50%;background:currentColor;animation:trdot 1s ease-in-out infinite}
+.voice .trb .dots i:nth-child(2){animation-delay:.16s}
+.voice .trb .dots i:nth-child(3){animation-delay:.32s}
+@keyframes trdot{0%,60%,100%{opacity:.35;transform:none}30%{opacity:1;transform:translateY(-3px)}}
+.vtr{width:0;min-width:100%;margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere;font-size:.94em;line-height:1.4;user-select:text;cursor:text}
+.vtr[hidden]{display:none}
 
 /* кружочки */
 .m.circ .b{background:none!important;box-shadow:none;padding:0}
