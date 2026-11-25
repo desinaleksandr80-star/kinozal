@@ -273,12 +273,31 @@ function listDlg(l, then) {
 // палитра «на какие полки положить трек»: нажатие — положить или убрать, можно сразу на несколько
 function fly(e, who) {   // летающая эмодзи — своя и друзей
   const n = el('div', 'mu-fly'); n.textContent = e; if (who) n.append(el('small', '', who));
-  n.style.left = (35 + Math.random() * 40) + '%'; document.body.append(n); setTimeout(() => n.remove(), 2800);
+  const pal = document.querySelector('.mu-pal');
+  if (pal) {   // открыта палитра — маленькая эмодзи взлетает над её верхним краем и ничего не загораживает
+    const r = pal.getBoundingClientRect(); n.classList.add('low');
+    n.style.left = Math.round(r.left + 20 + Math.random() * Math.max(0, r.width - 60)) + 'px'; n.style.bottom = Math.round(innerHeight - r.top + 2) + 'px';
+  } else n.style.left = (35 + Math.random() * 40) + '%';
+  document.body.append(n); setTimeout(() => n.remove(), pal ? 1200 : 2800);
 }
-function shelfPalette(x, y, t, pos) {
+// где встать палитре: над рядом кнопок, из которого её открыли; не влезает — сбоку, чтобы ряды под кнопкой остались видны
+function placePalette(pal, x, y, anchor) {
+  const w = pal.offsetWidth, h = pal.offsetHeight, vw = innerWidth, vh = innerHeight, cx = v => Math.max(8, Math.min(v, vw - w - 8)), cy = v => Math.max(8, Math.min(v, vh - h - 8));
+  let left = cx(x), top = cy(y);
+  if (anchor?.isConnected) {
+    const b = anchor.getBoundingClientRect(), row = (anchor.closest('.mu-sh-tools') || anchor).getBoundingClientRect();
+    left = cx(b.left + b.width / 2 - w / 2);
+    if (row.top - h - 8 >= 8) top = row.top - h - 8;
+    else if (b.right + 12 + w <= vw - 8) { left = b.right + 12; top = cy(b.top - h / 2); }
+    else if (b.left - 12 - w >= 8) { left = b.left - 12 - w; top = cy(b.top - h / 2); }
+    else top = 8;   // совсем тесно: к верхнему краю, подальше от кнопки
+  }
+  pal.style.left = Math.round(left) + 'px'; pal.style.top = Math.round(top) + 'px';
+}
+function shelfPalette(x, y, t, pos, anchor) {
   window.kzTip?.hide(); document.querySelectorAll('.mx-pop').forEach(n => n.remove());
   const pal = el('div', 'menu mx-pop mu-pal');
-  Object.assign(pal.style, { position: 'fixed', left: Math.max(8, Math.min(x, innerWidth - 340)) + 'px', top: Math.max(8, Math.min(y, innerHeight - 70 - Math.ceil((PL.lists.length + 1) / 4) * 74)) + 'px', zIndex: 60 });
+  Object.assign(pal.style, { position: 'fixed', zIndex: 60 });
   pal.append(el('div', 'mu-pt', pos != null ? 'Реакция на ' + fmt(pos) + ' — «' + t.title + '»' : 'В какой плейлист добавить «' + t.title + '»'));
   const grid = el('div', 'mu-pg');
   const paint = () => {
@@ -291,7 +310,7 @@ function shelfPalette(x, y, t, pos) {
     const add = el('button', 'mu-pc add'); add.append(el('i', '', '＋'), el('span', '', 'Новая')); add.onclick = () => { pal.remove(); listDlg(null, l => { toggleIn(l, t, pos); fly(l.emoji); netReact(t, l.emoji, pos); }); }; grid.append(add);
   };
   paint(); pal.append(grid);
-  document.body.append(pal); pal.addEventListener('click', e => e.stopPropagation());
+  document.body.append(pal); placePalette(pal, x, y, anchor); pal.addEventListener('click', e => e.stopPropagation());
 }
 function rxChips(t) {   // эмодзи полок, на которых лежит трек, и (бледнее) эмодзи друзей
   const mine = listsOf(t), fr = rxFriends(t); if (!mine.length && !fr) return null;
@@ -2039,7 +2058,7 @@ function buildShade() {
   picksH.append(el('h4', '', 'Включить'));
   const srchBtn = ibtn('🔎', 'Найти трек', () => setPane('search'), 'mu-sh-sbtn'); picksH.append(srchBtn);
   const tools = el('div', 'mu-sh-tools');
-  const qBtn = ibtn(IC.queue, 'Очередь', () => setPane('queue')), shBtn = ibtn('🏷️', 'Добавить в плейлист', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 12, t, null); }), sndBtn = ibtn(IC.sliders, 'Звук: переходы, эквалайзер, таймер сна', () => setPane(pane === 'sound' ? 'main' : 'sound'));
+  const qBtn = ibtn(IC.queue, 'Очередь', () => setPane('queue')), shBtn = ibtn('🏷️', 'Добавить в плейлист', e => { const t = player.cur; if (t) shelfPalette(e.clientX - 150, e.clientY + 12, t, null, shBtn); }), sndBtn = ibtn(IC.sliders, 'Звук: переходы, эквалайзер, таймер сна', () => setPane(pane === 'sound' ? 'main' : 'sound'));
   const favBtn = ibtn(IC.heart, 'В любимое', () => { const t = player.cur; if (t) { toggleFav(t); if (isFav(t)) { fly('❤️'); netReact(t, '❤️', null); } } }, 'fav');
   tools.append(favBtn, shBtn, qBtn, sndBtn);
   // фон и «для всех» — для того, что играет сейчас, в любом режиме (то же, что во вкладке «Вместе»)
