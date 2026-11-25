@@ -276,7 +276,7 @@ function fly(e, who) {   // летающая эмодзи — своя и дру
   n.style.left = (35 + Math.random() * 40) + '%'; document.body.append(n); setTimeout(() => n.remove(), 2800);
 }
 function shelfPalette(x, y, t, pos) {
-  document.querySelectorAll('.mx-pop').forEach(n => n.remove());
+  window.kzTip?.hide(); document.querySelectorAll('.mx-pop').forEach(n => n.remove());
   const pal = el('div', 'menu mx-pop mu-pal');
   Object.assign(pal.style, { position: 'fixed', left: Math.max(8, Math.min(x, innerWidth - 340)) + 'px', top: Math.max(8, Math.min(y, innerHeight - 70 - Math.ceil((PL.lists.length + 1) / 4) * 74)) + 'px', zIndex: 60 });
   pal.append(el('div', 'mu-pt', pos != null ? 'Реакция на ' + fmt(pos) + ' — «' + t.title + '»' : 'В какой плейлист добавить «' + t.title + '»'));
@@ -917,7 +917,7 @@ function markRows() {
   }
 }
 function menuAt(x, y, items) {
-  document.querySelectorAll('.mx-pop').forEach(n => n.remove());
+  window.kzTip?.hide(); document.querySelectorAll('.mx-pop').forEach(n => n.remove());
   const mn = el('div', 'menu fabmenu mx-pop mu-menu');
   Object.assign(mn.style, { position: 'fixed', left: Math.max(8, Math.min(x, innerWidth - 260)) + 'px', top: Math.max(8, Math.min(y, innerHeight - items.length * 44 - 20)) + 'px', bottom: 'auto', zIndex: 60 });
   for (const [ic, t, f, cls] of items) { const b = el('button', cls || ''); const i = el('i'); i.textContent = ic; b.append(i, document.createTextNode(t)); b.onclick = () => { mn.remove(); f(); }; mn.append(b); }

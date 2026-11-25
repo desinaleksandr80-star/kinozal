@@ -871,7 +871,7 @@ $('#mxCallbar').onclick = () => window.kzRoom?.show();
 $('#mxFab').onclick = e => { e.stopPropagation(); $('#mxFabMenu').hidden = !$('#mxFabMenu').hidden; };
 $('#mxFabMenu').onclick = e => { const a = e.target.closest('button')?.dataset.a; $('#mxFabMenu').hidden = true; if (a === 'contact') addContactDlg(); else if (a === 'group') groupDlg(); else if (a === 'call') codeDlg(); };
 document.addEventListener('click', () => { if (Date.now() - menuAt < 450) return; $('#mxFabMenu').hidden = true; closeMenus(); });
-function closeMenus() { document.querySelectorAll('.mx-pop').forEach(x => x.remove()); }
+function closeMenus() { window.kzTip?.hide(); document.querySelectorAll('.mx-pop').forEach(x => x.remove()); }
 function renderMe() { const b = $('#mxMe'); b.textContent = ''; if (S.me) b.append(avEl(myId, 40)); $('#mxName').textContent = S.me?.name || 'Профиль'; }
 
 // ---------- ширина и сторона списка чатов (на широком экране; на телефоне — одна панель за раз) ----------
@@ -2392,10 +2392,10 @@ const CANCEL_BTN = /^(отмена|закрыть|назад|✕)$/i;
 function springOk(b) {
   if (!b || b.disabled) return false;
   // в открытых окнах (оформление, настройки…) можно навести на «Отмена»/«Закрыть» — окно закроется, ничего не меняя; остальные кнопки окон не нажимаются
-  if (b.closest('.mx-modal')) return CANCEL_BTN.test((b.textContent || '').trim()) || /^(отмена|закрыть)$/i.test((b.title || '').trim());
+  if (b.closest('.mx-modal')) return CANCEL_BTN.test((b.textContent || '').trim()) || /^(отмена|закрыть)$/i.test((b.title || b.dataset.kzt || '').trim());
   if (b.closest('.menu, .mx-pop, .mx-files, #rDrawer')) return false;   // внутри самой «Музыки» и «Файлов» не переключаем
   if (b.classList.contains('danger') || b.id === 'leaveBtn') return false;
-  return !SPRING_NO.test((b.textContent || '') + ' ' + (b.title || ''));
+  return !SPRING_NO.test((b.textContent || '') + ' ' + (b.title || b.dataset.kzt || ''));
 }
 document.addEventListener('dragover', e => {
   if (!dnd.on) return; dnd.last = Date.now();

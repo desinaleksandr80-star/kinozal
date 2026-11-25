@@ -325,22 +325,53 @@ window.kzTheme = { open, apply: () => apply(T), get: () => clone(T), frameAv, cl
 // ---------- единые подсказки при наведении и собственные окна подтверждения ----------
 (() => {
   const ready = f => document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', f) : f();
-  // --- подсказки: заменяют нативный title ---
-  let tip = null, timer = 0, cur = null, saved = '', shownAt = 0, mo = null;
+  // --- подсказки: свои вместо системных. Любой title (из разметки или el.title = ...) сразу переезжает в data-kzt ---
+  let tip = null, timer = 0, cur = null, shownAt = 0;
+  const move = el => {
+    if (!el.hasAttribute('title') || el.tagName === 'LINK' || el.tagName === 'STYLE') return;
+    const t = el.getAttribute('title');
+    el.removeAttribute('title');
+    if (t) el.setAttribute('data-kzt', t); else el.removeAttribute('data-kzt');
+    // у кнопки-значка title был ещё и именем для экранного диктора — сохраняем его в aria-label
+    const ours = el.hasAttribute('data-kza');
+    if (ours || (!el.hasAttribute('aria-label') && /^(BUTTON|A|INPUT|SELECT|IFRAME)$/.test(el.tagName) && !/[\p{L}\p{N}]/u.test(el.textContent || ''))) {
+      if (t) { el.setAttribute('aria-label', t); el.setAttribute('data-kza', ''); }
+      else { el.removeAttribute('aria-label'); el.removeAttribute('data-kza'); }
+    }
+    if (el === cur && tip && tip.classList.contains('on')) { if (textOf(el)) { tip.textContent = textOf(el); place(el); } else tip.classList.remove('on'); }
+  };
+  const sweep = root => { if (root.nodeType !== 1) return; move(root); root.querySelectorAll('[title]').forEach(move); };
   const textOf = el => {
-    if (el.hasAttribute('title')) return el.getAttribute('title') || '';
     if (el.dataset && el.dataset.kzt) return el.dataset.kzt;
     const al = el.getAttribute('aria-label');
     if (al && !(el.textContent || '').trim() && /^(BUTTON|A|SUMMARY)$/.test(el.tagName)) return al;
     return '';
   };
   const hideTip = () => {
-    clearTimeout(timer);
-    if (mo) mo.disconnect();
-    if (cur && saved) { try { if (!cur.hasAttribute('title')) cur.setAttribute('title', saved); } catch (e) {} }
-    cur = null; saved = '';
+    clearTimeout(timer); cur = null;
     if (tip) tip.classList.remove('on');
   };
+  window.kzTip = { hide: hideTip };
+  // пока открыто меню, палитра или вопрос — подсказок нет совсем; в больших окнах — только у их собственных кнопок
+  const MENUS = '.menu,.mx-pop,.kz-dlg:not(.out)', MODALS = '.mx-modal,.modal';
+  const open = sel => [...document.querySelectorAll(sel)].filter(n => !n.hidden && n.getClientRects().length);
+  const blocked = el => {
+    if (open(MENUS).length) return true;
+    const top = open(MODALS).pop();
+    return !!top && !top.contains(el);
+  };
+  new MutationObserver(list => {
+    for (const r of list) {
+      if (r.type === 'attributes') { move(r.target); continue; }
+      for (const n of r.addedNodes) {
+        if (n.nodeType !== 1) continue;
+        sweep(n);
+        if (cur && n.matches(MENUS + ',' + MODALS)) hideTip();
+      }
+    }
+    if (cur && !cur.isConnected) hideTip();   // элемент перерисовали под неподвижным курсором
+  }).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ['title'] });
+  sweep(document.documentElement);
   const place = el => {
     const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight, vw = innerWidth, vh = innerHeight, g = 9;
     let x = r.left + r.width / 2 - w / 2; x = Math.max(8, Math.min(vw - w - 8, x));
@@ -351,40 +382,40 @@ window.kzTheme = { open, apply: () => apply(T), get: () => clone(T), frameAv, cl
     tip.style.setProperty('--ox', Math.round(r.left + r.width / 2 - x) + 'px');
     tip.classList.toggle('up', up);
   };
-  const show = (el, t) => {
+  const show = el => {
+    const t = textOf(el); if (!t || !el.isConnected || blocked(el)) return;
     if (!tip) { tip = document.createElement('div'); tip.className = 'kz-tip'; tip.setAttribute('role', 'tooltip'); document.body.append(tip); }
     tip.textContent = t; place(el); tip.classList.add('on'); shownAt = Date.now();
   };
+  const find = target => {
+    const SEL = '[data-kzt],[aria-label]';
+    let el = target.closest && target.closest(SEL);
+    // ближайший элемент без своего текста (значок с aria-label внутри кнопки с подсказкой) — берём подсказку у родителя
+    while (el && !textOf(el)) el = el.parentElement && el.parentElement.closest(SEL);
+    return el || null;
+  };
+  const arm = el => {
+    const quick = tip && Date.now() - shownAt < 700;
+    cur = el; timer = setTimeout(() => { if (cur === el) show(el); }, quick ? 60 : 400);
+  };
   const canHover = () => { try { return matchMedia('(hover:hover)').matches; } catch (e) { return true; } };
   ready(() => {
+    sweep(document.documentElement);
     if (!canHover()) return;
     document.addEventListener('mouseover', e => {
-      const SEL = '[title],[data-kzt],[aria-label]';
-      let el = e.target.closest && e.target.closest(SEL);
-      // ближайший элемент без своего текста (значок с aria-label внутри кнопки с title) — берём подсказку у родителя
-      while (el && !el.hasAttribute('title') && !textOf(el)) el = el.parentElement && el.parentElement.closest(SEL);
+      const el = find(e.target);
       if (el === cur) return;
       hideTip();
-      if (!el) return;
-      if (el.closest('.kz-dlg') && !el.hasAttribute('title') && !el.dataset.kzt) return;
-      const t = textOf(el);
-      if (!t) return;
-      cur = el;
-      if (el.hasAttribute('title')) {
-        saved = el.getAttribute('title'); el.removeAttribute('title');
-        // код страницы может вернуть title, пока элемент под мышью (ход закачки и т.п.) — перехватываем, чтобы не вылезла системная подсказка
-        try {
-          mo = mo || new MutationObserver(() => {
-            if (!cur || !cur.hasAttribute('title')) return;
-            saved = cur.getAttribute('title'); cur.removeAttribute('title');
-            if (tip && tip.classList.contains('on')) { if (saved) { tip.textContent = saved; place(cur); } else tip.classList.remove('on'); }
-          });
-          mo.observe(el, { attributes: true, attributeFilter: ['title'] });
-        } catch (er) {}
-      }
-      const quick = tip && Date.now() - shownAt < 700;
-      timer = setTimeout(() => { if (cur === el && el.isConnected && (saved || t)) show(el, saved || t); }, quick ? 60 : 400);
+      if (el) arm(el);
     }, true);
+    document.addEventListener('focusin', e => {   // переход по кнопкам с клавиатуры
+      let kb = false; try { kb = e.target.matches(':focus-visible') && !/^(INPUT|TEXTAREA)$/.test(e.target.tagName) && !e.target.isContentEditable; } catch (er) {}
+      if (!kb) return;
+      hideTip();
+      const el = find(e.target);
+      if (el) arm(el);
+    }, true);
+    document.addEventListener('focusout', e => { if (cur && cur === find(e.target) && !cur.matches(':hover')) hideTip(); }, true);
     document.addEventListener('mouseout', e => { if (cur && !cur.contains(e.relatedTarget)) hideTip(); }, true);
     addEventListener('scroll', hideTip, true);
     addEventListener('blur', hideTip);
@@ -404,7 +435,7 @@ window.kzTheme = { open, apply: () => apply(T), get: () => clone(T), frameAv, cl
     let no = null;
     if (!single) { no = document.createElement('button'); no.type = 'button'; no.className = 'kz-dlg-no'; no.textContent = o.cancel || 'Отмена'; row.append(no); }
     const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'kz-dlg-ok'; ok.textContent = o.ok || 'ОК'; row.append(ok);
-    box.append(row); ov.append(box); document.body.append(ov);
+    box.append(row); ov.append(box); window.kzTip.hide(); document.body.append(ov);
     let done = false;
     const fin = v => {
       if (done) return; done = true;
