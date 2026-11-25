@@ -304,16 +304,21 @@ function rxChips(t) {   // эмодзи полок, на которых лежи
 // ---------- плеер ----------
 // Две «деки» (два <audio>) через Web Audio: пока играет одна, вторая заранее грузит следующий трек.
 // Так получаются переход без паузы (gapless) и плавное перетекание (кроссфейд). Дальше звук идёт через эквалайзер.
-// эквалайзер из трёх привычных полос: низкие, средние, высокие
+// эквалайзер из трёх привычных полос: низкие, средние, высокие. У полок Q не задаём — Web Audio его для них не использует
 const EQ_BANDS = [
-  { f: 200, type: 'lowshelf', q: 1, name: 'Низкие', hint: 'бас, до 200 Гц' },
+  { f: 120, type: 'lowshelf', name: 'Низкие', hint: 'бас, до 120 Гц' },
   { f: 1000, type: 'peaking', q: 0.7, name: 'Средние', hint: 'голос, около 1 кГц' },
-  { f: 4000, type: 'highshelf', q: 1, name: 'Высокие', hint: 'звон, от 4 кГц' }
+  { f: 4000, type: 'highshelf', name: 'Высокие', hint: 'звон, от 4 кГц' }
 ];
+// срез инфранизких после полос, 10 Гц: Баттерворт 2-го порядка (у highpass в Web Audio Q в децибелах, −3,0103 дБ = 1/√2 — ровная АЧХ).
+// Выше не ставим: срез сдвигает фазу баса, и на треках с очень низким басом пики сэмплов растут (на 25 Гц — до +2 дБ)
+const EQ_HP = { f: 10, q: -3.0103 };
+// запас сверх пика АЧХ, дБ: фазовые сдвиги полок и среза поднимают пики сэмплов чуть выше, чем говорит АЧХ
+const EQ_PAD = 1;
 const EQ_PRESETS = { flat: ['Ровный', [0, 0, 0]], bass: ['Бас', [6, -1, 0]], voice: ['Голос', [-3, 4, 1]], bright: ['Яркий', [-2, 1, 5]], soft: ['Мягкий', [3, 0, -4]] };
 const EQ_MAX = 12;
 const sleep = { until: 0, endOfTrack: false, t: 0 };
-let actx = null, master = null, eqNodes = [], eqPre = null, eqOut = null, eqComp = null, eqShape = null, eqLim = false, decks = null, deckI = 0, nextT = 0, fadeT = 0;
+let actx = null, master = null, eqNodes = [], eqPre = null, eqHp = null, eqDry = null, eqWet = null, eqProbe = [], eqGrid = null, decks = null, deckI = 0, nextT = 0, fadeT = 0;
 const idleEl = new Audio();   // пока ничего не играло — на нём читаем «пусто»
 const cfg = { xf: 0, eqOn: false, eq: [0, 0, 0] };   // xf — секунд перетекания, 0 = без паузы
 const active = () => (decks ? decks[deckI].el : idleEl);
@@ -382,45 +387,88 @@ function ensureAudio() {
   if (actx) { if (actx.state === 'suspended') actx.resume().catch(() => {}); return; }
   actx = new AudioContext();
   master = actx.createGain(); master.gain.value = player.vol;
-  eqNodes = EQ_BANDS.map(x => { const b = actx.createBiquadFilter(); b.type = x.type; b.frequency.value = x.f; b.Q.value = x.q; return b; });
-  // деки → eqPre (запас по уровню под подъём полос) → полосы → eqOut → [компрессор → мягкое ограничение, только когда эквалайзер включён] → master
-  eqPre = actx.createGain(); eqOut = actx.createGain(); eqPre.connect(eqNodes[0]);
-  for (let i = 0; i < eqNodes.length - 1; i++) eqNodes[i].connect(eqNodes[i + 1]);
-  eqNodes.at(-1).connect(eqOut);
-  eqComp = actx.createDynamicsCompressor(); eqComp.threshold.value = -6; eqComp.knee.value = 6; eqComp.ratio.value = 12; eqComp.attack.value = 0.003; eqComp.release.value = 0.15;
-  eqShape = actx.createWaveShaper(); eqShape.oversample = '2x';
-  { const n = 2049, cv = new Float32Array(n); for (let i = 0; i < n; i++) { const x = i / (n - 1) * 2 - 1, a = Math.abs(x); cv[i] = Math.sign(x) * (a <= 0.85 ? a : 0.85 + 0.15 * Math.tanh((a - 0.85) / 0.15)); } eqShape.curve = cv; }
-  eqComp.connect(eqShape); eqShape.connect(master);
-  eqOut.connect(master); eqLim = false;
+  eqBuild().connect(master);
   master.connect(outNode());   // последняя ступень — громкость фона и приглушение (см. «фон»)
-  decks = [mkDeck(), mkDeck()]; deckI = 0; applyEq();
+  decks = [mkDeck(), mkDeck()]; deckI = 0; applyEq(true);   // пока ничего не звучит — сразу нужные значения, без плавного въезда
   // страница уже что-то держала на «пустой» деке — переносить нечего
 }
-// отклик полосы эквалайзера (формулы RBJ): нужен и для кривой на экране, и чтобы знать, насколько эквалайзер поднимает уровень
-function eqMag(b, g, f) {
-  if (!g) return 1;
-  const fs = 48000, A = Math.pow(10, g / 40), w0 = 2 * Math.PI * b.f / fs, cs = Math.cos(w0), al = Math.sin(w0) / (2 * b.q);
+// деки → eqPre (запас по уровню под подъём полос) ─┬→ три полосы → срез инфранизких → eqWet ─┬→ выход → master
+//                                                 └→ eqDry (звук как есть) ─────────────────┘
+// Цепочка только линейная и никогда не перестраивается: включение, выключение и ползунки лишь плавно двигают усиление —
+// так нет ни искажений (раньше их давали компрессор и мягкий ограничитель), ни щелчков от переподключения на звучащем сигнале.
+// Выключенный эквалайзер и включённый с полосами на нуле — это eqDry: звук идёт мимо фильтров совсем без изменений
+// (даже срез на 5 Гц сдвигает фазу баса и поднимает пики)
+function eqBuild() {
+  const mk = (type, f, q) => { const b = actx.createBiquadFilter(); b.type = type; b.frequency.value = f; if (q != null) b.Q.value = q; return b; };
+  eqPre = actx.createGain(); eqWet = actx.createGain(); eqDry = actx.createGain();
+  const out = actx.createGain();
+  eqNodes = EQ_BANDS.map(x => mk(x.type, x.f, x.q));
+  // срез — IIRFilterNode, а не BiquadFilterNode: у биквада в Chromium на такой низкой частоте свой шум около −85 дБ,
+  // а IIR считает в двойной точности (≈ −150 дБ). Частота среза не меняется, так что неизменные коэффициенты IIR не мешают
+  const hp = () => { const c = eqHpCoef(actx.sampleRate); return actx.createIIRFilter(c.b, c.a); };
+  eqHp = hp();
+  [eqPre, ...eqNodes, eqHp, eqWet, out].reduce((a, b) => (a.connect(b), b));
+  eqPre.connect(eqDry); eqDry.connect(out);
+  // такие же фильтры, но никуда не подключённые: им сразу ставим целевые значения и спрашиваем настоящую АЧХ
+  eqProbe = [...EQ_BANDS.map(x => mk(x.type, x.f, x.q)), hp()];
+  eqGrid = null;
+  return out;
+}
+// настоящий пик включённого эквалайзера в дБ при таких полосах — по getFrequencyResponse самих фильтров Web Audio, а не по формуле
+function eqPeak(eq) {
+  if (!eqGrid) { const n = 600, lo = 5, hi = actx.sampleRate / 2; eqGrid = new Float32Array(n); for (let k = 0; k < n; k++) eqGrid[k] = lo * Math.pow(hi / lo, k / (n - 1)); }
+  const n = eqGrid.length, tot = new Float64Array(n).fill(1), mag = new Float32Array(n), ph = new Float32Array(n);
+  eqProbe.forEach((p, i) => {
+    if (i < EQ_BANDS.length) { p.gain.cancelScheduledValues(0); p.gain.value = eq[i]; }   // узлы не звучат — события сами не вычищаются
+    p.getFrequencyResponse(eqGrid, mag, ph);
+    for (let k = 0; k < n; k++) if (mag[k] === mag[k]) tot[k] *= mag[k];   // NaN (частота вне диапазона) пропускаем
+  });
+  let m = 0; for (let k = 0; k < n; k++) if (tot[k] > m) m = tot[k];
+  return 20 * Math.log10(m || 1);
+}
+// коэффициенты среза — формула highpass из спецификации Web Audio (Q в децибелах)
+function eqHpCoef(fs) {
+  const w0 = 2 * Math.PI * EQ_HP.f / fs, cs = Math.cos(w0), al = Math.sin(w0) / (2 * Math.pow(10, EQ_HP.q / 20));
+  return { b: [(1 + cs) / 2, -(1 + cs), (1 + cs) / 2], a: [1 + al, -2 * cs, 1 - al] };
+}
+// отклик фильтра по формулам из спецификации Web Audio — тем же, по которым считает BiquadFilterNode, — чтобы кривая на экране
+// совпадала со звуком. У полок крутизна фиксированная (S = 1), Q на них не влияет
+function eqMag(type, f0, g, q, f, fs) {
+  const A = Math.pow(10, g / 40), w0 = 2 * Math.PI * f0 / fs, cs = Math.cos(w0), sn = Math.sin(w0);
   let b0, b1, b2, a0, a1, a2;
-  if (b.type === 'peaking') { b0 = 1 + al * A; b1 = -2 * cs; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cs; a2 = 1 - al / A; }
+  if (type === 'peaking') { const al = sn / (2 * q); b0 = 1 + al * A; b1 = -2 * cs; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cs; a2 = 1 - al / A; }
+  else if (type === 'highpass') { const c = eqHpCoef(fs); [b0, b1, b2] = c.b; [a0, a1, a2] = c.a; }
   else {
-    const s = 2 * Math.sqrt(A) * al;
-    if (b.type === 'lowshelf') { b0 = A * ((A + 1) - (A - 1) * cs + s); b1 = 2 * A * ((A - 1) - (A + 1) * cs); b2 = A * ((A + 1) - (A - 1) * cs - s); a0 = (A + 1) + (A - 1) * cs + s; a1 = -2 * ((A - 1) + (A + 1) * cs); a2 = (A + 1) + (A - 1) * cs - s; }
+    const s = 2 * Math.sqrt(A) * sn / Math.SQRT2;   // 2·√A·α, где α = sin(w0)/2·√2 при S = 1
+    if (type === 'lowshelf') { b0 = A * ((A + 1) - (A - 1) * cs + s); b1 = 2 * A * ((A - 1) - (A + 1) * cs); b2 = A * ((A + 1) - (A - 1) * cs - s); a0 = (A + 1) + (A - 1) * cs + s; a1 = -2 * ((A - 1) + (A + 1) * cs); a2 = (A + 1) + (A - 1) * cs - s; }
     else { b0 = A * ((A + 1) + (A - 1) * cs + s); b1 = -2 * A * ((A - 1) + (A + 1) * cs); b2 = A * ((A + 1) + (A - 1) * cs - s); a0 = (A + 1) - (A - 1) * cs + s; a1 = 2 * ((A - 1) - (A + 1) * cs); a2 = (A + 1) - (A - 1) * cs - s; }
   }
   const w = 2 * Math.PI * f / fs, c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
   const nr = b0 + b1 * c1 + b2 * c2, ni = -(b1 * s1 + b2 * s2), dr = a0 + a1 * c1 + a2 * c2, di = -(a1 * s1 + a2 * s2);
   return Math.sqrt((nr * nr + ni * ni) / (dr * dr + di * di));
 }
-const eqDb = (eq, f) => EQ_BANDS.reduce((s, b, i) => s + 20 * Math.log10(eqMag(b, eq[i], f)), 0);
-function eqPeak(eq) { let m = 0; for (let k = 0; k <= 60; k++) m = Math.max(m, eqDb(eq, 20 * Math.pow(1000, k / 60))); return m; }
-function applyEq() {
+// АЧХ в дБ на частоте f — для кривой на экране: полосы и (когда звук идёт через фильтры) срез; частота дискретизации та же, что у звука
+// (пока звука нет — обычные 48 кГц)
+function eqDb(eq, f, on = cfg.eqOn) {
+  const fs = actx ? actx.sampleRate : 48000;
+  let s = on && eq.some(x => x) ? 20 * Math.log10(eqMag('highpass', 0, 0, 0, f, fs)) : 0;
+  EQ_BANDS.forEach((b, i) => { if (eq[i]) s += 20 * Math.log10(eqMag(b.type, b.f, eq[i], b.q, f, fs)); });
+  return s;
+}
+// now — поставить сразу (пока ничего не звучит), иначе всё едет плавно
+function applyEq(now) {
   if (!actx) return;
-  const t = actx.currentTime, on = cfg.eqOn;
-  eqNodes.forEach((n, i) => { n.gain.setTargetAtTime(on ? cfg.eq[i] : 0, t, 0.02); });
-  // подъём полос — это прибавка к уровню: заранее убавляем общую громкость на ~70% от пика кривой, остальное ловят компрессор и мягкий ограничитель
-  const act = on && cfg.eq.some(x => x);   // все полосы на нуле — звук идёт мимо компрессора, как будто эквалайзера нет
-  eqPre.gain.setTargetAtTime(act ? Math.pow(10, -eqPeak(cfg.eq) * 0.7 / 20) : 1, t, 0.02);
-  if (act !== eqLim) { eqLim = act; eqOut.disconnect(); eqOut.connect(act ? eqComp : master); }
+  // act — звук идёт через фильтры: эквалайзер включён и хоть одна полоса не на нуле; иначе — мимо, как есть
+  const t = actx.currentTime, act = cfg.eqOn && cfg.eq.some(x => x), eq = act ? cfg.eq : EQ_BANDS.map(() => 0);
+  // подъём полос — прибавка к уровню: заранее убавляем вход на настоящий пик АЧХ плюс запас EQ_PAD — тогда перегрузки нет
+  // и без компрессора. Громче, чем без эквалайзера, не делаем никогда
+  const pre = act ? Math.min(1, Math.pow(10, -(eqPeak(eq) + EQ_PAD) / 20)) : 1;
+  const set = (p, v, tc) => { if (now) { p.cancelScheduledValues(0); p.setValueAtTime(v, t); } else p.setTargetAtTime(v, t, tc); };
+  // запас убавляем быстрее, чем растут полосы, а возвращаем медленнее, чем они опускаются, — сумма и на переходе не выходит за предел
+  set(eqPre.gain, pre, pre < eqPre.gain.value ? 0.005 : 0.06);
+  eqNodes.forEach((n, i) => set(n.gain, eq[i], 0.02));
+  // перетекание «как есть» ↔ «через эквалайзер» с одной постоянной времени: сумма долей всегда ровно 1
+  set(eqWet.gain, act ? 1 : 0, 0.03); set(eqDry.gain, act ? 0 : 1, 0.03);
 }
 function saveCfg() { H.store.set('musicCfg', JSON.stringify(cfg)); }
 function loadCfg() { try { const j = JSON.parse(H.store.get('musicCfg', '{}')); if ([0, 3, 6, 10].includes(j.xf)) cfg.xf = j.xf; cfg.eqOn = !!j.eqOn; cfg.eq = eqFrom(j.eq); } catch (e) {} }
