@@ -159,6 +159,8 @@ button.mini{min-height:32px;padding:4px 10px;font-size:13px;font-weight:600;bord
 .devnote:empty{display:none}
 .cvol{display:flex;align-items:center;gap:10px;margin:10px 0 0;font-size:13px}
 .cvol input{flex:1}
+#deafBtn{width:100%;flex:none;justify-content:center;align-items:center;min-height:40px;margin:0 0 8px;font-size:13px}
+#room #deafBtn.off{background:#6b2d22;border-color:#b0503f;color:#fff}
 .chat{display:grid;grid-template-rows:auto minmax(0,1fr) auto;min-height:0}
 #msgs{overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding-right:4px;min-height:0}
 .msg{font-size:15px;line-height:1.4;overflow-wrap:anywhere}
@@ -440,6 +442,7 @@ select{font:inherit;min-height:44px;padding:8px 12px;border-radius:12px;border:1
     <aside class="side">
       <div class="panel" id="peoplePanel">
         <div class="phead"><h2 id="peopleTitle">В зале</h2><button class="mini" id="devBtn">⚙ Микрофон и камера</button></div>
+        <button type="button" class="touch-only" id="deafBtn" aria-pressed="false">Звук зала: включён</button>
         <div class="devs" id="devs" hidden>
           <label for="micSel">Микрофон</label>
           <select id="micSel"></select>
@@ -866,6 +869,9 @@ function peerVol(id){const v=+store.get(volKey(id),1);return isFinite(v)?Math.ma
 // стартует, пока не пришёл первый видеокадр, а собеседник без камеры шлёт чёрную заглушку, которая кадров почти не даёт —
 // поэтому звук «просыпался» только после включения камеры.
 function voiceSet(v,x){x=Math.max(0,Math.min(1,x));v.volume=x;if(v._aud)v._aud.volume=x;}
+// «Звук зала выключен»: телефон остаётся только камерой и микрофоном, а смотрят и слушают с другого устройства.
+// Глушим через muted (громкость на iPhone программно не меняется) и не запоминаем — после выхода звук снова есть.
+let deaf=false;
 function voiceStop(v){const a=v?._aud;if(!a)return;v._aud=null;try{a.pause();a.srcObject=null;}catch(e){}}
 function attachVoice(id,stream,v){
   const t=stream?.getAudioTracks()[0];
@@ -874,7 +880,7 @@ function attachVoice(id,stream,v){
   if(!t){voiceStop(v);dropVoice(id);v.muted=false;stream?.addEventListener('addtrack',()=>attachVoice(id,stream,v),{once:true});return;}
   if(!v._aud||v._audTrack!==t){
     voiceStop(v);
-    const a=new Audio();a.autoplay=true;a.srcObject=new MediaStream([t]);a.volume=v.volume;
+    const a=new Audio();a.autoplay=true;a.srcObject=new MediaStream([t]);a.volume=v.volume;a.muted=deaf;
     v._aud=a;v._audTrack=t;v.muted=true;
     a.play().catch(()=>{});
   }
@@ -1930,6 +1936,20 @@ $('#fwd').onclick=()=>userCtl('seek',timeNow()+10);
 $('#seek').addEventListener('input',()=>{dragging=true;});
 $('#seek').addEventListener('change',e=>{dragging=false;const d=durNow();if(d)userCtl('seek',e.target.value/1000*d);e.target.blur();});
 $('#vol').oninput=e=>{vol=+e.target.value;screen.volume=vol;$('#shareVid').volume=vol;store.set('vol',vol);};
+// свой фильм ведущего не глушим: его звук из этого же плеера уходит гостям
+const deafScreen=()=>deaf&&!(isHost&&fileMode());
+// плеер и показ экрана сами включают звук при каждой новой трансляции — пока звук выключен, глушим обратно
+screen.addEventListener('volumechange',()=>{if(deafScreen()&&!screen.muted)screen.muted=true;});
+shareVid.addEventListener('volumechange',()=>{if(deaf&&!shareVid.muted)shareVid.muted=true;});
+function setDeaf(on){
+  const was=deaf;deaf=on;
+  document.querySelectorAll('#tiles video,#spot video').forEach(v=>{if(v._aud)v._aud.muted=on;});
+  if(on){screen.muted=deafScreen();shareVid.muted=true;}
+  else if(was){screen.muted=false;shareVid.muted=!shareIn;}   // превью своего показа всегда без звука
+  const b=$('#deafBtn');b.classList.toggle('off',on);b.setAttribute('aria-pressed',on);
+  b.textContent=on?'Звук зала выключен — включить':'Звук зала: включён';
+}
+$('#deafBtn').onclick=()=>{setDeaf(!deaf);osd(deaf?'Звук выключен. Камера и микрофон работают':'Звук включён');};
 function toggleFs(){if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});else (view==='hall'?$('#callarea'):stage).requestFullscreen?.().catch(()=>{});}
 $('#fsBtn').onclick=toggleFs;
 // клик по видео — пауза, двойной — весь экран
@@ -2395,6 +2415,7 @@ function enterRoom(){
 function reset(){
   clearTimeout(joinTimer);clearTimeout(retryTimer);clearTimeout(netTimer);
   const p=peer;peer=null;
+  setDeaf(false);
   if(p){p._bye=true;setTimeout(()=>{try{p.destroy();}catch(e){}},isHost?300:0);}
   stopShare(true);for(const e of shares.values())try{e.call.close();}catch(er){}shares.clear();shareIn=null;hideShare();roster.clear();
   pinned=null;applyPin();kinds.clear();avState.clear();avSent='';kicked.clear();
