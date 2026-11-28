@@ -2156,6 +2156,31 @@ function makePeer(id){
   p.on('disconnected',()=>setTimeout(()=>{if(!p._bye&&!p.destroyed&&p.disconnected)p.reconnect();},1500));
   return p;
 }
+// У части людей новые подключения к серверам соединений временами просто висят. Поэтому до входа в зал не сдаёмся
+// после первой неудачи: молчит 15 с (или сразу ошибка сети — через 3 с) — пробуем заново с чистого подключения.
+const NET_WAIT=15000,NET_PAUSE=3000,NET_TRIES=4;
+const NET_ERR=['network','server-error','socket-error','socket-closed','disconnected'];
+let netTimer=0,joinFail='';   // joinFail: почему не вошли — 'gone' (зала нет) или 'net' (не достучались)
+function openNet(id,wire,n=1){
+  const p=peer=makePeer(typeof id==='function'?id():id);
+  let opened=false;
+  const retry=()=>{
+    if(peer!==p||inRoom)return;
+    p._bye=true;try{p.destroy();}catch(e){}
+    jlog('[зал] сервер соединений не отвечает, попытка '+n+' из '+NET_TRIES);
+    if(n>=NET_TRIES){joinFail='net';toast('Не получилось связаться с сервером соединений. Проверь интернет, включи или выключи VPN и попробуй ещё раз');reset();return;}
+    toast('Сервер соединений не отвечает — пробую ещё раз…');
+    openNet(id,wire,n+1);
+  };
+  netTimer=setTimeout(retry,NET_WAIT);
+  p.on('open',()=>{opened=true;if(peer===p)clearTimeout(netTimer);});
+  // true — ошибка сети до первого подключения, о ней позаботимся сами
+  wire(p,e=>{
+    if(opened||inRoom||!NET_ERR.includes(e.type))return false;
+    if(peer===p){clearTimeout(netTimer);netTimer=setTimeout(retry,NET_PAUSE);}
+    return true;
+  });
+}
 async function createRoom(kind){
   if(!start())return;
   isHost=true;roomKind=kind==='call'?'call':'cinema';
@@ -2164,18 +2189,19 @@ async function createRoom(kind){
 }
 function openHost(c){
   code=c;
-  const p=peer=makePeer(PREFIX+code);
-  p.on('open',()=>{
-    if(inRoom)return;enterRoom();
-    if(roomKind==='call'){setView('hall');sys('Зал открыт. Отправь код '+code+'. Захочешь кино — вверху «🎬 Кинозал».');}
-    else sys('Зал открыт. Отправь код '+code+' и выбери фильм.');
-  });
-  p.on('connection',onGuestConn);
-  p.on('call',onCall);
-  p.on('error',e=>{
-    if(e.type==='unavailable-id'&&!inRoom){p._bye=true;p.destroy();openHost(rand(5));return;}
-    if(e.type==='peer-unavailable')return;
-    netError(e);
+  openNet(PREFIX+code,(p,retried)=>{
+    p.on('open',()=>{
+      if(inRoom)return;enterRoom();
+      if(roomKind==='call'){setView('hall');sys('Зал открыт. Отправь код '+code+'. Захочешь кино — вверху «🎬 Кинозал».');}
+      else sys('Зал открыт. Отправь код '+code+' и выбери фильм.');
+    });
+    p.on('connection',onGuestConn);
+    p.on('call',onCall);
+    p.on('error',e=>{
+      if(e.type==='unavailable-id'&&!inRoom){clearTimeout(netTimer);p._bye=true;p.destroy();openHost(rand(5));return;}
+      if(e.type==='peer-unavailable'||retried(e))return;
+      netError(e);
+    });
   });
 }
 
@@ -2186,17 +2212,20 @@ async function joinRoom(){
   if(!start())return;
   isHost=false;code=c;
   await initMedia();
-  const p=peer=makePeer(PREFIX+code+'-'+rand(6).toLowerCase());
-  p.on('call',onCall);
-  p.on('error',e=>{
-    if(e.type==='peer-unavailable'){if(!inRoom){toast('Зал с кодом '+code+' не найден. Проверь код или попроси создать зал заново');reset();}return;}
-    if(inRoom&&(e.type==='network'||e.type==='server-error'))return;
-    netError(e);
-  });
-  p.on('open',()=>{
-    if(inRoom||hostConn)return;
-    connectHost();
-    joinTimer=setTimeout(()=>{if(!inRoom){toast('Не получилось достучаться до зала. Возможно, мешает сеть — попробуй другой интернет или VPN');reset();}},20000);
+  // новый адрес на каждую попытку: прежний сервер мог успеть занять и ответил бы «занято»
+  openNet(()=>PREFIX+code+'-'+rand(6).toLowerCase(),(p,retried)=>{
+    p.on('call',onCall);
+    p.on('error',e=>{
+      if(e.type==='peer-unavailable'){if(!inRoom){joinFail='gone';toast('Зал с кодом '+code+' не найден. Проверь код или попроси создать зал заново');reset();}return;}
+      if(inRoom&&(e.type==='network'||e.type==='server-error'))return;
+      if(retried(e))return;
+      netError(e);
+    });
+    p.on('open',()=>{
+      if(inRoom||hostConn)return;
+      connectHost();
+      joinTimer=setTimeout(()=>{if(!inRoom){joinFail='net';toast('Не получилось достучаться до зала. Возможно, мешает сеть — попробуй другой интернет или VPN');reset();}},20000);
+    });
   });
 }
 function connectHost(){
@@ -2353,7 +2382,7 @@ function start(){
 function netError(e){
   const map={network:'Пропала связь с сервером соединений','server-error':'Сервер соединений недоступен, попробуй позже','browser-incompatible':'Браузер не поддерживает видеосвязь — открой в Chrome или Edge'};
   toast(map[e.type]||'Ошибка связи: '+(e.type||e.message));
-  if(!inRoom)reset();
+  if(!inRoom){joinFail='net';reset();}
 }
 function enterRoom(){
   inRoom=true;$('#lobby').hidden=true;$('#room').hidden=false;$('#codeOut').textContent=code;
@@ -2364,7 +2393,7 @@ function enterRoom(){
   try{history.replaceState(null,'','#'+code);}catch(e){}
 }
 function reset(){
-  clearTimeout(joinTimer);clearTimeout(retryTimer);
+  clearTimeout(joinTimer);clearTimeout(retryTimer);clearTimeout(netTimer);
   const p=peer;peer=null;
   if(p){p._bye=true;setTimeout(()=>{try{p.destroy();}catch(e){}},isHost?300:0);}
   stopShare(true);for(const e of shares.values())try{e.call.close();}catch(er){}shares.clear();shareIn=null;hideShare();roster.clear();
@@ -2503,13 +2532,15 @@ window.kzRoom={
   async create(kind,name){
     if(inRoom||peer)return code||null;
     $('#name').value=name||'';await createRoom(kind);
-    for(let i=0;i<80&&!inRoom;i++)await new Promise(r=>setTimeout(r,150));
+    while(!inRoom&&peer)await new Promise(r=>setTimeout(r,150));   // конец ожиданию кладёт reset()
     return inRoom?code:null;
   },
+  get fail(){return joinFail;},
   async join(c,name){
+    joinFail='';
     if(inRoom||peer)return false;
     $('#name').value=name||'';$('#codeIn').value=c;await joinRoom();
-    for(let i=0;i<150&&!inRoom&&peer;i++)await new Promise(r=>setTimeout(r,150));
+    while(!inRoom&&peer)await new Promise(r=>setTimeout(r,150));
     return inRoom;
   },
   show(){if(inRoom){$('#room').hidden=false;window.kzOnRoom?.('show',{});requestAnimationFrame(()=>{layoutGrid();refreshPip();});}},

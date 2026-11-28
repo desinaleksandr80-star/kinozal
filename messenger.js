@@ -3398,9 +3398,11 @@ async function joinCall(m) {
   stopRing(); markRead(m.chat);
   const R = window.kzRoom; if (!R) return;
   if (R.inRoom) { if (R.code === m.code) { R.show(); return; } toast('Сначала выйди из текущего звонка'); R.show(); return; }
+  if (R.busy) { toast('Звонок ещё подключается…'); return; }
   toast('Подключаюсь…');
   const ok = await R.join(m.code, S.me.name);
-  if (!ok) { S.ended[m.code] = Date.now(); save(); refreshCallCards(); toast('Звонок уже закончился'); }
+  // не достучались из-за сети — звонок не хороним: по той же карточке можно войти ещё раз (причину зал уже показал)
+  if (!ok && R.fail !== 'net') { S.ended[m.code] = Date.now(); save(); refreshCallCards(); toast('Звонок уже закончился'); }
 }
 // мелодия звонка и короткий «дзынь» сообщения — синтезом, без файлов
 let ringAc = null, ringT = 0;
@@ -3494,7 +3496,7 @@ function actJoin(u, a) {
     if (window.kzRoom?.busy) { toast('Сначала выйди из текущего зала'); return; }
     modal((card, close) => {
       card.append(el('h2', '', actIcon(a) + ' ' + nameOf(u)), el('p', '', actText(a) + '. Войти в зал?'));
-      const row = el('div', 'row'); row.append(btnEl('Не сейчас', '', close), btnEl('Войти', 'pri', async () => { close(); toast('Подключаюсь к залу…'); const ok = await window.kzRoom.join(a.code, S.me?.name || ''); if (!ok) toast('Зал уже закрыт'); }));
+      const row = el('div', 'row'); row.append(btnEl('Не сейчас', '', close), btnEl('Войти', 'pri', async () => { close(); toast('Подключаюсь к залу…'); const ok = await window.kzRoom.join(a.code, S.me?.name || ''); if (!ok && window.kzRoom.fail !== 'net') toast('Зал уже закрыт'); }));
       card.append(row);
     });
   }
@@ -3718,7 +3720,7 @@ function addContactDlg() {
 function codeDlg(cine) {
   modal((card, close) => {
     const inp = el('input'); inp.type = 'text'; inp.placeholder = 'ABCDE'; inp.maxLength = 5; inp.style.cssText = 'text-align:center;letter-spacing:.3em;font-weight:700;text-transform:uppercase';
-    const go = btnEl('Войти', 'pri', async () => { const c = inp.value.trim().toUpperCase(); if (!/^[A-Z0-9]{5}$/.test(c)) { toast('Код зала — 5 букв и цифр'); return; } close(); toast('Подключаюсь…'); if (!await window.kzRoom.join(c, S.me.name)) toast('Зал с таким кодом не найден'); });
+    const go = btnEl('Войти', 'pri', async () => { const c = inp.value.trim().toUpperCase(); if (!/^[A-Z0-9]{5}$/.test(c)) { toast('Код зала — 5 букв и цифр'); return; } close(); toast('Подключаюсь…'); if (!await window.kzRoom.join(c, S.me.name) && window.kzRoom.fail !== 'net') toast('Зал с таким кодом не найден'); });
     inp.addEventListener('keydown', e => { if (e.key === 'Enter') go.click(); });
     const mk = (t, k, cls = '') => btnEl(t, cls, async () => { close(); const code = await window.kzRoom.create(k, S.me.name); if (!code) toast('Не получилось создать зал'); });
     if (cine) {
@@ -4016,7 +4018,7 @@ function boot() {
     try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {}
     const a = h.match(/add=([0-9A-Za-z-]{10,13})/);
     if (a) { const e = addContact(normId(a[1])); if (e) toast(e); else toast('Собеседник добавлен — напиши ему'); }
-    else if (/^[A-Za-z0-9]{5}$/.test(h) && window.kzRoom && !window.kzRoom.busy) { toast('Подключаюсь к залу ' + h.toUpperCase() + '…'); window.kzRoom.join(h.toUpperCase(), S.me.name).then(ok => { if (!ok) toast('Зал с таким кодом не найден'); }); }
+    else if (/^[A-Za-z0-9]{5}$/.test(h) && window.kzRoom && !window.kzRoom.busy) { toast('Подключаюсь к залу ' + h.toUpperCase() + '…'); window.kzRoom.join(h.toUpperCase(), S.me.name).then(ok => { if (!ok && window.kzRoom.fail !== 'net') toast('Зал с таким кодом не найден'); }); }
   };
   go(); window.addEventListener('hashchange', go);
   // страховка: если на экране вдруг не видно ни чатов, ни зала, ни приветствия — показываем чаты
